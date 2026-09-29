@@ -104,16 +104,18 @@ Every level exposes the same API, so a task switches fidelity by changing one ar
 
 ## Backends and speed
 
-`L2` has three implementations behind one API. `eager` is the readable reference in `prototype/netsim.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference, checked on per-frame finish times and every queue and MAC state across 300 steps at 16×16, 256×16 and 64×100. `triton` runs all 40 slots of a control step in one fused kernel. It matches the reference to rounding: about 3 differing discrete decisions per million robot-steps, with aggregate delivery and delay equal to four significant digits.
+Every level has a readable eager reference in `prototype/netsim.py` and graph-safe fast versions in `prototype/fast/netsim_fast.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference at every level (per-message outputs, every queue and MAC state, with random partial resets). `triton` (`L1`, `L2`) runs all 40 slots of a control step in one fused kernel and matches the reference to rounding: from an identical state every finish time agrees, and over long runs aggregate delivery and delay agree to three or four significant digits. `compile` (torch.compile + CUDA graph) also agrees to rounding.
 
-Network step time in ms, on an RTX 4090 that other jobs kept 95–99% busy:
+Network step time (`submit` + `step`, dict outputs) in ms, on an RTX 4090 that other jobs kept 98–99% busy, so absolute numbers are pessimistic:
 
-| envs × robots | eager | graph | triton |
-|---:|---:|---:|---:|
-| 256 × 16 | 1,478 | 54.6 | 2.0 |
-| 4,096 × 100 | 1,586 | 818 | 60 |
+| level | 256 × 16 reference | graph | triton | 4,096 × 100 reference | graph | triton |
+|:---|---:|---:|---:|---:|---:|---:|
+| `L0`, `L0DR` | 10.0–10.3 | 2.1 | | 19.2–19.5 | 45 | |
+| `L05`, `L05Q` | 13.5–14.3 | 2.1 | | 21–23 | 46 | |
+| `L1` | 118 | 7.3 | 2.1 | 458 | 474 | 48 |
+| `L2` | 769 | 32 | 2.1 | 1,102 | 566 | 71 |
 
-On a quieter GPU, 256 × 16 took 13.4 ms with `graph` and 0.43 ms with `triton`. At these speeds the environment's own operations, not the network, dominate a full training step. `python prototype/fast/test_equiv.py` and `python prototype/fast/bench.py` reproduce both results, and `pytest -m gpu` runs the equivalence checks as tests.
+At small sizes every fast backend sits at a ~2 ms floor set by the busy GPU. At 4,096 × 100 the fixed-shape graph versions of the delay levels are memory-bound and slower than the eager reference, which only touches the new and finished frames. Resetting 1% of envs every step adds 0.3–2 ms at 256 × 16. `python prototype/fast/test_equiv.py`, `test_reset.py` and `bench.py` reproduce these results, and `pytest -m gpu` runs the equivalence checks as tests.
 
 ## Validation against ns-3
 
