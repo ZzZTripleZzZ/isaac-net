@@ -25,7 +25,7 @@ def slot_loop_kernel(rem_ptr, bsr_ptr, srt_ptr, avg_ptr, olla_ptr, wait_ptr, hcn
                      RHO: tl.constexpr, C1: tl.constexpr, SQ2: tl.constexpr, BYTES: tl.constexpr,
                      SE_MIN: tl.constexpr, SE_MAX: tl.constexpr, SR_DELAY: tl.constexpr,
                      HARQ_RTT: tl.constexpr, HARQ_MAX: tl.constexpr, RLC_EXTRA: tl.constexpr,
-                     PF_A: tl.constexpr, PF_B: tl.constexpr, PHR: tl.constexpr):
+                     PF_A: tl.constexpr, PF_B: tl.constexpr, PHR: tl.constexpr, PF_MIN: tl.constexpr):
     e = tl.program_id(0).to(tl.int64)
     r = tl.arange(0, RB)
     rm = r < R
@@ -123,7 +123,7 @@ def slot_loop_kernel(rem_ptr, bsr_ptr, srt_ptr, avg_ptr, olla_ptr, wait_ptr, hcn
         hcnt = tl.where(fail, tl.where(exhausted, 0.0, hc), tl.where(tx, 0.0, hcnt))
         wait = tl.where(fail, g + HARQ_RTT + RLC_EXTRA * exhausted.to(tl.int64), wait)
         bsr = tl.where(tx, tl.sum(rem, axis=1), bsr)
-        avg = PF_A * avg + PF_B * served
+        avg = tl.maximum(PF_A * avg + PF_B * served, PF_MIN)
 
     tl.store(rem_ptr + o_rf, rem, mask=m_rf)
     tl.store(fin_ptr + o_rf, fin, mask=m_rf)
@@ -152,7 +152,7 @@ def launch(net, inject):
         RB=RB, FB=ns.F, SB=8, S_=ns.S, K=ns.UL_PER_STEP, INJECT=inject,
         RHO=ns.RHO, C1=math.sqrt(1 - ns.RHO ** 2), SQ2=math.sqrt(2), BYTES=ns.BYTES_PER_SE,
         SE_MIN=ns.SE_MIN, SE_MAX=ns.SE_MAX, SR_DELAY=ns.SR_DELAY, HARQ_RTT=ns.HARQ_RTT,
-        HARQ_MAX=ns.HARQ_MAX, RLC_EXTRA=ns.RLC_EXTRA, PF_A=1 - 1 / ns.PF_T, PF_B=1 / ns.PF_T,
+        HARQ_MAX=ns.HARQ_MAX, RLC_EXTRA=ns.RLC_EXTRA, PF_A=1 - 1 / ns.PF_T, PF_B=1 / ns.PF_T, PF_MIN=ns.PF_AVG_MIN,
         PHR=ns.PHR_MIN_DB, num_warps=nw)
 
 

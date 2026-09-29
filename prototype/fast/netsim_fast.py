@@ -50,6 +50,7 @@ except ImportError:  # running from fast/ inside the repo
 UL_PER_STEP, S, BYTES_PER_SE, F = _ns.UL_PER_STEP, _ns.S, _ns.BYTES_PER_SE, _ns.F
 TIMEOUT, SR_DELAY, HARQ_RTT, HARQ_MAX = _ns.TIMEOUT, _ns.SR_DELAY, _ns.HARQ_RTT, _ns.HARQ_MAX
 RLC_EXTRA, RHO, PF_T, PHR_MIN_DB, SE_MAX = _ns.RLC_EXTRA, _ns.RHO, _ns.PF_T, _ns.PHR_MIN_DB, _ns.SE_MAX
+PF_AVG_MIN = _ns.PF_AVG_MIN
 se_from_snr_db, req_db, serve_fifo = _ns.se_from_snr_db, _ns.req_db, _ns.serve_fifo
 Requests, Radio, env_index, fill_rows = _ns.Requests, _ns.Radio, _ns.env_index, _ns.fill_rows
 DELAY_RUNGS = ("L0", "L0DR", "L05", "L05Q")
@@ -110,7 +111,7 @@ def slot_body(rem, bsr, sr_t, avg, olla, wait, hcnt, h, fin_t, snr_db, g, finv, 
                        torch.where(tx, torch.zeros_like(hc), hcnt))
     wait = torch.where(fail, g + HARQ_RTT + RLC_EXTRA * exhausted.long(), wait)
     bsr = torch.where(tx, rem.sum(-1), bsr)
-    avg = (1 - 1 / PF_T) * avg + (1 / PF_T) * served
+    avg = ((1 - 1 / PF_T) * avg + (1 / PF_T) * served).clamp(min=PF_AVG_MIN)
     return rem, bsr, sr_t, avg, olla, wait, hcnt, h, fin_t
 
 

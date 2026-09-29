@@ -34,6 +34,7 @@ HARQ_MAX = 4
 RLC_EXTRA = 10              # extra UL slots after HARQ exhaustion
 RHO = 0.93                  # fading correlation per UL slot, J0(2*pi*35 Hz*2.5 ms) at 3 m/s, 3.5 GHz
 PF_T = 100.0
+PF_AVG_MIN = 1.0            # floor on the PF average (bytes/slot) so long-idle robots never reach avg = 0
 PHR_MIN_DB = 3.0            # power headroom: minimum per-subband SNR when adding subbands
 NACT_EDGES = [2, 5, 9]      # L05 bins over backlogged robots per env
 SNR_EDGES = [0.0, 10.0, 20.0, 30.0]
@@ -519,7 +520,7 @@ class NetSlot(NetBase):
                                     torch.where(tx, torch.zeros_like(hc), self.hcnt))
             self.wait = torch.where(fail, g + HARQ_RTT + RLC_EXTRA * exhausted.long(), self.wait)
             self.bsr = torch.where(tx, self.rem.sum(-1), self.bsr)
-            self.avg = (1 - 1 / PF_T) * self.avg + (1 / PF_T) * served
+            self.avg = ((1 - 1 / PF_T) * self.avg + (1 / PF_T) * served).clamp(min=PF_AVG_MIN)
         return fin_t
 
     def _after_step(self):

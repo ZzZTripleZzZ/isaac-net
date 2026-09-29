@@ -1,5 +1,6 @@
 """FROZEN COPY of netsim.py at e1afdb9 (global int clock, full resets only), used by test_regress.py to check
-that the reworked reference keeps its semantics. Do not edit.
+that the reworked reference keeps its semantics. Only change: the PF_AVG_MIN floor on the PF average
+(L2 semantics fix, applied in the reference too). Do not edit otherwise.
 
 Batched uplink network models at several fidelity levels (L0, L0DR, L05, L05Q, L1, L2).
 
@@ -23,6 +24,7 @@ HARQ_MAX = 4
 RLC_EXTRA = 10              # extra UL slots after HARQ exhaustion
 RHO = 0.93                  # fading correlation per UL slot, J0(2*pi*35 Hz*2.5 ms) at 3 m/s, 3.5 GHz
 PF_T = 100.0
+PF_AVG_MIN = 1.0
 PHR_MIN_DB = 3.0            # power headroom: minimum per-subband SNR when adding subbands
 NACT_EDGES = [2, 5, 9]      # L05 bins over backlogged robots per env
 SNR_EDGES = [0.0, 10.0, 20.0, 30.0]
@@ -320,7 +322,7 @@ class NetSlot(NetBase):
                                     torch.where(tx, torch.zeros_like(hc), self.hcnt))
             self.wait = torch.where(fail, g + HARQ_RTT + RLC_EXTRA * exhausted.long(), self.wait)
             self.bsr = torch.where(tx, self.rem.sum(-1), self.bsr)
-            self.avg = (1 - 1 / PF_T) * self.avg + (1 / PF_T) * served
+            self.avg = ((1 - 1 / PF_T) * self.avg + (1 / PF_T) * served).clamp(min=PF_AVG_MIN)
         return fin_t
 
     def _after_step(self):
