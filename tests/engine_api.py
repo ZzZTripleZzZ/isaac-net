@@ -238,18 +238,32 @@ class StepProbe:
         self._orig = net._transmit
 
         def wrapped(t, snr_db):
+            # the engine passes the per-env clock t [E]; the tests drive all envs with one global step
             fin = self._orig(t, snr_db)
             n = self.net
             cap = n.cap.clone()
+            tt = t[:, None, None] if torch.is_tensor(t) else t
             delivered = (cap >= 0) & torch.isfinite(fin)
-            timed = (cap >= 0) & ~delivered & ((t + 1 - cap) >= TIMEOUT)
-            self.last = StepRecord(t, cap, n.cls.clone(), n.rem.clone(), fin.clone(), delivered, timed)
+            timed = (cap >= 0) & ~delivered & ((tt + 1 - cap) >= TIMEOUT)
+            t_int = int(t[0]) if torch.is_tensor(t) else t
+            self.last = StepRecord(t_int, cap, n.cls.clone(), n.rem.clone(), fin.clone(), delivered, timed)
             return fin
 
         net._transmit = wrapped
 
     def detach(self):
         self.net._transmit = self._orig
+
+
+def fast_finish_fields(net, fin, t):
+    """netsim_fast.finish_body on a reference engine's FIFO state at global step t; returns the
+    9 compacted FIFO fields in FIFO_FIELDS order."""
+    from netsim_fast import finish_body
+    E = net.E
+    tv = torch.full((E,), int(t), dtype=torch.long)
+    fields, _ = finish_body(net.cap, net.cls, net.det, net.hid, net.rem, net.dlv, net.f_nact, net.f_snr,
+                            net.f_own, fin, tv, torch.zeros(E, dtype=torch.long))
+    return fields
 
 
 def run(net, wl, steps, t0=0, probe=False, on_step=None):
