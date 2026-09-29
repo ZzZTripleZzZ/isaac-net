@@ -93,14 +93,20 @@ def env_index(env_ids, E, device):
 
 
 def fill_rows(x, ids, v):
-    """In-place: x[ids] = v (all rows if ids is None). v is a scalar or a [len(ids), ...] tensor."""
+    """In-place: x[ids] = v (all rows if ids is None). v is a scalar or a [len(ids), ...] tensor.
+
+    Uses index_fill_ / index_copy_ rather than x[ids] = v: assigning a Python scalar through advanced
+    indexing copies it host-to-device and synchronizes with the GPU, which costs milliseconds per reset
+    on a busy GPU. These calls are asynchronous."""
     if ids is None:
         if isinstance(v, torch.Tensor):
             x.copy_(v)
         else:
             x.fill_(v)
+    elif isinstance(v, torch.Tensor):
+        x.index_copy_(0, ids, v.to(x.dtype))
     else:
-        x[ids] = v
+        x.index_fill_(0, ids, v)
 
 
 @dataclass

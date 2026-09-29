@@ -30,7 +30,8 @@ Design notes
   * All state lives in persistent buffers updated in place (copy_), so CUDA-graph pointers stay valid.
   * The per-env clock t [E] enters the graphs through a device buffer; slot time g = 40 t + k and the finish
     time t + (k+1)/40 are computed on device (float64 then rounded to float32, exactly as the reference).
-  * submit writes the new frame into slot count[e,r] with a one-hot mask instead of nonzero + scatter.
+  * submit writes the new frame into slot count[e,r] with an in-place gather/scatter (O(E*R)) instead of
+    nonzero + advanced indexing.
   * Compaction uses a stable cumsum-based scatter that realizes the same permutation as NetBase._compact.
   * Greedy PF over subbands stays sequential (need[] couples the subbands), with one-hot selects instead of
     advanced-index writes.
@@ -130,25 +131,33 @@ def fluid_body(rem, fin_t, snr_db, finv):
     return rem, fin_t
 
 
-def add_body(cap, cls, det, hid, rem, f_nact, f_snr, f_own, send, det_in, hid_in, snr_in, t, sizes, arF):
+def add_body(cap, cls, det, hid, rem, f_nact, f_snr, f_own, send, det_in, hid_in, snr_in, t, sizes):
+    """Enqueue in place: each accepting robot writes its new frame into FIFO slot count[e,r].
+    O(E*R) gather/scatter at the write slot (robots that do not enqueue write their old value back)."""
     count = (cap >= 0).sum(-1)
     new = (send > 0) & (count < F)
     overflow = ((send > 0) & (count >= F)).sum()
-    sl = (arF == count[..., None]) & new[..., None]                     # [E,R,F] one-hot write slot
-    cap = torch.where(sl, t[:, None, None], cap)
-    cls = torch.where(sl, send[..., None], cls)
-    det = torch.where(sl, det_in[..., None], det)
-    hid = torch.where(sl, hid_in[:, None, None], hid)
-    rem = torch.where(sl, sizes[(send - 1).clamp(min=0)][..., None], rem)
-    nact = (cap >= 0).any(-1).sum(-1)
-    f_nact = torch.where(sl, nact[:, None, None], f_nact)
-    f_snr = torch.where(sl, snr_in[..., None], f_snr)
-    f_own = torch.where(sl, count[..., None], f_own)
-    return cap, cls, det, hid, rem, f_nact, f_snr, f_own, overflow, new, sl, count, nact
+    idx = count.clamp(max=F - 1)[..., None]
+    nact = ((count + new.long()) > 0).sum(-1)       # robots with a non-empty FIFO after this submit
+    put_slot(cap, idx, new, t[:, None].expand_as(send))
+    put_slot(cls, idx, new, send)
+    put_slot(det, idx, new, det_in)
+    put_slot(hid, idx, new, hid_in[:, None].expand_as(send))
+    put_slot(rem, idx, new, sizes[(send - 1).clamp(min=0)])
+    put_slot(f_nact, idx, new, nact[:, None].expand_as(send))
+    put_slot(f_snr, idx, new, snr_in)
+    put_slot(f_own, idx, new, count)
+    return overflow, new, idx, count, nact
 
 
-def arrival_body(mode, dlv, sl, new, send, count, nact, snr_in, t, z, u1, u2, lvl):
-    """NetDelay._on_arrival for every robot at once; only the one-hot slot sl of enqueuing robots is written.
+def put_slot(x, idx, new, v):
+    """In place: x[e, r, idx[e, r]] = v[e, r] where new[e, r]."""
+    cur = x.gather(-1, idx).squeeze(-1)
+    x.scatter_(-1, idx, torch.where(new, v.to(x.dtype), cur)[..., None])
+
+
+def arrival_body(mode, new, send, count, nact, snr_in, t, z, u1, u2, lvl):
+    """NetDelay._on_arrival for every robot at once; returns the delivery time [E,R] (used where new).
     lvl: dict of level tensors (mu/sig/p floats for L0; mu/sig/p [E] for L0DR; q, pd, edges for L05/L05Q)."""
     if mode == "L0":
         delay = torch.exp(lvl["mu"] + lvl["sig"] * z)
@@ -166,8 +175,7 @@ def arrival_body(mode, dlv, sl, new, send, count, nact, snr_in, t, z, u1, u2, lv
         delay = qf.gather(-1, lo[..., None]).squeeze(-1) * (1 - w) + qf.gather(-1, (lo + 1)[..., None]).squeeze(-1) * w
         lost = u2 < lvl["pd"][key]
     d = t[:, None] + delay
-    d = torch.where(lost, torch.full_like(d, INF), d)
-    return torch.where(sl, d[..., None], dlv)
+    return torch.where(lost, torch.full_like(d, INF), d)
 
 
 def finish_body(cap, cls, det, hid, rem, dlv, f_nact, f_snr, f_own, fin, t, cur_hid):
@@ -413,11 +421,9 @@ class NetFast:
 
     # ---------------------------------------------------------------- bodies
     def _add_region(self):
-        out = self._add(self.cap, self.cls, self.det, self.hid, self.rem, self.f_nact, self.f_snr, self.f_own,
-                        self._send, self._det_in, self._hid_in, self._snr_add, self._t, self.sizes, self._arF)
-        for name, v in zip(["cap", "cls", "det", "hid", "rem", "f_nact", "f_snr", "f_own"], out[:8]):
-            getattr(self, name).copy_(v)
-        overflow, new, sl, count, nact = out[8:]
+        overflow, new, idx, count, nact = self._add(
+            self.cap, self.cls, self.det, self.hid, self.rem, self.f_nact, self.f_snr, self.f_own,
+            self._send, self._det_in, self._hid_in, self._snr_add, self._t, self.sizes)
         self._overflow.copy_(overflow)
         self._accepted.copy_(new)
         if self.rung in DELAY_RUNGS:
@@ -428,8 +434,8 @@ class NetFast:
                 z = torch.randn(E, R, device=d)
                 u1 = torch.rand(E, R, device=d)
                 u2 = torch.rand(E, R, device=d)
-            self.dlv.copy_(self._arrival(self.mode, self.dlv, sl, new, self._send, count, nact, self._snr_add,
-                                         self._t, z, u1, u2, self._lvl))
+            dl = self._arrival(self.mode, new, self._send, count, nact, self._snr_add, self._t, z, u1, u2, self._lvl)
+            put_slot(self.dlv, idx, new, dl)
 
     def _step_region(self):
         E, R, d = self.E, self.R, self.dev

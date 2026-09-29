@@ -68,7 +68,7 @@ def build(level, backend, E, R, dev):
     return NetFast(level, E, R, dev, SIZES, params=params, backend=backend, seed=0)
 
 
-def run(level, backend, E, R, steps, warm, reset_frac, dev="cuda"):
+def run(level, backend, E, R, steps, warm, reset_frac, api="new", dev="cuda"):
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     base_mem = torch.cuda.memory_allocated()
@@ -87,6 +87,9 @@ def run(level, backend, E, R, steps, warm, reset_frac, dev="cuda"):
         det = tx & (torch.rand(E, R, device=dev, generator=g) < 0.3)
         if n_reset:
             net.reset(torch.randint(0, E, (n_reset,), device=dev, generator=g))
+        if api == "legacy":
+            net.add_frames(None, send, det, hid, snr)
+            return net.step(None, snr, hid)
         net.submit(None, Requests(send, det, hid), snr)
         return net.step(None, snr)
 
@@ -105,7 +108,7 @@ def run(level, backend, E, R, steps, warm, reset_frac, dev="cuda"):
     del net
     return {"level": level, "backend": backend, "E": E, "R": R, "ms_per_step": round(ms, 3),
             "peak_mem_MiB": round(peak, 1), "setup_s": round(setup_s, 1), "mean_queue": round(q, 2),
-            "steps": steps, "reset_frac": reset_frac} | us.summary()
+            "steps": steps, "reset_frac": reset_frac, "api": api} | us.summary()
 
 
 def main():
@@ -117,6 +120,8 @@ def main():
     ap.add_argument("--ref_steps", type=int, default=10, help="timed steps for the (slow) reference backend")
     ap.add_argument("--warm", type=int, default=5)
     ap.add_argument("--reset_frac", type=float, default=0.0)
+    ap.add_argument("--api", default="new", choices=["new", "legacy"],
+                    help="new: submit/step dict with per-message outputs; legacy: add_frames/step tuple")
     ap.add_argument("--out", default="bench.jsonl")
     a = ap.parse_args()
     levels = netsim.RUNGS if a.levels == "all" else a.levels.split(",")
@@ -128,7 +133,7 @@ def main():
                     continue
                 steps = a.ref_steps if backend in ("reference", "orig") else a.steps
                 try:
-                    r = run(level, backend, E, R, steps, a.warm, a.reset_frac)
+                    r = run(level, backend, E, R, steps, a.warm, a.reset_frac, a.api)
                 except torch.OutOfMemoryError:
                     r = {"level": level, "backend": backend, "E": E, "R": R, "error": "OOM"}
                 r["gpu"] = torch.cuda.get_device_name()
