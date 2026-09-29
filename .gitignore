@@ -9,3 +9,6 @@ data/
 .DS_Store
 *.egg-info/
 .venv/
+.pytest_cache/
+.ruff_cache/
+venv*/

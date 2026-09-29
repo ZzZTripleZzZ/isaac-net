@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "isaaclab-net"
+version = "0.0.1"
+description = "GPU-batched 5G network module for massively parallel robot RL in Isaac Lab (prototype)"
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+requires-python = ">=3.10"
+# Install torch first to pick the build (CUDA, or CPU-only via --index-url https://download.pytorch.org/whl/cpu).
+dependencies = ["torch>=2.4"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "ruff>=0.5"]
+
+[tool.setuptools]
+# The code still lives in prototype/ as loose modules; the isaaclab_net package is a later milestone.
+# Until then nothing is installed as a package, and pytest puts prototype/ on the path (see below).
+packages = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["prototype", "prototype/fast", "tests"]
+markers = [
+    "gpu: needs a CUDA GPU (skipped automatically without one)",
+    "slow: longer runs (deselect with -m 'not slow')",
+]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["prototype/isaac/isaac_env_skeleton.py", "prototype/isaac/maniskill_adapter_skeleton.py",
+                  "venv*", ".pydeps"]
+
+[tool.ruff.lint]
+# Light: syntax errors, undefined names, unused imports/variables, common pitfalls.
+select = ["E4", "E7", "E9", "F"]
+# The prototype uses compact one-liners (`a; b`, `x = lambda ...`) on purpose.
+ignore = ["E701", "E702", "E731", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+# Existing prototype findings, left untouched while the engine API is being reworked (see tests/README.md).
+"prototype/fast/bench.py" = ["E402", "F821", "F841"]   # F821: false positive from `del net` after a closure
+"prototype/fast/bench_env.py" = ["E402"]
+"prototype/fast/test_equiv.py" = ["F401"]
+"prototype/isaac/netmodule.py" = ["F401", "F841"]
