@@ -1,89 +1,41 @@
-"""Equivalence test: NetSlot (original, unmodified) vs NetSlotFast under identical random draws.
+"""Equivalence test: reference engine (netsim) vs a fast backend (netsim_fast) under identical random draws.
 
-The original draws its per-slot noise through torch.randn_like / torch.rand_like. During the reference
-step these two functions are temporarily replaced by readers of a pre-generated noise tensor, and the
-fast engine receives the same tensor via set_noise(). Inputs (send, det, hid, SNR) are a synthetic,
-regime-switching workload that exercises idle, loaded and overloaded cells (SR, HARQ, RLC wait,
-buffer overflow, timeouts).
+The reference draws its randomness through torch.randn_like / rand_like (L2) and torch.randn / rand (NetDelay
+levels). During the reference call these functions are temporarily replaced by readers of pre-generated
+tensors, and the fast engine receives the same tensors via set_noise(). Inputs (send, det, hid, SNR) come from
+a synthetic, regime-switching workload that exercises idle, loaded and overloaded cells (SR, HARQ, RLC wait,
+buffer overflow, timeouts). Optional random partial resets (--reset_every) use the per-env clock.
 
-usage: python test_equiv.py --E 16 --R 16 --steps 300 --backend graph
+usage: python test_equiv.py --rung L2 --E 16 --R 16 --steps 300 --backend graph --api new --reset_every 7
+       python test_equiv.py --rung all --backend graph            # every level
+Prints one JSON line per level; exit code 1 if a bitwise backend (eager/graph) is not bitwise identical.
 """
 import argparse
 import json
+import sys
 import time
+
+import os
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
 
 import netsim
-from netsim import NetSlot, UL_PER_STEP, S
-from netsim_fast import NetSlotFast
+from netsim import F, Requests
+from netsim_fast import NetFast
+from testlib import SIZES, Workload, drive, is_ref, maxdiff, same, state_names, synthetic_params
 
-SIZES = (4000.0, 30000.0)
-
-
-class Inject:
-    def __init__(self, nz, u):
-        self.nz, self.u, self.i, self.j = nz, u, 0, 0
-
-    def __enter__(self):
-        self._rn, self._ru = torch.randn_like, torch.rand_like
-        def rn(x, *a, **k):
-            assert x.shape == self.nz.shape[1:]
-            v = self.nz[self.i]; self.i += 1; return v
-        def ru(x, *a, **k):
-            assert x.shape == self.u.shape[1:]
-            v = self.u[self.j]; self.j += 1; return v
-        torch.randn_like, torch.rand_like = rn, ru
-        return self
-
-    def __exit__(self, *exc):
-        torch.randn_like, torch.rand_like = self._rn, self._ru
-        assert self.i == UL_PER_STEP and self.j == UL_PER_STEP, (self.i, self.j)
+OUT_KEYS = ["delivered", "timed_out", "cap", "cls", "delay", "newest", "det_env", "queue_len", "queue_bytes", "t"]
 
 
-class Workload:
-    def __init__(self, E, R, dev, seed):
-        self.g = torch.Generator(device=dev).manual_seed(seed)
-        self.E, self.R, self.dev = E, R, dev
-        self.base = -5 + 40 * torch.rand(E, R, device=dev, generator=self.g)
-        self.hid = torch.zeros(E, dtype=torch.long, device=dev)
-
-    def inputs(self, t):
-        E, R, d, g = self.E, self.R, self.dev, self.g
-        phase = (t // 25) % 4          # idle, medium, burst (all large), medium-small
-        p = [0.03, 0.3, 0.9, 0.5][phase]
-        big = [0.3, 0.5, 1.0, 0.1][phase]
-        tx = torch.rand(E, R, device=d, generator=g) < p
-        lg = torch.rand(E, R, device=d, generator=g) < big
-        send = tx.long() * (1 + lg.long())
-        det = tx & (torch.rand(E, R, device=d, generator=g) < 0.3)
-        self.hid = self.hid + (torch.rand(E, device=d, generator=g) < 0.05).long()
-        self.base = (self.base + 0.5 * torch.randn(E, R, device=d, generator=g)).clamp(-10, 40)
-        return send, det, self.hid.clone(), self.base.clone()
-
-    def noise(self):
-        E, R, d, g = self.E, self.R, self.dev, self.g
-        return (torch.randn(UL_PER_STEP, E, R, S, 2, device=d, generator=g),
-                torch.rand(UL_PER_STEP, E, R, device=d, generator=g))
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--E", type=int, default=16)
-    ap.add_argument("--R", type=int, default=16)
-    ap.add_argument("--steps", type=int, default=300)
-    ap.add_argument("--backend", default="graph")
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--log_stats", type=int, default=1)
-    ap.add_argument("--teacher_force", type=int, default=0, help="copy NetSlot state into the fast engine before every step")
-    a = ap.parse_args()
+def run(rung, a):
     dev = "cuda"
-    torch.manual_seed(a.seed)
-    ref = NetSlot(a.E, a.R, dev, SIZES)
-    fast = NetSlotFast(a.E, a.R, dev, SIZES, backend=a.backend, inject=True)
-    fast.h.copy_(ref.h)
+    params = synthetic_params(rung, dev)
+    ref = netsim.make_net(rung, a.E, a.R, dev, SIZES, params, seed=a.seed)
+    fast = NetFast(rung, a.E, a.R, dev, SIZES, params=params, backend=a.backend, inject=True, seed=a.seed)
     ref.log_stats = fast.log_stats = bool(a.log_stats)
-
     fin_ref = {}
     orig_tx = ref._transmit
     def tx_wrap(t, snr):
@@ -91,73 +43,100 @@ def main():
     ref._transmit = tx_wrap
 
     wl = Workload(a.E, a.R, dev, a.seed + 1)
-    names = NetSlotFast.FIELDS + NetSlotFast.MAC
-    first_bad, worst = None, {}
-    n_frames_fin = 0
-    n_fin_mismatch = 0
+    names = state_names(rung)
+    first_bad, worst, out_bad = None, {}, {}
+    n_fin = n_fin_mismatch = n_resets = 0
     max_fin_diff = 0.0
     q_hist = []
     t0 = time.time()
-    tf_rows = tf_rows_bad = 0
-    tf_state_diff = {}
-    for t in range(a.steps):
+    for step in range(a.steps):
+        if a.reset_every and step > 0 and step % a.reset_every == 0:
+            ids = wl.reset_ids(a.reset_frac)
+            ref.reset(ids); fast.reset(ids); n_resets += int(ids.numel())
         if a.teacher_force:
             for n in names:
                 getattr(fast, n).copy_(getattr(ref, n))
-        send, det, hid, snr = wl.inputs(t)
-        nz, u = wl.noise()
-        ref.add_frames(t, send, det, hid, snr)
-        fast.add_frames(t, send, det, hid, snr)
-        with Inject(nz, u):
-            n_r, d_r = ref.step(t, snr, hid)
-        fast.set_noise(nz, u)
-        n_f, d_f = fast.step(t, snr, hid)
+        send, det, hid, snr = wl.inputs(step)
+        noise, arr = wl.noise(), wl.arrival_noise()
+        req = Requests(send, det, hid)
+        t = None if a.api == "new" else step        # new API: per-env engine clock
+        o_r = drive(ref, rung, t, req, snr, noise, arr, a.api, hid)
+        o_f = drive(fast, rung, t, req, snr, noise, arr, a.api, hid)
         fr, ff = fin_ref["f"], fast._fin
         fin_both = torch.isfinite(fr) | torch.isfinite(ff)
-        n_frames_fin += int(torch.isfinite(fr).sum())
+        n_fin += int(torch.isfinite(fr).sum())
         mism = (fr != ff) & fin_both
         n_fin_mismatch += int(mism.sum())
         if fin_both.any():
             dd = (fr - ff)[fin_both].abs()
             dd = torch.where(torch.isnan(dd), torch.full_like(dd, float("inf")), dd)
             max_fin_diff = max(max_fin_diff, float(dd.max()))
-        if a.teacher_force:   # one-step agreement from an identical state
-            active = (ref.queued() > 0) | torch.isfinite(fr).any(-1) | torch.isfinite(ff).any(-1)
-            rowbad = (mism.any(-1) | (n_r != n_f)) & active
-            tf_rows += int(active.sum()); tf_rows_bad += int(rowbad.sum())
-            for n in ["rem", "bsr", "avg", "olla", "h"]:
-                dd = (getattr(ref, n) - getattr(fast, n)).abs()
-                tf_state_diff[n] = max(tf_state_diff.get(n, 0.0), float(dd.max()))
-        ok = torch.equal(n_r, n_f) and torch.equal(d_r, d_f) and int(mism.sum()) == 0
+        ok = int(mism.sum()) == 0
+        if a.api == "new":
+            for k in OUT_KEYS:
+                s = same(o_r[k], o_f[k])
+                ok &= s
+                if not s:
+                    out_bad[k] = out_bad.get(k, 0) + 1
+        else:
+            ok &= torch.equal(o_r[0], o_f[0]) and torch.equal(o_r[1], o_f[1])
         for n in names:
             x, y = getattr(ref, n), getattr(fast, n)
-            same = torch.equal(x, y)
-            ok &= same
-            if not same:
-                diff = (x.double() - y.double()).abs()
-                diff = diff[~torch.isnan(diff)]
-                worst[n] = max(worst.get(n, 0.0), float(diff.max()) if diff.numel() else 0.0)
+            s = same(x, y)
+            ok &= s
+            if not s:
+                worst[n] = max(worst.get(n, 0.0), maxdiff(x, y))
         if not ok and first_bad is None:
-            first_bad = t
+            first_bad = step
         q_hist.append(float(ref.queued().float().mean()))
     torch.cuda.synchronize()
-    res = {"E": a.E, "R": a.R, "steps": a.steps, "backend": a.backend, "seed": a.seed,
+    res = {"rung": rung, "E": a.E, "R": a.R, "steps": a.steps, "backend": a.backend, "api": a.api, "seed": a.seed,
+           "reset_every": a.reset_every, "envs_reset": n_resets,
            "bitwise_identical_all_steps": first_bad is None, "first_mismatch_step": first_bad,
-           "frames_delivered_ref": n_frames_fin, "finish_time_mismatches": n_fin_mismatch,
-           "max_finish_time_diff_steps": max_fin_diff, "max_state_diff": worst,
-           "mean_queue": round(sum(q_hist)/len(q_hist), 2), "max_mean_queue": round(max(q_hist), 2),
+           "frames_delivered_ref": n_fin, "finish_time_mismatches": n_fin_mismatch,
+           "max_finish_time_diff_steps": max_fin_diff, "max_state_diff": worst, "output_mismatch_steps": out_bad,
+           "mean_queue": round(sum(q_hist) / len(q_hist), 2), "max_mean_queue": round(max(q_hist), 2),
            "wall_s": round(time.time() - t0, 1)}
-    if a.teacher_force:
-        res["tf_robot_steps"] = tf_rows; res["tf_robot_steps_mismatch"] = tf_rows_bad
-        res["tf_max_state_diff"] = tf_state_diff
     if a.log_stats:
         cr, cf = ref.collect(), fast.collect()
         res["stats_identical"] = all(torch.equal(cr[k], cf[k]) if k != "overflow" else cr[k] == cf[k] for k in cr)
         res["delivered_frames"] = int(cr["delay"].numel()); res["timeouts"] = int(cr["x_cls"].numel())
         res["overflow"] = cr["overflow"]
         res["fast_delivered"] = int(cf["delay"].numel()); res["fast_timeouts"] = int(cf["x_cls"].numel())
-        res["mean_delay_ref"] = float(cr["delay"].mean()); res["mean_delay_fast"] = float(cf["delay"].mean())
-    print(json.dumps(res))
+        res["mean_delay_ref"] = float(cr["delay"].mean()) if cr["delay"].numel() else None
+        res["mean_delay_fast"] = float(cf["delay"].mean()) if cf["delay"].numel() else None
+    return res
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--rung", default="L2", help="level, comma list, or 'all'")
+    ap.add_argument("--E", type=int, default=16)
+    ap.add_argument("--R", type=int, default=16)
+    ap.add_argument("--steps", type=int, default=300)
+    ap.add_argument("--backend", default="graph")
+    ap.add_argument("--api", default="new", choices=["new", "legacy"])
+    ap.add_argument("--reset_every", type=int, default=0, help="partial reset of a random env subset every N steps")
+    ap.add_argument("--reset_frac", type=float, default=0.25)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--log_stats", type=int, default=1)
+    ap.add_argument("--teacher_force", type=int, default=0, help="copy reference state into the fast engine before every step")
+    ap.add_argument("--out", default="")
+    a = ap.parse_args()
+    rungs = netsim.RUNGS if a.rung == "all" else a.rung.split(",")
+    if a.backend == "triton":
+        rungs = [r for r in rungs if r in ("L1", "L2")]
+    fail = False
+    for rung in rungs:
+        torch.manual_seed(a.seed)
+        res = run(rung, a)
+        print(json.dumps(res), flush=True)
+        if a.out:
+            with open(a.out, "a") as f:
+                f.write(json.dumps(res) + "\n")
+        if a.backend in ("eager", "graph") and not (res["bitwise_identical_all_steps"] and res.get("stats_identical", True)):
+            fail = True
+    sys.exit(1 if fail else 0)
 
 
 if __name__ == "__main__":
