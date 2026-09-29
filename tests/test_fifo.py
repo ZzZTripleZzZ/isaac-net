@@ -75,7 +75,7 @@ def test_compact_moves_live_frames_to_front_in_order():
 
 def test_fast_compaction_matches_reference_permutation():
     """netsim_fast.finish_body uses a cumsum scatter; it must realize the reference argsort permutation."""
-    from netsim_fast import finish_body
+    from engine_api import fast_finish_fields
     gen = torch.Generator().manual_seed(2)
     for _ in range(5):
         net, uid, alive = _compaction_case(gen)
@@ -83,8 +83,7 @@ def test_fast_compaction_matches_reference_permutation():
         net.cap = torch.where(alive, torch.zeros_like(net.cap), net.cap)       # age 0: nothing times out
         net.dlv = torch.full((E, R, F), float("inf"))
         fin = torch.full((E, R, F), float("inf"))
-        out = finish_body(net.cap, net.cls, net.det, net.hid, net.rem, net.dlv, net.f_nact, net.f_snr,
-                          net.f_own, net.bsr, net.hcnt, fin, torch.tensor(0), torch.zeros(E, dtype=torch.long))
+        out = fast_finish_fields(net, fin, 0)
         net._compact()
         for i, n in enumerate(FIFO_FIELDS):
             a, b = out[i], getattr(net, n)

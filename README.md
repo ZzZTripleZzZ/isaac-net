@@ -53,29 +53,28 @@ Linux with an NVIDIA GPU. The eager reference engine also runs on a CPU.
 
 ```python
 import torch
-from netsim import Radio
+from netsim import Requests
 from netsim_fast import make_net_fast
 
 E, R, dev = 256, 16, torch.device("cuda")          # 256 envs, 16 robots each
 net = make_net_fast("L2", E, R, dev, sizes=(4000.0, 30000.0), backend="graph")
-radio = Radio(E, dev)                               # per-env shadowing map, gNB at the origin
-pos = torch.rand(E, R, 2, device=dev) * 150         # robot positions from your simulator
+pos = torch.rand(E, R, 2, device=dev) * 150         # robot positions from your simulator ([E,R,3] also works)
 last = torch.full((E, R), -1, dtype=torch.long, device=dev)
-tag = torch.zeros(E, R, dtype=torch.bool, device=dev)
-hid = torch.zeros(E, dtype=torch.long, device=dev)
 
-for t in range(300):                                # one control step = 100 ms = 40 uplink slots
-    snr = radio.snr_db(pos)
+for _ in range(300):                                # one control step = 100 ms = 40 uplink slots
     send = (torch.rand(E, R, device=dev) < 0.3).long()   # per robot: 0 nothing, 1 small frame, 2 large frame
-    net.add_frames(t, send, tag, hid, snr)
-    newest, _ = net.step(t, snr, hid)               # capture step of the newest frame delivered this step, -1 if none
-    last = torch.maximum(last, newest)
-    aoi = t + 1 - last                              # age of the freshest delivered frame, in control steps
-    queued = net.queued()                           # frames still waiting per robot
+    net.submit(None, Requests(send))                # None = each env's own clock net.clock [E]
+    out = net.step(None, pos)                       # positions go through the engine's radio; an SNR [E,R] also works
+    last = torch.maximum(last, out["newest"])       # capture step of the newest frame delivered, -1 if none
+    aoi = out["t"][:, None] + 1 - last              # age of the freshest delivered frame, in control steps
+    queued = out["queue_len"]                       # frames still waiting per robot
     pos = (pos + 0.3 * torch.randn_like(pos)).clamp(0, 150)
+    done = torch.nonzero(torch.rand(E, device=dev) < 0.005).squeeze(-1)   # envs whose episode ended
+    net.reset(done)                                 # partial reset: queues, MAC, fading, radio and clock of these envs
+    last[done] = -1
 ```
 
-`aoi` and `queued` go straight into observations. The `tag` and `hid` arguments carry an application flag through the network with each frame; the example task in `prototype/env.py` uses them to mark frames that captured a hazard. [`prototype/isaac/isaac_env_skeleton.py`](prototype/isaac/isaac_env_skeleton.py) shows where these calls sit in an Isaac Lab `DirectRLEnv`.
+`step` also returns, per message slot, the `delivered` and `timed_out` masks, the `delay` in control steps and the `cap`/`cls` of each message, plus `queue_bytes`, `sinr_db` and, if `Requests(send, det, hid)` carried an application tag, `det_env`. `reset(env_ids)` takes an index tensor, a list or a bool mask and leaves every other env bit-for-bit unaffected. The earlier calls `add_frames(t, send, det, hid, snr)` and `step(t, snr, hid) -> (newest, det_env)` still work. `aoi` and `queued` go straight into observations. The example task in `prototype/env.py` uses the application tag to mark frames that captured a hazard. [`prototype/isaac/isaac_env_skeleton.py`](prototype/isaac/isaac_env_skeleton.py) shows where these calls sit in an Isaac Lab `DirectRLEnv`.
 
 ## What the engine models
 
@@ -105,16 +104,18 @@ Every level exposes the same API, so a task switches fidelity by changing one ar
 
 ## Backends and speed
 
-`L2` has three implementations behind one API. `eager` is the readable reference in `prototype/netsim.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference, checked on per-frame finish times and every queue and MAC state across 300 steps at 16×16, 256×16 and 64×100. `triton` runs all 40 slots of a control step in one fused kernel. It matches the reference to rounding: about 3 differing discrete decisions per million robot-steps, with aggregate delivery and delay equal to four significant digits.
+Every level has a readable eager reference in `prototype/netsim.py` and graph-safe fast versions in `prototype/fast/netsim_fast.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference at every level (per-message outputs, every queue and MAC state, with random partial resets). `triton` (`L1`, `L2`) runs all 40 slots of a control step in one fused kernel and matches the reference to rounding: from an identical state every finish time agrees, and over long runs aggregate delivery and delay agree to three or four significant digits. `compile` (torch.compile + CUDA graph) also agrees to rounding.
 
-Network step time in ms, on an RTX 4090 that other jobs kept 95–99% busy:
+Network step time (`submit` + `step`, dict outputs) in ms, on an RTX 4090 that other jobs kept 98–99% busy, so absolute numbers are pessimistic:
 
-| envs × robots | eager | graph | triton |
-|---:|---:|---:|---:|
-| 256 × 16 | 1,478 | 54.6 | 2.0 |
-| 4,096 × 100 | 1,586 | 818 | 60 |
+| level | 256 × 16 reference | graph | triton | 4,096 × 100 reference | graph | triton |
+|:---|---:|---:|---:|---:|---:|---:|
+| `L0`, `L0DR` | 10.0–10.3 | 2.1 | | 19.2–19.5 | 45 | |
+| `L05`, `L05Q` | 13.5–14.3 | 2.1 | | 21–23 | 46 | |
+| `L1` | 118 | 7.3 | 2.1 | 458 | 474 | 48 |
+| `L2` | 769 | 32 | 2.1 | 1,102 | 566 | 71 |
 
-On a quieter GPU, 256 × 16 took 13.4 ms with `graph` and 0.43 ms with `triton`. At these speeds the environment's own operations, not the network, dominate a full training step. `python prototype/fast/test_equiv.py` and `python prototype/fast/bench.py` reproduce both results, and `pytest -m gpu` runs the equivalence checks as tests.
+At small sizes every fast backend sits at a ~2 ms floor set by the busy GPU. At 4,096 × 100 the fixed-shape graph versions of the delay levels are memory-bound and slower than the eager reference, which only touches the new and finished frames. Resetting 1% of envs every step adds 0.3–2 ms at 256 × 16. `python prototype/fast/test_equiv.py`, `test_reset.py` and `bench.py` reproduce these results, and `pytest -m gpu` runs the equivalence checks as tests.
 
 ## Validation against ns-3
 
@@ -125,7 +126,7 @@ The reference simulator is ns-3.48 with 5G-LENA NR v5.1, used unmodified except 
 - [x] Slot-level uplink engine (`L2`) and lower fidelity levels
 - [x] `graph` backend, bitwise equal to the reference, and `triton` backend for scale
 - [ ] Package layout `isaaclab_net/` (core, isaac, bridges, examples) per [ARCHITECTURE.md](ARCHITECTURE.md)
-- [ ] Partial resets per env and per-env clocks for Isaac Lab
+- [x] Partial resets per env, per-env clocks and the `submit` / `step` dict API, at every level and backend
 - [ ] Configurable NR: numerology, TDD patterns, 3GPP MCS/TBS and BLER tables, multiple HARQ processes, downlink
 - [ ] Multi-cell interference and handover
 - [ ] Isaac Lab 3.0 integration, demo tasks and scaling benchmarks
@@ -140,9 +141,11 @@ isaaclab-net/
 │   ├── netsim.py                 # eager reference engine: radio, frame queues, fidelity levels L0 ... L2
 │   ├── env.py                    # example task: robot fleet offloading hazard detection over a shared uplink
 │   ├── fast/
-│   │   ├── netsim_fast.py        #   graph and triton backends of L2, same API
+│   │   ├── netsim_fast.py        #   eager/graph/compile backends of every level, triton for L1 and L2, same API
 │   │   ├── triton_slot.py        #   the fused per-step kernel
-│   │   ├── test_equiv.py         #   equivalence against the reference under identical random draws
+│   │   ├── test_equiv.py         #   equivalence against the reference under identical random draws, any level
+│   │   ├── test_reset.py         #   partial resets leave the other envs bitwise unaffected
+│   │   ├── test_regress.py       #   reference == frozen original (netsim_v0.py) bitwise
 │   │   └── bench.py bench_env.py #   network-only and full-env benchmarks
 │   └── isaac/
 │       ├── netmodule.py                  # backend-agnostic NetModule API with partial resets (skeleton)
