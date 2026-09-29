@@ -9,6 +9,7 @@
   <a href="https://pytorch.org/"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-CUDA-EE4C2C?style=flat-square&logo=pytorch&logoColor=white"></a>
   <a href="https://triton-lang.org/"><img alt="Triton" src="https://img.shields.io/badge/kernels-Triton-2F5C9E?style=flat-square"></a>
   <a href="https://isaac-sim.github.io/IsaacLab/"><img alt="Isaac Lab" src="https://img.shields.io/badge/Isaac%20Lab-3.0%20(in%20progress)-76B900?style=flat-square&logo=nvidia&logoColor=white"></a>
+  <a href="https://github.com/ZzZTripleZzZ/isaaclab-net/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ZzZTripleZzZ/isaaclab-net/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-BSD--3--Clause-yellow?style=flat-square&logo=opensourceinitiative&logoColor=white"></a>
   <img alt="Status" src="https://img.shields.io/badge/status-prototype-B7791F?style=flat-square">
 </p>
@@ -113,7 +114,7 @@ Network step time in ms, on an RTX 4090 that other jobs kept 95–99% busy:
 | 256 × 16 | 1,478 | 54.6 | 2.0 |
 | 4,096 × 100 | 1,586 | 818 | 60 |
 
-On a quieter GPU, 256 × 16 took 13.4 ms with `graph` and 0.43 ms with `triton`. At these speeds the environment's own operations, not the network, dominate a full training step. `python prototype/fast/test_equiv.py` and `python prototype/fast/bench.py` reproduce both results.
+On a quieter GPU, 256 × 16 took 13.4 ms with `graph` and 0.43 ms with `triton`. At these speeds the environment's own operations, not the network, dominate a full training step. `python prototype/fast/test_equiv.py` and `python prototype/fast/bench.py` reproduce both results, and `pytest -m gpu` runs the equivalence checks as tests.
 
 ## Validation against ns-3
 
@@ -129,7 +130,7 @@ The reference simulator is ns-3.48 with 5G-LENA NR v5.1, used unmodified except 
 - [ ] Multi-cell interference and handover
 - [ ] Isaac Lab 3.0 integration, demo tasks and scaling benchmarks
 - [ ] Validation against ns-3 5G-LENA and public measurement traces
-- [ ] Test suite and CI
+- [x] Test suite (67 CPU tests, GPU equivalence tests) and CI
 
 ## Repository layout
 
