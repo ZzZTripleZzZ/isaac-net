@@ -185,6 +185,7 @@ class NRGraphEngine(NREngine):
             ins["x"] = self._buf("snr", xs)
             if dl_snr_db is not None:
                 ins["dl"] = self._buf("dl", dl_snr_db)
+        gate = self._static_gate()
         N = cfg.slots_per_step
         g0 = T * N
         sched = net._schedule(g0)
@@ -192,7 +193,7 @@ class NRGraphEngine(NREngine):
         dt0 = (1 if net.last_g is None else g0 + sched[0][0] - net.last_g) if fad else 0
         P = len(cfg.tdd_pattern)
         skey = g0 % math.lcm(P, cfg.sr_period_slots, cfg.cqi_period_slots)
-        key = (skey, dt0, kind, tuple((k, tuple(v.shape)) for k, v in ins.items()), bool(self.log_stats))
+        key = (skey, dt0, kind, tuple((k, tuple(v.shape)) for k, v in ins.items()), bool(self.log_stats), gate)
         self._tdev.fill_(T)
         g = self._graphs.get(key)
         if g is None:
@@ -206,11 +207,26 @@ class NRGraphEngine(NREngine):
             net.ioN_n[k] += v
         if self.log_stats:
             self._log_from_stash()
+        if gate is not None:          # host side of the gate hooks (NREngine traffic models), as in the capture
+            self._gate, self._gate_seen, self._snap = None, True, None
         self.T = T + 1
         o = self._out
         if legacy:
             return o["newest"].clone(), o["det_env"].clone()
         return {k: v.clone() for k, v in o.items()}
+
+    def _static_gate(self):
+        """Traffic models of NREngine (feat/traffic) gate the UL stream by arrival slot through hooks on net.ul
+        (sr_step / slot / end_step) that read self._gate / self._full_enq, tensors made by submit. The captured
+        step calls the same hooks; this copies those tensors into static buffers first so the graph reads the
+        current step's arrivals. Returns the gate's shapes (part of the graph key) or None."""
+        gate = getattr(self, "_gate", None)
+        if gate is None:
+            return None
+        self._gate = tuple(self._buf(f"gate{i}", x) for i, x in enumerate(gate))
+        if getattr(self, "_full_enq", None) is not None:
+            self._full_enq = self._buf("full_enq", self._full_enq)
+        return tuple(tuple(x.shape) for x in self._gate)
 
     def _region(self, T, kind, ins):
         """The reference NREngine.step body on static inputs, with t on the device. Returns the output dict."""
@@ -235,6 +251,9 @@ class NRGraphEngine(NREngine):
             if stats:
                 del net._log_ul, net._log_dl
         self._last_snr = snr
+        if getattr(self, "_extras", False) and getattr(self, "_snap", None) is not None:
+            self._outputs_extras(out, out["delivered"], out["timed_out"], out["dropped"])
+            self._snap = None
         out["newest"] = self._rel(out["newest"])
         out["cap"] = self._rel(out["cap"])
         if "dl_newest" in out:
@@ -256,11 +275,14 @@ class NRGraphEngine(NREngine):
         snap = [b.clone() for *_, b in self._reg]
         host = self._host_state()
         stash = {k: v.clone() for k, v in self._stash.items()}
+        gate = (getattr(self, "_gate", None), getattr(self, "_full_enq", None), getattr(self, "_gate_seen", None))
 
         def restore():
             for (*_, b), v in zip(self._reg, snap):
                 b.copy_(v)
             self._set_host_state(host)
+            if gate[0] is not None:
+                self._gate, self._full_enq, self._gate_seen = gate
             for k, v in stash.items():
                 self._stash[k].copy_(v)
 
@@ -453,11 +475,17 @@ class NRTritonEngine(NRGraphEngine):
             dref = dl_snr_db if dl_snr_db is not None else snr_db + cfg.dl_snr_offset_db
             dl_ref = (dref if dref.dim() == 3 else dref[..., None].expand(-1, -1, S)).contiguous()
         sched = net._schedule(g0)
+        own = set(vars(net.ul)) & {"sr_step", "slot"}
+        if own and not getattr(self, "_extras", False):
+            raise NotImplementedError(f"hooks on net.ul ({', '.join(sorted(own))}) are bypassed by the fused kernel; "
+                                      "use backend='graph'")
+        gate = getattr(self, "_gate", None)
         if sched:
             fad = cfg.fading
             dt0 = (1 if net.last_g is None else g0 + sched[0][0] - net.last_g) if fad else 0
             itab, ftab, K, n_ul, n_dl = self._sched_table(g0, sched, dt0)
-            self._nt.launch_step(self, ul_ref.contiguous() if cfg.ul else None, dl_ref, pc, itab, ftab, K)
+            self._nt.launch_step(self, ul_ref.contiguous() if cfg.ul else None, dl_ref, pc, itab, ftab, K,
+                                 None if gate is None else (gate[0], gate[1], gate[2]))
             if fad:
                 net.last_g = g0 + sched[-1][0]
             self._accumulate(n_ul, n_dl)

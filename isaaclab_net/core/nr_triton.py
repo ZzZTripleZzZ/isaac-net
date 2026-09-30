@@ -579,6 +579,8 @@ def nr_step_kernel(
         d_hmcs, d_htbs, d_hnsb, d_hcomb, d_hlexp, d_hnrb, d_cap, d_qs, d_qe, d_lost, d_fin,
         # inputs and fading
         h_ptr, uref_ptr, dref_ptr, pc_ptr, t_ptr, ep_ptr, ctr_ptr, s0, chs,
+        # traffic arrival gate (per-message stream ends [E,R,NMSG], arrival slots, base [E,R]); see launch_step
+        gate_e_ptr, gate_s_ptr, gate_b_ptr, NMSG,
         # per-env accumulators [E, 8 HB]: UL counters, hist ok / tx / fail, then the same for the DL
         acc_ptr,
         # schedule of this step: itab [K, 10] int64, ftab [K, 6] float64
@@ -590,7 +592,7 @@ def nr_step_kernel(
         RB: tl.constexpr, S_: tl.constexpr, SB: tl.constexpr, P: tl.constexpr, PB: tl.constexpr,
         F: tl.constexpr, FB: tl.constexpr, M: tl.constexpr, MB: tl.constexpr, HB: tl.constexpr,
         C: tl.constexpr, G: tl.constexpr, NL: tl.constexpr, EQW: tl.constexpr, NPRB: tl.constexpr,
-        UL: tl.constexpr, DL: tl.constexpr, FADING: tl.constexpr,
+        UL: tl.constexpr, DL: tl.constexpr, FADING: tl.constexpr, GATE: tl.constexpr, MMB: tl.constexpr,
         MODE: tl.constexpr, COMB: tl.constexpr, SCHED: tl.constexpr, WIDEBAND: tl.constexpr,
         HARQ_DROP: tl.constexpr, OLLA: tl.constexpr, PHR_CAP: tl.constexpr, WHOLE_BAND: tl.constexpr,
         PC: tl.constexpr, STEP: tl.constexpr, RETX_PRIO: tl.constexpr,
@@ -643,6 +645,13 @@ def nr_step_kernel(
         u_hok = tl.zeros([HB], tl.float32)
         u_htx = tl.zeros([HB], tl.float32)
         u_hfl = tl.zeros([HB], tl.float32)
+        if GATE:           # the UL stream opens message by message at the arrival slots (engine traffic models)
+            mmi = tl.arange(0, MMB)
+            o_rm = er[:, None] * NMSG + mmi[None, :]
+            m_rm = rm[:, None] & (mmi[None, :] < NMSG)
+            g_base = tl.load(gate_b_ptr + er, mask=rm, other=0)
+            g_end = tl.load(gate_e_ptr + o_rm, mask=m_rm, other=0)
+            g_slot = tl.load(gate_s_ptr + o_rm, mask=m_rm, other=2 ** 30)
     if DL:
         (d_s_sent, d_s_floor, d_s_olla, d_s_avg, d_s_bsr, d_s_srt, d_s_ltx, d_s_enq, d_s_csi, d_s_hst, d_s_hlo,
          d_s_hhi, d_s_hrdy, d_s_hntx, d_s_hmcs, d_s_htbs, d_s_hnsb, d_s_hcomb, d_s_hlexp, d_s_hnrb, d_s_cap, d_s_qs,
@@ -708,6 +717,10 @@ def nr_step_kernel(
                     PHR_CAP, WHOLE_BAND, False, STEP, RETX_PRIO, MCS_MAX_DL, MAX_TX, TARGET, TB_OH, SR_DELAY,
                     UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B)
         if UL:
+            if GATE:
+                if (srf != 0) | (uls != 0):
+                    vis = tl.max(tl.where(g_slot <= rel, g_end, g_base[:, None]), axis=1)
+                    u_s_enq = tl.maximum(g_base, vis)
             if srf != 0:
                 need_sr = (u_s_enq - u_s_sent > 0) & (u_s_bsr <= 0) & (u_s_srt < 0)
                 u_s_srt = tl.where(need_sr, g, u_s_srt)
@@ -770,7 +783,7 @@ def _link_args(link):
     return out
 
 
-def launch_step(eng, uref, dref, pc, itab, ftab, K):
+def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
     """Run the fused kernel for one control step of NRTritonEngine eng, in place on the engine's buffers."""
     net, cfg, tb = eng.net, eng.config, eng._tables
     ul, dl = net.ul, net.dl
@@ -783,10 +796,12 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K):
         *_link_args(U), *_link_args(D),
         net.h, uref if uref is not None else dref, dref if dref is not None else dummy,
         pc if pc is not None else dummy, eng._tdev, net.rng.episode, net.rng.ctr, net.rng.s0, eng._chs,
+        *(gate if gate is not None else (dummy, dummy, dummy)), gate[0].shape[-1] if gate is not None else 1,
         eng._acc, itab, ftab, K,
         tu["tab"], tu["thr"], tu["se"], tu["beta"], tu["rate"], tu["eq"], tu["tbs"], tu["cbs"], tu["ncb"], tu["bg"],
         tu["ci0"], tu["cwi"],
         td["tab"], td["thr"], td["se"], td["beta"], td["rate"], td["eq"], td["tbs"], td["cbs"], td["ncb"], td["bg"],
         td["ci0"], td["cwi"],
         tb["lift"], tb["cax"], tb["w"], tb["S0"], tb["DS"], tb["C0"], tb["DC"], R, cfg.slots_per_step,
+        GATE=gate is not None, MMB=triton.next_power_of_2(gate[0].shape[-1]) if gate is not None else 1,
         **eng._const, num_warps=eng._num_warps)
