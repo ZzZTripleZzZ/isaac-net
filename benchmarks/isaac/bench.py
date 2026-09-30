@@ -5,6 +5,7 @@ Usage (from the repository root with the Isaac venv active):
 Network options (isaaclab_net/examples/fleet_args.py): --obs (observation features), --env_decimation,
 --net_decimation, --net_substeps, --dr (network domain randomization).
 Random actions (uniform in [-1,1]), so about 1/3 of robot-steps send nothing, 1/3 small, 1/3 large.
+--repeats k times k windows of --steps steps and reports the median window (all windows are kept).
 Appends one JSON line with env steps/s, robot-steps/s, GPU memory and device-wide GPU utilisation.
 """
 from __future__ import annotations
@@ -28,8 +29,9 @@ parser.add_argument("--steps", type=int, default=300)
 parser.add_argument("--warmup", type=int, default=50)
 parser.add_argument("--max_time", type=float, default=120.0, help="stop the timed loop after this many seconds")
 parser.add_argument("--out", default="bench.jsonl")
+parser.add_argument("--repeats", type=int, default=1, help="timed windows of --steps steps each (median reported)")
 parser.add_argument("--backend", default="triton", choices=["reference", "eager", "graph", "compile", "triton"],
-                    help="engine backend (triton: L1 and L2-legacy only; the NR engine L2: reference only)")
+                    help="engine backend (triton: L1, L2-legacy and the NR engine L2)")
 add_launcher_args(parser)
 _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root
 if _root not in sys.path:
@@ -103,27 +105,36 @@ def main():
             torch.cuda.reset_peak_memory_stats()
             s = Sampler()
             s.start()
-            t0 = time.perf_counter()
             rsum = torch.zeros((), device=dev)
-            n = 0
-            while n < args.steps:
-                obs, rew, term, trunc, extras = env.step(2 * torch.rand(E, A, device=dev) - 1)
-                rsum += rew.mean()
-                n += 1
-                if n % 10 == 0:
-                    torch.cuda.synchronize()
-                    if time.perf_counter() - t0 > args.max_time:
-                        break
-            torch.cuda.synchronize()
-            dt = time.perf_counter() - t0
+            wins, ns, n = [], [], 0
+            for _ in range(args.repeats):
+                torch.cuda.synchronize()
+                t0 = time.perf_counter()
+                k = 0
+                while k < args.steps:
+                    obs, rew, term, trunc, extras = env.step(2 * torch.rand(E, A, device=dev) - 1)
+                    rsum += rew.mean()
+                    k += 1
+                    if k % 10 == 0:
+                        torch.cuda.synchronize()
+                        if time.perf_counter() - t0 > args.max_time:
+                            break
+                torch.cuda.synchronize()
+                wins.append(time.perf_counter() - t0)
+                ns.append(k)
+                n += k
             s.stop = True
             s.join()
+        rate = sorted(k / w for k, w in zip(ns, wins))
+        it = rate[len(rate) // 2]                      # median window (control steps per second)
+        dt = sum(wins)
         rec.update(
             timed_steps=n,
             wall_s=dt,
-            env_steps_per_s=n * E / dt,
-            robot_steps_per_s=n * E * args.num_robots / dt,
-            iter_per_s=n / dt,
+            env_steps_per_s=it * E,
+            robot_steps_per_s=it * E * args.num_robots,
+            iter_per_s=it,
+            iter_per_s_windows=[k / w for k, w in zip(ns, wins)],
             torch_peak_alloc_mib=torch.cuda.max_memory_allocated() / 2**20,
             torch_reserved_mib=torch.cuda.memory_reserved() / 2**20,
             gpu_util_during_mean=sum(s.u) / max(len(s.u), 1),
@@ -142,13 +153,17 @@ def main():
                 send = torch.randint(0, 3, (E, args.num_robots), device=dev)
                 tag = torch.full_like(send, -1)
                 cur = torch.zeros(E, dtype=torch.long, device=dev)
-                torch.cuda.synchronize()
-                t1 = time.perf_counter()
-                for _ in range(20):
-                    env.net.submit(None, TrafficRequest(send=send, tag=tag))
-                    env.net.step(None, p3, cur_tag=cur)
-                torch.cuda.synchronize()
-                rec["net_only_ms_per_step"] = (time.perf_counter() - t1) / 20 * 1e3
+                nw = []
+                for _ in range(args.repeats):
+                    torch.cuda.synchronize()
+                    t1 = time.perf_counter()
+                    for _ in range(20):
+                        env.net.submit(None, TrafficRequest(send=send, tag=tag))
+                        env.net.step(None, p3, cur_tag=cur)
+                    torch.cuda.synchronize()
+                    nw.append((time.perf_counter() - t1) / 20 * 1e3)
+                rec["net_only_ms_windows"] = nw
+                rec["net_only_ms_per_step"] = sorted(nw)[len(nw) // 2]
             o = env.net_out
             rec["net_last_step"] = dict(delivered_frac=float(o["delivered"].float().mean()),
                                         mean_queue=float(o["queue_len"].float().mean()),
