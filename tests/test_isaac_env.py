@@ -6,7 +6,7 @@ because one Isaac Sim app hosts one DirectRLEnv at a time.
    partial resets that DirectRLEnv makes itself (episode timeouts of a subset of envs).
 2. benchmarks/isaac/bench.py smoke: every level and backend the mixin offers steps the fleet env with finite
    observations.
-Run on a machine with Isaac Lab 3.0: python -m pytest -m isaac tests/test_isaac_env.py
+Run on a machine with Isaac Lab 3.0 (headless is its default): python -m pytest -m isaac tests/test_isaac_env.py
 """
 import json
 import os
@@ -22,7 +22,7 @@ TIMEOUT_S = 900
 
 
 def _run(script, *argv):
-    p = subprocess.run([sys.executable, os.path.join(ROOT, script), *argv, "--headless"], cwd=ROOT,
+    p = subprocess.run([sys.executable, os.path.join(ROOT, script), *argv], cwd=ROOT,
                        capture_output=True, text=True, timeout=TIMEOUT_S)
     return p.returncode, p.stdout + p.stderr
 

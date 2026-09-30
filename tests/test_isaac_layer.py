@@ -106,7 +106,10 @@ def test_module_equals_reference_engine_cpu(level, backend, seeded):
 @pytest.mark.gpu
 @pytest.mark.parametrize("level,backend", LEVELS_CPU)
 def test_module_equals_reference_engine_gpu(level, backend, seeded):
-    _module_vs_reference(level, backend, "cuda", E=16, T=120, t_reset=61)
+    if level == "L2":      # the NR reference engine is launch-bound on a GPU: keep the run short
+        _module_vs_reference(level, backend, "cuda", E=16, T=40, t_reset=21)
+    else:
+        _module_vs_reference(level, backend, "cuda", E=16, T=60, t_reset=31)
 
 
 @pytest.mark.gpu

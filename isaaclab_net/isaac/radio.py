@@ -43,7 +43,7 @@ class ParamRanges:
 
     @classmethod
     def from_config(cls, cfg: NRConfig, blockage_db: float = 20.0) -> "ParamRanges":
-        v = dict(p_tx_dbm=cfg.ue_tx_dbm, noise_dbm=cfg.subband_noise_dbm(), pl_const_db=cfg.pl_const_db,
+        v = dict(p_tx_dbm=cfg.ue_tx_dbm, noise_dbm=cfg.subband_noise_dbm, pl_const_db=cfg.pl_const_db,
                  pl_exp=cfg.pathloss_exp, shadow_sigma_db=cfg.shadow_sigma_db, blockage_db=blockage_db)
         return cls(**{k: (float(x), float(x)) for k, x in v.items()})
 

@@ -9,7 +9,7 @@ scripts/run_gpu_tests.sh               # GPU suite on a CUDA machine
 ruff check .                           # lint (light config in pyproject.toml)
 ```
 
-Markers: `gpu` tests are skipped automatically when CUDA is unavailable; `slow` marks longer runs
+Markers: `gpu` tests are skipped automatically when CUDA is unavailable, `isaac` tests when Isaac Lab is not installed; `slow` marks longer runs
 (`-m "not slow"` to skip them). Torch runs single-threaded in tests (`ISAACLAB_NET_TEST_THREADS` overrides).
 The suite also runs in a plain checkout without `pip install -e .` (pyproject.toml puts the repo root on the path).
 
@@ -29,7 +29,7 @@ The suite also runs in a plain checkout without `pip install -e .` (pyproject.to
 | `test_mac_l2.py` | exact HARQ/RLC timeline under forced failures, HARQ reset on success and on empty queue, OLLA saturation and bounds, power-headroom cap on subbands (reference and fast eager) |
 | `test_determinism.py` | seeded runs are bitwise reproducible at every level; different seeds differ |
 | `test_equivalence_cpu.py` | fast `eager` backend (the ops the `graph` backend captures) is bitwise equal to the reference on CPU |
-| `test_env_cpu.py`, `test_netmodule.py` | smoke tests of the example task and of the registry `NetModule` incl. partial reset |
+| `test_env_cpu.py` | smoke test of the example task |
 | `test_gpu.py` | `graph` == reference bitwise; `triton` statistically close (same draws, and own RNG as `slow`); seeded determinism of `graph`/`triton`; example task with both backends |
 | `test_package.py` | every public module imports on CPU without Isaac Lab, ns-3, Sionna or Triton; the prototype shims alias the package modules; only the Sionna tables ship; `make_engine` rejects bad levels, backends and configs |
 | `test_engine_api.py` | `make_engine` at every level: dict outputs, per-env clocks, partial resets that leave other envs bitwise unaffected (NR and legacy), `L2-legacy` == prototype NetSlot, NR legacy calls and clock checks, poses vs SNR input, downlink outputs, the SINR hook |
@@ -38,7 +38,8 @@ The suite also runs in a plain checkout without `pip install -e .` (pyproject.to
 | `test_nr_compat.py` | NR engine with `netslot_compat()` close to the legacy NetSlot at light load (`slow`) |
 | `test_multicell.py` | NetSlotMC at C = 1 bitwise equal to NetSlot (CPU, and GPU as `gpu`); RadioMC draws Radio's field; partial reset coverage, values and isolation at C = 3 with handovers; drive-through handover count, position and interruption |
 | `test_levels.py` | `TR`, `GE`, `QA`, `NN`, `ORACLE`, `NOCOMM`: dict outputs, per-env clocks, poses and legacy calls, partial resets (index and mask) that leave other envs bitwise unaffected in outputs and state, reset draws from the engine generator, conservation and exact timeouts; ORACLE delivers at capture and NOCOMM never; the exact TR matching rule, GE transitions and state-dependent loss, QA's analytic finish time and contention, NN's FIFO clamp and self-generated history; parameter loading (file path, fit dict, size check) and rejections; a CPU smoke fit from `L2-legacy` saved outside the repo; the rollout logger's features equal the engine's; `graph` == reference bitwise with injected draws and random partial resets, and with the default CUDA RNG (`gpu`) |
-| `test_isaac_layer.py` | Isaac `NetModule`: fast eager == registry engine through a partial reset (CPU, and GPU); `graph` partial reset (GPU); the mixin and mdp terms without Isaac Lab |
+| `test_isaac_layer.py` | Isaac `NetModule` on `make_engine`: equals the reference engine driven directly, bitwise, at L0, L0DR, L1, L2-legacy (eager) and L2 (NR), through a mid-run partial reset (CPU, and GPU); `graph` bitwise with injected draws; `graph`/`triton` partial-reset invariants (GPU); Isaac radio vs engine radio, blockage and DR parameters; MessageHistory first capture; mixin, mdp terms and the `NetConfig` alias without Isaac Lab |
+| `test_isaac_env.py` | marker `isaac` (needs Isaac Lab 3.0): inside Isaac Lab, the fleet env's network equals a reference-engine replay bitwise through partial resets made by DirectRLEnv (`tests/scripts/isaac_fleet_check.py`); every level and backend steps the fleet env |
 
 `tests/scripts/` holds the command-line equivalence scripts (`test_equiv.py`, `test_reset.py`,
 `test_regress.py` against the frozen `netsim_v0.py`), run by hand on a GPU; they are not collected by pytest.

@@ -30,10 +30,13 @@ isaaclab_net/
       surrogates.py  #   TR trace replay, GE Markov-modulated, QA analytic queue, NN learned surrogate
       bounds.py      #   ORACLE and NOCOMM value-of-information bounds
   isaac/
-    net_module.py    # NetModule: reset(env_ids), submit(t, req), step(t, poses) -> dict (Isaac-side wrapper)
-    netmodule.py     # registry engine L0/L1/L2 with per-env clocks, LOS blockage and parameter DR
-    mixins.py        # DirectRLEnv mixin wiring the hooks (_get_dones / _reset_idx / _get_observations)
-    mdp/             # event terms (network domain randomization)
+    net_module.py    # NetModule over make_engine(level, E, R, device, NRConfig, backend): reset(env_ids),
+                     #   submit(t, TrafficRequest(send, tag)), step(t, poses_end, cur_tag) -> dict with freshness
+                     #   (last_cap, aoi_s) and tag_delivered; MessageHistory; NetConfig (demo compatibility alias)
+    radio.py         # IsaacRadio: poses -> SNR with per-env parameters (DR), several gNBs, LOS blockage
+    mixins.py        # NetEnvMixin for DirectRLEnv (net_setup / net_step / net_reset / net_obs)
+    mdp/             # randomize_network EventTerm (network domain randomization)
+    netmodule.py     # compatibility re-exports (the demo's registry engine was retired)
   bridges/           # validation only, never in the training loop
     ns3_lockstep/    # TCP / Unix-socket / ns3-ai shared-memory lockstep co-simulation with ns-3 5G-LENA
     ns3_pool/        # one ns-3 process per env (the CPU co-simulation baseline)
@@ -42,6 +45,8 @@ isaaclab_net/
   examples/          # fleet_task.py (pure torch task), isaac_fleet_env.py (Isaac Lab demo env)
   tools/             # Sionna table export, local 5G-LENA table extraction, BLER curve CSVs,
                      # fit_levels.py: fits TR / GE / QA / NN from L2 or L2-legacy rollouts
+benchmarks/isaac/    # fleet env throughput (bench.py), PPO smoke (train_ppo.py), grid / scale / train .ps1 drivers
+scripts/windows/     # Isaac Sim 6.1 + Isaac Lab 3.0 install (01..04), cartpole check (05), SYSTEM-task helpers
 tests/               # pytest suite; tests/scripts/ equivalence scripts; tests/bridges/ need an ns-3 build
 benchmarks/          # engine speed, NR vs legacy, multi-cell, Isaac scaling, ns-3 scaling
 prototype/           # compatibility shims: `import netsim` etc. return the package modules
@@ -72,7 +77,9 @@ All levels come from `make_engine` and expose the same API, so a task can switch
 - **Licensing.** Only the Sionna-derived BLER tables (Apache-2.0) ship. The 5G-LENA tables are GPL-derived: `python -m isaaclab_net.tools.extract_lena_tables <your nr checkout>` builds them outside the source tree (`~/.cache/isaaclab_net/` or `$ISAACLAB_NET_LENA_TABLES`), and `.gitignore` blocks them. The C++ bridge programs are our own code written against ns-3 APIs; no ns-3 or 5G-LENA source is vendored.
 - **Surrogate and bound levels.** `TR`, `GE`, `QA`, `NN`, `ORACLE` and `NOCOMM` live in `core/levels/`, ported from the earlier prototype baselines and NetDelay modes onto per-env clocks and partial resets. Each is written once with graph-safe ops (no `nonzero`, no host sync in `submit` / `step`); `reference` runs it eagerly and `graph` captures it, and the FIFO, enqueue and end-of-step bookkeeping reuse the prototype's graph-safe bodies, so every level has the prototype's message semantics (F = 16, 2 s timeout, same dict outputs). Per-robot and per-env draws come from the global RNG in fixed positions, and reset draws (the replayed trace, the initial GE state) from the engine generator, so a partial reset leaves other envs bitwise unaffected. `NN` evaluates its MLP on every robot at every submit to keep shapes fixed. The parameter formats are those of the legacy baseline fitter, whose fit files therefore load directly.
 - **Fitted parameters stay outside the repository.** `python -m isaaclab_net.tools.fit_levels` rolls out `L2` or `L2-legacy` on the example fleet task under a behavior policy, logs every frame through the public API (so any level can be the source), fits all four surrogates into one file under `~/.cache/isaaclab_net/levels/` (or `$ISAACLAB_NET_LEVELS_DIR`), and refuses a path inside the source tree. `make_engine(level, ..., params=<file>)` loads it with `weights_only=True` and checks the message sizes it was fitted with.
-- **Isaac layer.** It is a snapshot of the isaac/demo work of 2026-09-29, which is still in development. Its `NetConfig` remains the Isaac-side configuration until the layer is rebuilt on `make_engine` and `NRConfig`.
+- **Isaac layer on the engine API.** `isaac.NetModule` builds its engine with `make_engine(level, E, R, device, config, backend)` from one `NRConfig`, so every level and backend is available in Isaac Lab (L0, L0DR, L05/L05Q with fitted params, L1 and L2-legacy on reference / eager / graph / compile / triton, the NR engine L2 on reference). The engines keep the per-env clocks and exact partial resets; the module adds only what an Isaac task needs: the Isaac radio (per-env radio parameters for DR, several gNBs, LOS blockage, SNR averaged over poses interpolated across the step), the per-message tag (`tag` [E,R] maps onto the engine's `det`/`hid`, and `cur_tag` gives `tag_delivered`), and the freshness outputs. The demo's `NetConfig` stays as a thin alias (`rung="L2"` means `L2-legacy`). The demo's registry engine (`netmodule.py`) was retired: its per-env MAC parameters (`bg_load`, per-env L0 lognormal) are not carried over; `L0DR` covers randomized delay. Multi-cell configs use the engine's radio (`radio="engine"`).
+- **Isaac adapter fixes (from the demo).** MessageHistory starts from `seen_cap = -1`, so the first capture of an episode is delivered; the fast backends enqueue and reset without host syncs; frames are captured at the start-of-step pose and `step` takes the end-of-step poses, which also start the next step's interpolation; per-message tags as above. `net_step` sits in `_get_dones`, before `_reset_idx`.
+- **Isaac on Windows.** The lab box runs Isaac Sim 6.1 / Isaac Lab 3.0 natively on Windows (Python 3.12, torch 2.12 cu130, triton-windows 3.8). CUDA works there only for SYSTEM while nobody is logged on at the console, so GPU jobs run as one-shot SYSTEM scheduled tasks (`scripts/windows/systask.ps1`, `wait.ps1`).
 
 ## Module status
 
@@ -84,15 +91,16 @@ All levels come from `make_engine` and expose the same API, so a task can switch
 | `core/levels` (TR, GE, QA, NN, ORACLE, NOCOMM) | new; reference and graph backends, graph bitwise equal to reference | `test_levels` |
 | `core/config` (`NRConfig`, presets) | merged (nrconfig + multicell cells block) | `test_nr_phy`, `test_multicell` |
 | `core/radio`, `core/proto/netsim_mc` (multi-cell) | merged on L2-legacy; NR multi-cell MAC pending | `test_multicell` |
-| `isaac/` | snapshot of the demo in development; NetConfig not yet unified | `test_netmodule`, `test_isaac_layer` |
+| `isaac/` | rebuilt on `make_engine` + `NRConfig`; validated on Windows Isaac Lab 3.0 (2026-09-29) | `test_isaac_layer` (module == reference engine bitwise at every level through a partial reset, CPU and GPU; graph bitwise with injected draws; triton reset invariants; radio, MessageHistory, mixin); `test_isaac_env` (`isaac`) |
 | `examples/fleet_task.py` | stable | `test_env_cpu`, `test_gpu` |
-| `examples/isaac_fleet_env.py` | demo in development (needs Isaac Lab 3.0) | none in CI |
+| `examples/isaac_fleet_env.py` | stable demo env (needs Isaac Lab 3.0); PPO trains end to end | `test_isaac_env` (`isaac`: in-env network == reference replay bitwise through DirectRLEnv partial resets; every level and backend steps), not in CI |
+| `benchmarks/isaac/` | fleet env throughput and PPO smoke; the published scale numbers were taken under 98–99% GPU contention | run by hand (`run_scale.ps1`, `run_train.ps1`) |
 | `bridges/` | merged; ported to the per-env-clock NetBase; full resets only; lockstep and pool smoke-tested against the lab ns-3 builds | import tests; `tests/bridges/` need an ns-3 build |
 | `tools/` | merged; `fit_levels` new | `test_nr_phy` (LENA path checks), `test_levels` (smoke fit) |
 
 ## Follow-ups
 1. `graph` / `triton` backends for the NR engine (its step has no host syncs and fixed shapes, so CUDA-graph capture of a control step is the first option).
 2. Multi-cell MAC in the NR engine: per-cell PF masking, same-slot interference through `sinr_hook`, handover moving the HARQ and stream state (multicell README, merge plan steps 3 to 5).
-3. Rebuild the Isaac layer on `make_engine` and fold its `NetConfig` into `NRConfig`.
+3. Isaac: uncontended rerun of the scale sweep (`benchmarks/isaac/run_scale.ps1`); faster scene startup (`clone_in_fabric`, one multi-instance asset per env instead of R rigid objects); a per-robot parameter-shared policy wrapper (`[E·R, obs]`) for R = 128; a downlink NetModule gating commands; the Warp mesh LOS kernel for R ≥ 64.
 4. Surrogate fits from the NR engine with a non-default frame buffer or timeout: the surrogate levels share the prototype constants (F = 16, 20-step timeout, 100 ms step), so the fit tool refuses such configurations for now.
-5. Re-sync `isaac/` with isaac/demo once that work settles (this is a 2026-09-29 snapshot).
+5. Isaac layer on the NR engine's fast backends once they exist (the NR engine is launch-bound on the reference backend).

@@ -11,4 +11,5 @@
 """
 from .net_module import (BACKENDS, FAST_BACKENDS, MessageHistory, NetConfig, NetModule, TrafficRequest,  # noqa: F401
                          net_features)
+from .mixins import NetEnvMixin, rigid_positions_local  # noqa: F401
 from .radio import RADIO_PARAMS, IsaacRadio, ParamRanges, segment_sphere_blocked  # noqa: F401

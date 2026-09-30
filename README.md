@@ -8,7 +8,7 @@
   <a href="https://www.python.org/"><img alt="Python" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white"></a>
   <a href="https://pytorch.org/"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-CUDA-EE4C2C?style=flat-square&logo=pytorch&logoColor=white"></a>
   <a href="https://triton-lang.org/"><img alt="Triton" src="https://img.shields.io/badge/kernels-Triton-2F5C9E?style=flat-square"></a>
-  <a href="https://isaac-sim.github.io/IsaacLab/"><img alt="Isaac Lab" src="https://img.shields.io/badge/Isaac%20Lab-3.0%20(in%20progress)-76B900?style=flat-square&logo=nvidia&logoColor=white"></a>
+  <a href="https://isaac-sim.github.io/IsaacLab/"><img alt="Isaac Lab" src="https://img.shields.io/badge/Isaac%20Lab-3.0-76B900?style=flat-square&logo=nvidia&logoColor=white"></a>
   <a href="https://github.com/ZzZTripleZzZ/isaaclab-net/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ZzZTripleZzZ/isaaclab-net/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-BSD--3--Clause-yellow?style=flat-square&logo=opensourceinitiative&logoColor=white"></a>
   <img alt="Status" src="https://img.shields.io/badge/status-prototype-B7791F?style=flat-square">
@@ -37,7 +37,7 @@ flowchart LR
 
 Parallel robot learning runs thousands of environments on one GPU, but the network between robots and the edge is usually reduced to a fixed or random delay, if it is modeled at all. Packet-level simulators such as ns-3 capture scheduling, retransmissions and contention, but they run one scenario at a time on a CPU, far from the throughput an RL loop needs. `isaaclab-net` closes that gap. Every piece of network state, from each robot's channel and HARQ process to its queued messages, is a fixed-shape tensor with leading dimensions `[envs, robots]`. The engine advances all environments' uplinks slot by slot on the GPU, in lockstep with the physics. A policy therefore trains against queues that build up when the team transmits together, links that degrade as robots move, and retransmissions that stretch delay tails.
 
-**Status.** Early prototype, now packaged as `isaaclab_net`. The prototype levels and their fast backends are tested for bitwise equivalence, the configurable NR engine (3GPP MCS/TBS and BLER tables, multiple HARQ processes, downlink) and the multi-cell uplink are merged behind one engine factory, and the Isaac Lab layer and the ns-3 bridges are in the package. The Isaac Lab demo is still in development. [ARCHITECTURE.md](ARCHITECTURE.md) lists the status of every module.
+**Status.** Early prototype, now packaged as `isaaclab_net`. The prototype levels and their fast backends are tested for bitwise equivalence, the configurable NR engine (3GPP MCS/TBS and BLER tables, multiple HARQ processes, downlink) and the multi-cell uplink are merged behind one engine factory, the Isaac Lab layer runs every level through the same factory, and the ns-3 bridges are in the package. The Isaac Lab fleet demo trains end to end with the network in the loop; its uncontended scaling benchmarks are still to be run. [ARCHITECTURE.md](ARCHITECTURE.md) lists the status of every module.
 
 ## Install
 
@@ -74,7 +74,85 @@ for _ in range(300):                                # one control step = 100 ms 
     last[done] = -1
 ```
 
-`make_engine(level, E, R, device, config, backend)` builds every fidelity level, and every engine has the same API. `step` also returns, per message slot, the `delivered` and `timed_out` masks, the `delay` in control steps and the `cap`/`cls` of each message, plus `queue_bytes`, `sinr_db` and, if `Requests(send, det, hid)` carried an application tag, `det_env`. `reset(env_ids)` takes an index tensor, a list or a bool mask and leaves every other env bit-for-bit unaffected. The earlier calls `add_frames(t, send, det, hid, snr)` and `step(t, snr, hid) -> (newest, det_env)` still work. `aoi` and `queued` go straight into observations. The example task in [`isaaclab_net/examples/fleet_task.py`](isaaclab_net/examples/fleet_task.py) uses the application tag to mark frames that captured a hazard. [`isaaclab_net/isaac/mixins.py`](isaaclab_net/isaac/mixins.py) wires a network into an Isaac Lab `DirectRLEnv` with four hook calls.
+`make_engine(level, E, R, device, config, backend)` builds every fidelity level, and every engine has the same API. `step` also returns, per message slot, the `delivered` and `timed_out` masks, the `delay` in control steps and the `cap`/`cls` of each message, plus `queue_bytes`, `sinr_db` and, if `Requests(send, det, hid)` carried an application tag, `det_env`. `reset(env_ids)` takes an index tensor, a list or a bool mask and leaves every other env bit-for-bit unaffected. The earlier calls `add_frames(t, send, det, hid, snr)` and `step(t, snr, hid) -> (newest, det_env)` still work. `aoi` and `queued` go straight into observations. The example task in [`isaaclab_net/examples/fleet_task.py`](isaaclab_net/examples/fleet_task.py) uses the application tag to mark frames that captured a hazard. [`isaaclab_net/isaac/mixins.py`](isaaclab_net/isaac/mixins.py) wires a network into an Isaac Lab `DirectRLEnv` with four hook calls (see [Isaac Lab quick start](#isaac-lab-quick-start)).
+
+## Isaac Lab quick start
+
+Tested natively on Windows 11 with an RTX 4090 (driver 617.14; the CUDA 13.0 build of PyTorch needs 580.88 or newer):
+
+| Component | Version |
+|:---|:---|
+| Isaac Sim | 6.1.0.0 (pip wheels from pypi.nvidia.com) |
+| Isaac Lab | 3.0 (`release/3.0.0`, package `isaaclab` 25.0.0; Isaac Sim 5.1 and older are not supported) |
+| Python | 3.12 (uv venv) |
+| PyTorch | 2.12.0+cu130, torchvision 0.27.0 |
+| Triton | `triton-windows` 3.8.0.post29 (community build, only for the `triton` backend) |
+| RL library | `rsl-rl-lib` 5.5.1 (installed by `isaaclab.bat -i`) |
+
+**Install Isaac Sim and Isaac Lab.** The scripts in `scripts/windows/` follow the Isaac Lab 3.0 page "Python environment with Isaac Sim" (Windows, uv) and keep everything under `C:\isaac5g`. Run them from an Administrator PowerShell in the repository folder:
+
+```powershell
+New-Item -ItemType Directory -Force C:\isaac5g | Out-Null
+Copy-Item scripts\windows\env.ps1 C:\isaac5g\env.ps1      # venv, uv, caches and EULA flag for every later step
+powershell -File scripts\windows\01_bootstrap.ps1          # long paths on, uv and portable git in C:\isaac5g\tools
+powershell -File scripts\windows\02_install_isaacsim.ps1   # venv, isaacsim[all,extscache]==6.1.0.0, torch 2.12 cu130, Isaac Lab clone
+powershell -File scripts\windows\03_install_isaaclab.ps1   # isaaclab.bat -i: Isaac Lab and its RL libraries
+powershell -File scripts\windows\04_triton_windows.ps1     # triton-windows, for the triton backend
+```
+
+`env.ps1` sets `OMNI_KIT_ACCEPT_EULA=YES`, which accepts the NVIDIA Omniverse EULA; read it before you run the scripts. It also moves the per-user caches (Kit, Triton, uv, temp) into `C:\isaac5g\home`. The download is about 40 GB and the install takes about 15 minutes.
+
+**Add the package and run the tests, a benchmark and a short training run:**
+
+```powershell
+. C:\isaac5g\env.ps1                                       # activates the Isaac venv
+cd C:\isaac5g\isaaclab-net                                 # this repository
+uv pip install --no-deps -e .                              # --no-deps keeps Isaac's CUDA build of torch
+uv pip install pytest
+python -m pytest -m isaac tests\test_isaac_env.py
+python benchmarks\isaac\bench.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton --steps 100
+python benchmarks\isaac\train_ppo.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton --iters 5
+```
+
+Isaac Lab 3.0 runs headless by default. The Isaac tests launch one Isaac Sim process per case and take about 1 minute each. On a machine where nobody is logged on at the console, CUDA is available only to jobs that run as SYSTEM: `scripts\windows\systask.ps1` runs a script as a one-shot SYSTEM task, and `scripts\windows\wait.ps1` waits for it and removes the task.
+
+**Add the network to your DirectRLEnv.** `NetEnvMixin` wires a `NetModule` into four hooks. Frames are captured at the start-of-step pose, and the network step takes the end-of-step poses:
+
+```python
+from isaaclab.envs import DirectRLEnv
+from isaaclab_net import NRConfig
+from isaaclab_net.isaac import NetEnvMixin, rigid_positions_local
+
+class MyFleetEnv(NetEnvMixin, DirectRLEnv):
+    def _setup_scene(self):
+        ...                                                  # self.robots: a RigidObjectCollection of R robots
+        self.net_setup("L2-legacy", R, NRConfig(msg_sizes=(4000.0, 30000.0)), backend="triton")
+    def _pre_physics_step(self, actions):
+        ...                                                  # read the start-of-step pose, decide what to send
+        self.send = choose_messages(actions)                 # [E,R] long: 0 nothing, 1 small, 2 large message
+    def _get_dones(self):
+        pos = rigid_positions_local(self.robots, self.scene.env_origins)         # end-of-step poses [E,R,3]
+        out = self.net_step(pos, self.send)                  # newest_cap, aoi_s, queue_len, delivered, ... per robot
+        ...
+    def _reset_idx(self, env_ids):
+        super()._reset_idx(env_ids); ...; self.net_reset(env_ids)
+    def _get_observations(self):
+        net = self.net_obs()                                 # [E,R,4]: AoI, SNR, queued frames, delivered
+        ...
+```
+
+`net_setup` takes any level of `make_engine` (`"off"` for an ideal link), an `NRConfig`, a backend, and the radio options (`gnb_pos`, `pose_chunks`, `ranges`). `net_step(pos, send, tag, cur_tag)` also carries a per-message tag, such as the id of the hazard a frame captured, and returns `tag_delivered` per env. `isaaclab_net.isaac.mdp.randomize_network` is an EventTerm that redraws per-env radio parameters (path-loss exponent, shadowing, noise, transmit power) for network domain randomization. [`isaac_fleet_env.py`](isaaclab_net/examples/isaac_fleet_env.py) is the complete example: E envs × R robots in a 150 m arena, with hazards that the whole fleet learns about only when a detection frame is delivered.
+
+**Scale.** These numbers come from the fleet env with random actions, which saturate the uplink from 16 robots per env. They were measured on 2026-09-29, before the Isaac layer was rebuilt on `make_engine`, with the same L2-legacy model and Triton kernel. The RTX 4090 was shared with other jobs that kept it 98–99% busy the whole time. Treat the absolute rates as lower bounds, and trust the ratios of network on to network off:
+
+| Envs × robots | Robots | Network off (control steps/s) | L2-legacy `triton` (control steps/s) | On / off | Network per step |
+|---:|---:|---:|---:|---:|---:|
+| 1,024 × 128 | 131,072 | 6.21 | 5.55 | 0.89 | 19 ms |
+| 2,048 × 128 | 262,144 | 4.38 | 3.96 | 0.90 | 31 ms |
+| 4,096 × 128 | 524,288 | 2.90 | 2.58 | 0.89 | 52 ms |
+| 8,192 × 128 | 1,048,576 | 1.40 | 1.27 | 0.91 | 75 ms |
+
+One control step is 0.1 s of simulated time. At about one million robots the network runs in the loop at 1.33 million robot-steps per second in 16.4 GB of device memory. From 131k robots upwards the network costs 9–20% of the step. The `graph` backend replays thousands of small kernels per step, so under time-slicing it is several times slower than `triton`: use `graph` for bitwise-reference runs and `triton` for scale. Startup grows by about 1.1 ms per robot (PhysX cloning), which is 19 minutes at one million robots. End-to-end PPO (rsl_rl, 1,024 × 16, L2-legacy `triton`) ran 30 iterations in 241 s at 53k robot-steps per second.
 
 ## Configure the network
 
@@ -176,7 +254,8 @@ The reference simulator is ns-3.48 with 5G-LENA NR v5.1, used unmodified except 
 - [ ] `graph` / `triton` backends for the NR engine
 - [x] Multi-cell interference and handover (legacy L2)
 - [ ] Multi-cell MAC in the NR engine
-- [ ] Isaac Lab 3.0 integration, demo tasks and scaling benchmarks (in development)
+- [x] Isaac Lab 3.0 integration on the engine API: DirectRLEnv mixin, network domain randomization, fleet demo env, PPO
+- [ ] Uncontended Isaac Lab scaling benchmarks and more demo tasks
 - [ ] Validation against ns-3 5G-LENA and public measurement traces
 - [x] Test suite (CPU tests, GPU equivalence tests) and CI
 - [x] Fitted surrogate levels (trace replay, Markov-modulated, analytic queue, learned) and ORACLE / NOCOMM bounds
@@ -197,7 +276,7 @@ isaaclab-net/
 │   │   ├── proto/                #   prototype levels L0 ... L1 and L2-legacy: reference, fast backends,
 │   │   │                         #   Triton kernels, and the multi-cell NetSlotMC
 │   │   └── levels/               #   fitted surrogates TR, GE, QA, NN and the ORACLE / NOCOMM bounds
-│   ├── isaac/                    # Isaac Lab layer: NetModule, DirectRLEnv mixin, mdp terms, skeletons
+│   ├── isaac/                    # Isaac Lab layer: NetModule on make_engine, radio, DirectRLEnv mixin, mdp terms
 │   ├── bridges/                  # ns-3 co-simulation (lockstep, process pool, offline replay), validation only
 │   │   └── ns3/                  #   the C++ ns-3 programs and their build scripts
 │   ├── examples/                 # fleet_task.py (pure torch), isaac_fleet_env.py (Isaac Lab demo env)
@@ -205,7 +284,7 @@ isaaclab-net/
 ├── tests/                        # pytest suite; scripts/ (equivalence scripts), bridges/ (need ns-3)
 ├── benchmarks/                   # engine, NR, multi-cell, Isaac and ns-3 scaling benchmarks
 ├── prototype/                    # compatibility shims for the old module paths
-├── scripts/                      # GPU test runner, Windows install scripts of the Isaac demo
+├── scripts/                      # GPU test runner; windows/: Isaac Sim + Isaac Lab install and SYSTEM-task helpers
 ├── ARCHITECTURE.md               # package layout, interface contract and module status
 ├── CONTRIBUTING.md
 └── LICENSE
