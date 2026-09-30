@@ -28,15 +28,15 @@ One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module
 
 | Choice | Where | Value | In NRConfig | Fast backends |
 |:---|:---|:---|:---|:---|
-| Path loss model | `proto/netsim.py:170` (legacy), `radio.py:73` | log-distance, 40 + 35 log10(d) | `pl_const_db`, `pathloss_exp` for `L2` and `NetSlotMC`; the prototype `Radio` is fixed | radio runs outside the graph |
+| Path loss model | `proto/netsim.py:170` (legacy), `radio.py`, `channels/` | log-distance, 40 + 35 log10(d) | `channel` = `log_distance` (`pl_const_db`, `pathloss_exp`), `tr38901` (8 scenarios) or `radio_map`, for `L2` and `NetSlotMC` ([channels.md](channels.md)); the prototype `Radio` is fixed | radio runs outside the engine graph; its ops are fixed-shape and capture in a CUDA graph |
 | Minimum distance, 2-D distance | `radio.py:71-72`, `proto/netsim.py:169` | d ≥ 1 m, height ignored | no | safe |
-| Shadowing | `radio.py:39-48`, `proto/netsim.py:161` | 6 dB, 8 plane waves, wavelengths uniform in 20–60 m | `shadow_sigma_db`, `shadow_modes`; `shadow_dcorr_m` and `shadow_white_frac` exist but no engine reads them | safe |
+| Shadowing | `channels/fields.py`, `proto/netsim.py:161` | 6 dB, 8 plane waves, wavelengths uniform in 20–60 m | `shadow_sigma_db`, `shadow_modes`, `shadow_dcorr_m`, `shadow_acf` (legacy band or exponential ACF), `shadow_white_frac`, `shadow_white_dcorr_m` (`L2`, `NetSlotMC`); TR 38.901 sigma and correlation per scenario | safe |
 | gNB placement | `config.py` `cell_positions_m` | one gNB at the arena corner (0, 0) | yes (`cell_layout`, hex / grid / custom) for `L2` and `NetSlotMC`; `L1` and `QA` require the corner | safe |
 | Noise floor | `proto/netsim.py:27`, `config.py` | −90 dBm per 10-PRB subband, includes interference | `noise_model`, `ni_fixed_dbm`, `gnb_nf_db`, `ue_nf_db` for `L2` and `NetSlotMC` | legacy constant |
 | UE and gNB power | `proto/netsim.py:26`, `config.py` | 23 dBm, 43 dBm | `ue_tx_dbm`, `gnb_tx_dbm` (`L2`, `NetSlotMC`) | legacy constant |
-| Fast fading | `proto/netsim.py:35`, `config.py` | AR(1) Rayleigh per subband, 0.93 per 2.5 ms (3 m/s at 3.5 GHz) | `fading`, `fading_rho_per_ms` for `L2`; now also `ue_speed_mps`, `carrier_ghz`; legacy fixed | constexpr (`RHO`) |
+| Fast fading | `proto/netsim.py:35`, `config.py`, `channels/doppler.py` | AR(1) Rayleigh per subband, 0.93 per 2.5 ms (3 m/s at 3.5 GHz) | `fading`, `fading_rho_per_ms`, `ue_speed_mps`, `carrier_ghz`, and per-robot Doppler from each robot's speed (`fading_doppler="per_robot"`) for `L2`; legacy fixed | constexpr (`RHO`) |
 | DL SNR from UL SNR | `config.py` `dl_snr_offset_db` | UL + 10 dB when no DL SNR is given | yes, `L2` | n/a |
-| LOS blockage | `isaac/netmodule.py:84` | 20 dB when the ray is blocked | Isaac `ParamRanges` only | n/a |
+| LOS blockage | `isaac/netmodule.py:84`, `channels/blockage.py` | 20 dB when the ray is blocked | Isaac `ParamRanges`; robot bodies as spheres in `RadioMC` (`blockage`, `blockage_radius_m`, `blockage_loss_db`, off by default) | fixed-shape `[E,R,R,C]` test |
 
 ### PHY and link adaptation
 
@@ -102,7 +102,7 @@ The comparison was checked line by line against the official documentation of ns
 | Link adaptation | BLER target, OLLA, MCS caps | AMC, error-model or Shannon based | inner and outer loop | CQI-based AMC | **have**; OLLA clamp and legacy steps fixed |
 | Power control | UL fractional (`L2` and legacy multi-cell) | UL open and closed loop; DL uniform power allocation only | UL open loop, DL fair power | none documented (fixed transmit powers) | **partial**: no DL power control |
 | MIMO / beamforming | none (one layer) | SU-MIMO up to rank 4, analog beamforming | SU-MIMO streams; precoding via Sionna PHY | none (incomplete MIMO removed in v1.4.3) | **missing**: layers could scale TBS and SINR (moderate); beamforming is large |
-| Channel model | log-distance, plane-wave shadowing, AR(1) Rayleigh | 3GPP TR 38.901 (RMa, UMa, UMi, InH, V2V, NTN), NYUSIM (incl. InF), FTR, Sionna RT | TR 38.901 via Sionna PHY (UMi, UMa, RMa, InH, InF); ray tracing via Sionna RT | 3GPP TR 36.814, 36.873, 38.901 path loss, shadowing, Rayleigh or Jakes fading | **partial**: no 38.901 scenarios, no LOS probability, no radio map |
+| Channel model | log-distance with correlated and white shadowing; TR 38.901 RMa, UMa, UMi, InH, InF-SL/DL/SH/DH path loss with spatially consistent LOS state and O2I; precomputed radio maps (Sionna RT baking tool); robot-body blockage; AR(1) Rayleigh with per-robot Doppler | 3GPP TR 38.901 (RMa, UMa, UMi, InH, V2V, NTN), NYUSIM (incl. InF), FTR, Sionna RT | TR 38.901 via Sionna PHY (UMi, UMa, RMa, InH, InF); ray tracing via Sionna RT | 3GPP TR 36.814, 36.873, 38.901 path loss, shadowing, Rayleigh or Jakes fading | **have** large-scale models ([channels.md](channels.md)); **missing**: 38.901 fast fading (clusters, K-factor), online ray tracing |
 | Mobility | from the simulator's poses | ns-3 mobility models | random UT velocities in the topology generators; trajectories user-coded | INET mobility models, Veins | **have**: poses come from Isaac Lab, which is the point of the package |
 | Traffic | one message per robot per step, size classes; DL bytes | NGMN, 3GPP XR, FTP Model 1, HTTP generators | none (scheduler takes rates only) | any INET application | **partial**: no periodic, bursty or video generators |
 | UL / DL / sidelink | UL, DL (`L2`) | UL, DL; sidelink only in a separate v3.1-based branch | UL, DL | UL, DL, network-assisted D2D (prototype) | **partial**: sidelink out of scope for now |
@@ -125,7 +125,7 @@ Every proposal keeps today's behavior as the default, so existing results and th
 | Ignored-field check | `cfg.unused_fields(level)`, `make_engine(..., strict=True)` | **done**; every level |
 | Scheduler metric | `NRConfig(scheduler="pf" \| "rr" \| "maxci")`: the metric in `mac.py:150` becomes `rate / avg`, `1 / (slots since served)` or `rate` | `L2`; deferred until the NR multi-cell merge, which edits `mac.py` (now in) |
 | OLLA clamp, PF initial average | `NRConfig(olla_max_db=10.0, pf_avg_init=100.0)` | `L2`; same deferral |
-| Shadowing correlation distance | make `RadioMC` draw wavelengths from `shadow_dcorr_m` (today a fixed 20–60 m) | `L2`, `NetSlotMC`; needs a mapping that keeps the default field bitwise, so it waits for the `radio.py` owner |
+| Shadowing correlation distance | `NRConfig(shadow_dcorr_m=30.0, shadow_acf="exp", shadow_white_frac=0.5)` | **done** on `feat/channel` (`L2`, `NetSlotMC`); the default field is bitwise unchanged |
 | Legacy MAC constants | pass `SR_DELAY`, `HARQ_RTT`, `HARQ_MAX`, `RLC_EXTRA`, `RHO`, `PF_T`, `PHR_MIN_DB` from `NRConfig` into `NetSlot`, `NetFast` and the kernel, which already takes them as constexprs | `L2-legacy`; the eager reference and the graph bodies read module globals, so each needs instance attributes; small but touches the frozen engine |
 
 ### (b) Moderate (new code that fits the tensor design)
@@ -136,8 +136,9 @@ Every proposal keeps today's behavior as the default, so existing results and th
 | Traffic generators | `traffic=TrafficModel.periodic(period_steps=5, cls=1, phase="random")`, `.poisson(rate)`, `.bursty(on, off)`, `.video(fps, gop)` returning `Requests` each step | pure torch outside the engine, so every level and backend works unchanged |
 | Several messages per robot per step | `Requests(send=[E,R,M])` | enqueue loops over M; fixed shape keeps graphs valid |
 | Configurable F, timeout and step for every level | `NRConfig(frame_buffer=32, timeout_steps=10)` accepted by `L0` to `L1` and the surrogates | the kernel takes `FB` and `K` as constexprs; the eager and graph bodies need instance fields; surrogate fits must record them |
-| 38.901 path loss and LOS probability | `NRConfig(channel="log_distance" \| "tr38901_inf_sh" \| "tr38901_umi" \| "tr38901_inh")` | a new `RadioMC` path-loss function per scenario; fast fading and MAC unchanged |
-| Radio-map input | `channel="radio_map"`, `radio_map=RadioMap(tensor [C, H, W], origin, resolution)` | bilinear lookup of a precomputed Sionna RT map in `RadioMC.rx_dbm`; the map is data outside the repository |
+| 38.901 path loss and LOS probability | `NRConfig(channel="tr38901_inf_sh")` (also `rma`, `uma`, `umi`, `inh`, `inf_sl`, `inf_dl`, `inf_dh`) | **done** on `feat/channel`: `RadioMC` model with LOS state, shadow fading and O2I; fast fading and MAC unchanged |
+| Radio-map input | `NRConfig(channel="radio_map", radio_map_path="map.npz")` or `RadioMC(..., radio_map=RadioMap(gain [C, H, W], bounds))` | **done** on `feat/channel`: bilinear lookup in `RadioMC`; `tools/bake_radio_map_sionna.py` bakes a map with Sionna RT |
+| Robot blockage and per-robot Doppler | `NRConfig(blockage=True, fading_doppler="per_robot")` | **done** on `feat/channel`; per-robot Doppler needs the NR engine (`L2`) and pose input |
 | MIMO layers | `NRConfig(n_layers=2)` | TBS already takes `layers`; SINR per layer needs a rank model |
 | Unified Isaac config | **Done (9c642ce).** The Isaac layer takes the same `NRConfig` as `make_engine`, with Isaac-only settings in `IsaacNetCfg` (`isaac/config.py`); observation features are chosen by name through `obs_features`, with one normalization and `obs_dim()`; domain-randomization ranges live in `IsaacNetCfg.dr_ranges` and `dr_support()` reports which levels honor them. `NetConfig` remains only as a deprecated alias with no defaults of its own. | closed |
 | Per-env domain randomization for `make_engine` levels | `NRConfig` field ranges resolved per env at reset | needs per-env parameter tensors in the radio and MAC |

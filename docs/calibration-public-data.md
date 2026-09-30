@@ -68,7 +68,7 @@ The only downloadable position-tagged RSRP sets are two POWDER outdoor campus dr
 | decorrelation distance, 1/e (m) | 10.3 | 18, 26 | 39 [28, 55] |
 | autocorrelation at 2.5 m | 0.95 | 0.46 | about 0.4–0.6 |
 
-σ = 6 dB lies inside the measured range and stays. The exponent cannot be identified from these data, so they give no evidence against n = 3.5. The engine's shadowing field (8 plane waves with wavelengths uniform in 20–60 m) decorrelates 2–4× faster than the measured shadowing and has a negative lobe of −0.18 at 22 m that the data lack. The data also put about half of the variance into a component that is already decorrelated at 2.5 m, from fast fading, measurement noise or GPS misalignment, which the engine does not have. The suggested change is an exponential-autocorrelation field with a decorrelation distance of about 20–40 m plus a white component of about 0.5σ². `NRConfig` already carries `shadow_dcorr_m` and `shadow_white_frac` for this, but `radio.py` does not read them yet. These are outdoor 3.5 GHz campus drives with unknown base-station locations, far from an indoor warehouse, and residual trend inflates the decorrelation distance.
+σ = 6 dB lies inside the measured range and stays. The exponent cannot be identified from these data, so they give no evidence against n = 3.5. The engine's shadowing field (8 plane waves with wavelengths uniform in 20–60 m) decorrelates 2–4× faster than the measured shadowing and has a negative lobe of −0.18 at 22 m that the data lack. The data also put about half of the variance into a component that is already decorrelated at 2.5 m, from fast fading, measurement noise or GPS misalignment, which the engine does not have. The suggested change is an exponential-autocorrelation field with a decorrelation distance of about 20–40 m plus a white component of about 0.5σ². `NRConfig(shadow_acf="exp", shadow_dcorr_m=30.0, shadow_white_frac=0.5)` applies it (see [channels.md](channels.md)). These are outdoor 3.5 GHz campus drives with unknown base-station locations, far from an indoor warehouse, and residual trend inflates the decorrelation distance.
 
 ## Link abstraction
 
@@ -84,7 +84,7 @@ The fits became presets of `NRConfig` in `isaaclab_net/core/config.py`, which th
 | `oai_like()` | proactive UL grant once per TDD period, BLER target 0.5%, processing offset 2.25 ms, SR period 20 ms and SR-to-grant 10 UL slots (irrelevant with proactive grants), HARQ RTT 4 UL slots, UL MCS ≤ 15 | OAI 5/10-slot latency fit; OAI with 20-slot periods needs about 7.25 ms of offset instead |
 | `lena_match` = `lena_like()` | the 5G-LENA scenario: 50 PRB in 5 RBGs, 16 HARQ processes, 4 transmissions, UM loss, no OLLA, no PHR cap, wideband PF, 5G-LENA EESM tables and IR combining, LENA TB size, PDCP arrival discard, thermal noise with a gNB NF of 18.44 dB, 50 bytes of overhead per 1400-byte packet | the ns-3 reference, not public data ([validation-5g-lena.md](validation-5g-lena.md)); `lena_validation()` adds the validation geometry |
 
-The capacity scale η ≈ 0.8 from ColO-RAN and the proposed shadowing-field change are not applied in any preset. They are recorded as calibration knobs.
+The capacity scale η ≈ 0.8 from ColO-RAN and the proposed shadowing-field change are not applied in any preset. They are recorded as calibration knobs, and the shadowing change is available through `shadow_acf`, `shadow_dcorr_m` and `shadow_white_frac`.
 
 ## What public data could not validate
 

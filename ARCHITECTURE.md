@@ -13,7 +13,14 @@ isaaclab_net/
     engine.py        # make_engine(level, E, R, device, config, backend); NREngine (contract API over NRNet)
     nr_engine.py     # NRNet: the configurable NR engine (level L2): slot schedule, fading, UL/DL, step_rx,
                      #        several cells (step_cells: association, handover, same-slot UL/DL interference)
-    radio.py         # RadioMC (per-link path loss + shadowing), CellAssociation (attach, A3/TTT handover)
+    radio.py         # RadioMC (per-link large-scale gain, model = NRConfig.channel), CellAssociation (attach, A3/TTT)
+    channels/        # channel models behind RadioMC (docs/channels.md)
+      fields.py      #   plane-wave random fields (legacy band or exponential ACF)
+      tr38901.py     #   TR 38.901 path loss, LOS probability, shadow-fading sigma, O2I (tables, hand-checkable)
+      models.py      #   TR38901Channel (spatially consistent LOS state, O2I), RadioMapChannel
+      radio_map.py   #   RadioMap: [C,H,W] gain map file format and bilinear sampling
+      blockage.py    #   robot bodies as spheres on the robot-gNB segment
+      doppler.py     #   per-robot AR(1) fading correlation for the NR engine
     phy.py           # 3GPP MCS/TBS tables, EESM effective SINR, BLER tables (Sionna, or local 5G-LENA)
     mac.py           # MacLink: per-slot MAC of one direction: multi-process HARQ, PF per RBG (one scheduler per
                      #          cell), link adaptation, handover of a robot's MAC state

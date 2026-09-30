@@ -190,7 +190,7 @@ python -m isaaclab_net.tools.extract_lena_tables ~/src/nr   # writes ~/.cache/is
 
 | Layer | Configurable NR engine (`L2`) | Legacy slot-level model (`L2-legacy`) |
 |:---|:---|:---|
-| Radio | path loss, spatially correlated shadowing per env and cell, correlated Rayleigh fading per subband and link | the same, one cell at the arena corner by default |
+| Radio | selectable channel ([docs/channels.md](docs/channels.md)): log-distance with correlated and white shadowing, TR 38.901 RMa / UMa / UMi / InH / InF path loss with a spatially consistent LOS state and O2I, or a precomputed radio map (e.g. Sionna RT); optional robot-body blockage; correlated Rayleigh fading per subband and link, with per-robot Doppler | the same large-scale models (legacy fading), one cell at the arena corner by default |
 | Frame structure | numerology 0 to 2, any bandwidth (38.101 N_RB), any TDD pattern and special slot, RBGs per 38.214 | TDD `DDDSU` at 30 kHz SCS, 40 uplink slots per 100 ms, 5 subbands of 10 PRBs |
 | Access | periodic SR, grant delay, BSR, optional proactive grants | scheduling request, grant delay, buffer status reports |
 | Scheduling | proportional fair per RBG (subband or wideband metric), retransmissions first | proportional fair over subbands, power split with a headroom cap |
