@@ -18,7 +18,7 @@ One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module
 | Application timeout | `proto/netsim.py:30` (`TIMEOUT`) | 20 control steps (2 s) | `timeout_steps`, `L2` only | used in graph bodies as a Python constant |
 | Control step | `proto/netsim.py:23` (`UL_PER_STEP`), `engine.py` check | 100 ms, 40 UL slots | `control_step_ms`, `L2` only | constexpr (`K`) |
 | Message size classes | `config.py` `msg_sizes` | (4000, 30000) B | yes, every level | per-call tensor, safe |
-| Isaac-side message sizes | `isaac/netmodule.py:54` | (1500, 12000) B | no: separate `NetConfig` with a different default | n/a |
+| Isaac-side message sizes | `isaac/netmodule.py:54` | (1500, 12000) B | yes since 9c642ce: the Isaac layer reads `NRConfig.msg_sizes` (4000, 30000) | n/a |
 | One message per robot per step | `traffic.py`, `Requests.send` | class index 0, 1, 2, ... | no | fixed shape `[E,R]` |
 | Per-message tag | `Requests.det` / `hid` | one bool per message, one id per env | no | safe |
 | Stack processing offset | `config.py` `proc_offset_ms` | 0 ms | yes, `L2` | n/a |
@@ -82,7 +82,7 @@ One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module
 | Choice | Where | Value | Notes |
 |:---|:---|:---|:---|
 | Observation features | `isaac/net_module.py:191-198`, `isaac/netmodule.py:518-526` | AoI clamped at 50 steps, SNR / 40 (or / 30), queue / 16, delivered flag, blocked flag | two different normalizations in the two Isaac modules; no feature selection |
-| SNR sampling within a step | `isaac/netmodule.py:50` | `pose_chunks = 4` | Isaac `NetConfig` only |
+| SNR sampling within a step | `isaac/netmodule.py:50` | `pose_chunks = 4` | `IsaacNetCfg` |
 | Domain randomization | `isaac/netmodule.py:77-88`, `isaac/mdp/events.py` | per-env uniform ranges of p_tx, noise, path loss, shadowing, blockage, background load, L0 delay | only on the Isaac engine; `make_engine` levels have no per-env parameter tensors |
 | Background load | `isaac/netmodule.py:85` | fraction of subbands taken by other UEs | Isaac engine only |
 | Fleet task | `examples/fleet_task.py:3-19` | imports `F`, `TIMEOUT` and the prototype `Radio` whatever the engine | task constants are class attributes |
@@ -139,7 +139,7 @@ Every proposal keeps today's behavior as the default, so existing results and th
 | 38.901 path loss and LOS probability | `NRConfig(channel="log_distance" \| "tr38901_inf_sh" \| "tr38901_umi" \| "tr38901_inh")` | a new `RadioMC` path-loss function per scenario; fast fading and MAC unchanged |
 | Radio-map input | `channel="radio_map"`, `radio_map=RadioMap(tensor [C, H, W], origin, resolution)` | bilinear lookup of a precomputed Sionna RT map in `RadioMC.rx_dbm`; the map is data outside the repository |
 | MIMO layers | `NRConfig(n_layers=2)` | TBS already takes `layers`; SINR per layer needs a rank model |
-| Unified Isaac config | Isaac `NetConfig` folded into `NRConfig`; observation features chosen by name, `obs=("aoi", "sinr", "queue", "delivered")` | removes the two normalizations and the differing size defaults |
+| Unified Isaac config | **Done (9c642ce).** The Isaac layer takes the same `NRConfig` as `make_engine`, with Isaac-only settings in `IsaacNetCfg` (`isaac/config.py`); observation features are chosen by name through `obs_features`, with one normalization and `obs_dim()`; domain-randomization ranges live in `IsaacNetCfg.dr_ranges` and `dr_support()` reports which levels honor them. `NetConfig` remains only as a deprecated alias with no defaults of its own. | closed |
 | Per-env domain randomization for `make_engine` levels | `NRConfig` field ranges resolved per env at reset | needs per-env parameter tensors in the radio and MAC |
 
 ### (c) Large (needs design)

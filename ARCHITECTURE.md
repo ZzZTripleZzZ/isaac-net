@@ -34,7 +34,7 @@ isaaclab_net/
   isaac/
     net_module.py    # NetModule over make_engine(level, E, R, device, NRConfig, backend): reset(env_ids),
                      #   submit(t, TrafficRequest(send, tag)), step(t, poses_end, cur_tag) -> dict with freshness
-                     #   (last_cap, aoi_s) and tag_delivered; MessageHistory; NetConfig (demo compatibility alias)
+                     #   (last_cap, aoi_s) and tag_delivered; MessageHistory; IsaacNetCfg (Isaac-only settings); NetConfig is a deprecated alias
     radio.py         # IsaacRadio: poses -> SNR with per-env parameters (DR), several gNBs, LOS blockage
     mixins.py        # NetEnvMixin for DirectRLEnv (net_setup / net_step / net_reset / net_obs)
     mdp/             # randomize_network EventTerm (network domain randomization)
