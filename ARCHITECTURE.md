@@ -28,6 +28,7 @@ isaaclab_net/
     mac_dl.py        # downlink hooks: delayed quantized CQI, K1 HARQ feedback
     queues.py        # fixed-shape frame FIFOs on a per-robot byte stream, RLC in-order delivery, reset helpers
     traffic.py       # Requests (message class per robot per step)
+    edge.py          # EdgeLoop: edge compute stage (FIFO / PS servers per env) and return path over any engine
     data/            # Sionna SYS 2.2.0 BLER tables and EESM betas (Apache-2.0)
     proto/           # the prototype engine, frozen: levels L0, L0DR, L05, L05Q, L1 and L2-legacy (NetSlot)
       netsim.py      #   eager reference of every prototype level
@@ -106,7 +107,9 @@ All levels come from `make_engine` and expose the same API, so a task can switch
 | `core/config` (`NRConfig`, presets) | merged (nrconfig + multicell cells block) | `test_nr_phy`, `test_multicell` |
 | `core/radio`, `core/proto/netsim_mc` (multi-cell) | merged; shared by L2 and L2-legacy | `test_multicell`, `test_nr_multicell` |
 | `isaac/` | rebuilt on `make_engine` + `NRConfig`; validated on Windows Isaac Lab 3.0 (2026-09-29) | `test_isaac_layer` (module == reference engine bitwise at every level through a partial reset, CPU and GPU; graph bitwise with injected draws; triton reset invariants; radio, MessageHistory, mixin); `test_isaac_env` (`isaac`) |
+| `core/edge` (`EdgeLoop`, `EdgeConfig`) | new; layered on the step dict of every level, engines untouched; optional CUDA-graph capture of the edge stage | `test_edge` |
 | `examples/fleet_task.py` | stable | `test_env_cpu`, `test_gpu` |
+| `examples/edge_control.py` | new; edge-offloaded tracking with hold / zero stale-action handling | run by hand |
 | `examples/isaac_fleet_env.py` | stable demo env (needs Isaac Lab 3.0); PPO trains end to end | `test_isaac_env` (`isaac`: in-env network == reference replay bitwise through DirectRLEnv partial resets; every level and backend steps), not in CI |
 | `benchmarks/isaac/` | fleet env throughput and PPO smoke; the published scale numbers were taken under 98–99% GPU contention | run by hand (`run_scale.ps1`, `run_train.ps1`) |
 | `bridges/` | merged; ported to the per-env-clock NetBase; full resets only; lockstep and pool smoke-tested against the lab ns-3 builds | import tests; `tests/bridges/` need an ns-3 build |

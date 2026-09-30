@@ -77,6 +77,22 @@ def _level_params(level, cfg: NRConfig, params):
     return None
 
 
+def _edge_wrapped(factory):
+    """make_engine returns EdgeLoop(engine) when the config sets `edge` (NRConfig(edge=EdgeConfig(...)))."""
+    import functools
+
+    @functools.wraps(factory)
+    def make(*args, **kw):
+        net = factory(*args, **kw)
+        cfg = getattr(net, "config", None)
+        if cfg is not None and getattr(cfg, "edge", None) is not None:
+            from .edge import EdgeLoop
+            return EdgeLoop(net, cfg.edge)
+        return net
+    return make
+
+
+@_edge_wrapped
 def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backend="reference", *, sizes=None,
                 params=None, seed=None, inject=False, strict=False):
     """Build the network engine of fidelity `level` for E envs x R robots.
@@ -91,6 +107,7 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     strict: raise if the config sets fields away from their defaults that this level ignores
       (config.unused_fields(level)); by default they are ignored silently.
     L0, L0DR and L1 without params take them from the config (l0_*, dr_*, l1_eta; defaults = earlier behavior).
+    config.edge (an EdgeConfig) wraps the engine in core.edge.EdgeLoop: same API, plus the edge-loop step keys.
     """
     if level not in LEVELS:
         raise ValueError(f"unknown level {level!r}; one of {LEVELS}")

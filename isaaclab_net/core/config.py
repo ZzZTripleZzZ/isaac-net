@@ -52,7 +52,7 @@ def fading_rho_from_speed(speed_mps, carrier_ghz=3.5, anchor_ms=2.5):
 # one. The channel fields (radio group) are read by radio.RadioMC, which L2 and NetSlotMC use; per-robot Doppler
 # (fading_doppler) needs the NR engine's fading, so it sits in the NR group.
 FIELD_GROUPS = {
-    "app": ("control_step_ms", "frame_buffer", "timeout_steps", "msg_sizes"),
+    "app": ("control_step_ms", "frame_buffer", "timeout_steps", "msg_sizes", "edge"),
     "l0": ("l0_delay_median_steps", "l0_delay_log_sigma", "l0_loss"),
     "l0dr": ("dr_delay_median_steps", "dr_delay_log_sigma", "dr_loss"),
     "l1": ("l1_eta",),
@@ -91,6 +91,68 @@ def fields_read_by(level, cfg=None):
     if level == "L2-legacy" and cfg is not None and not cfg.is_legacy_cell():
         groups = ("app", "frame", "link", "radio", "multicell")        # NetSlotMC
     return {f for g in groups for f in FIELD_GROUPS[g]}
+
+
+@dataclass
+class EdgeConfig:
+    """Edge-computing loop (core/edge.py, EdgeLoop): the edge server that processes delivered uplink messages and
+    the return path of the result (command) to the robot. Times in ms; EdgeLoop converts them to control steps.
+
+    Edge compute stage (one server pool per env, shared by its R robots):
+      servers_per_env    servers (FIFO) or total service capacity (processor sharing)
+      discipline         "fifo": first come first served, non-preemptive, one message per server;
+                         "ps": processor sharing, each of n messages in service gets min(1, servers / n)
+      service_dist       "deterministic" or "exponential" (mean service_ms)
+      service_ms         mean service time per message; a tuple gives one value per message class (1, 2, ...)
+      queue_cap          waiting room per env; the edge holds at most queue_cap + servers_per_env messages and an
+                         arriving message that finds it full is dropped
+      deadline_ms        per-message deadline from capture; a message that has not started service by then (FIFO)
+                         or not finished (PS) is dropped. None = no deadline
+      max_events_per_step  event budget of the exact event loop per control step (None: 2 R + 2 servers + 8); an env
+                         that runs out continues exactly from where it stopped at the next step (edge_lag)
+    Return path (result -> robot):
+      return_path        "instant" (at edge completion), "delay" (ret_fixed_ms + U(0, ret_jitter_ms) + transmission
+                         time of cmd_bytes at a rate from the robot's SINR), or "nr_dl" (the result is submitted as a
+                         downlink message of cmd_bytes to the NR engine, level L2 with dl=True, and the command
+                         arrives when the real DL scheduler delivers it)
+      ret_rate_eta, ret_share, ret_snr_offset_db  "delay" rate = eta * share * bandwidth * log2(1 + SNR_dl),
+                         SNR_dl = step SINR + offset; share None = 1 / R (the robots split the downlink)
+      ret_inflight       commands in flight per robot; a new command replaces the oldest when all are busy
+    """
+    servers_per_env: int = 1
+    discipline: str = "fifo"
+    service_dist: str = "deterministic"
+    service_ms: float | tuple = 10.0
+    queue_cap: int = 32
+    deadline_ms: float | None = None
+    max_events_per_step: int | None = None
+    return_path: str = "instant"
+    ret_fixed_ms: float = 1.0
+    ret_jitter_ms: float = 0.0
+    cmd_bytes: int = 100
+    ret_rate_eta: float = 0.75
+    ret_share: float | None = None
+    ret_snr_offset_db: float = 10.0
+    ret_inflight: int = 4
+
+    def __post_init__(self):
+        assert self.servers_per_env >= 1 and self.queue_cap >= 0
+        assert self.discipline in ("fifo", "ps"), "discipline: 'fifo' or 'ps'"
+        assert self.service_dist in ("deterministic", "exponential")
+        svc = self.service_ms if isinstance(self.service_ms, (tuple, list)) else (self.service_ms,)
+        assert len(svc) >= 1 and all(s > 0 for s in svc), "service_ms must be > 0"
+        assert self.deadline_ms is None or self.deadline_ms > 0
+        assert self.return_path in ("instant", "delay", "nr_dl")
+        assert self.ret_fixed_ms >= 0 and self.ret_jitter_ms >= 0 and self.cmd_bytes > 0 and self.ret_inflight >= 1
+        assert self.ret_share is None or 0 < self.ret_share <= 1
+
+    def service_table(self, n_classes):
+        """Mean service time (ms) per message class 1..n_classes."""
+        if isinstance(self.service_ms, (tuple, list)):
+            svc = tuple(float(s) for s in self.service_ms)
+            assert len(svc) >= n_classes, f"service_ms has {len(svc)} classes, the config has {n_classes}"
+            return svc[:n_classes]
+        return (float(self.service_ms),) * n_classes
 
 
 @dataclass
@@ -246,6 +308,8 @@ class NRConfig:
     dr_delay_log_sigma: tuple = (0.2, 1.2)        # L0DR: per-env sigma of the log delay, uniform
     dr_loss: tuple = (0.0, 0.2)                   # L0DR: per-env loss probability, uniform
     l1_eta: float = 0.9                  # L1: goodput factor on 0.75 log2(1 + SNR) (all backends, triton included)
+    # ---- edge-computing loop (core/edge.py): make_engine wraps any level in EdgeLoop when set ----
+    edge: EdgeConfig | None = None
 
     # ---------------- derived ----------------
     def __post_init__(self):
