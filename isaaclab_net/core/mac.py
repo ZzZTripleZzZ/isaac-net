@@ -302,9 +302,7 @@ class MacLink:
             self.olla = (self.olla + cfg.olla_up_db * ok - self.olla_dn * fail).clamp(-10, 10)
         served = (hi_tx - lo_tx) * ok
         self._post_slot(tx, gain_now)
-        self.avg = (1 - 1 / cfg.pf_window) * self.avg + (1 / cfg.pf_window) * served
-        if sched == "rr":
-            self.last_tx = torch.where(tx, g, self.last_tx)
+        self._pf_update(g, served, tx, won)
         # ---- counters ----
         c = self.ctr
         c["tb_new"] += tx_new.sum(); c["tb_retx"] += tx_rx.sum(); c["tb_ok"] += ok.sum()
@@ -321,6 +319,15 @@ class MacLink:
         q = self.q
         done = (q.cap >= 0) & (q.end <= ack[..., None]) & ~q.lost & torch.isinf(q.fin)
         q.fin = torch.where(done, frac + cfg.proc_offset_ms / cfg.control_step_ms, q.fin)
+
+    def _pf_update(self, g, served, tx, won):
+        """Scheduler state after a data slot: PF average (EWMA of the served bytes of every robot) and, for round
+        robin, the slot of the last transmission. One step of its own so variants (per-RBG averages, freezing while
+        idle) plug in here; the graph backend captures whatever this method does."""
+        cfg = self.cfg
+        self.avg = (1 - 1 / cfg.pf_window) * self.avg + (1 / cfg.pf_window) * served
+        if cfg.scheduler == "rr":
+            self.last_tx = torch.where(tx, g, self.last_tx)
 
     # ---------------- handover ----------------
     def handover(self, ho, flush=False):

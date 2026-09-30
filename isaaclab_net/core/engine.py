@@ -251,6 +251,7 @@ class NREngine:
         self.gen.manual_seed(seed)
         self.seed = seed
         self.net = NRNet(E, R, self.dev, cfg.msg_sizes, cfg, generator=self.gen, seed=seed)
+        self.rng = self.net.rng                # engine RNG (None with rng="global"); sharded.set_env_offset finds it
         self.per_robot_doppler = cfg.fading_doppler == "per_robot"
         if self.per_robot_doppler:
             install_per_robot_fading(self.net)

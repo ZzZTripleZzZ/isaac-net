@@ -156,11 +156,6 @@ class NRGraphEngine(NREngine):
         super().clear_stats()
         self._rebind()
 
-    def set_sinr_hook(self, fn, direction="ul"):
-        if fn is not None:
-            raise NotImplementedError("user SINR hooks are not captured by the graph / triton backends; use the "
-                                      "reference backend")
-        super().set_sinr_hook(fn, direction)
 
     # ------------------------------------------------------------------ step
     def _buf(self, name, x):
@@ -218,7 +213,8 @@ class NRGraphEngine(NREngine):
         P = len(cfg.tdd_pattern)
         skey = g0 % math.lcm(P, cfg.sr_period_slots, cfg.cqi_period_slots)
         key = (skey, dt0, kind, tuple((k, tuple(v.shape)) for k, v in ins.items()), bool(self.log_stats), gate,
-               bool(getattr(self, "_extras", False)))
+               bool(getattr(self, "_extras", False)),
+               tuple(lk.sinr_hook for lk in (net.ul, net.dl) if lk is not None))   # a hook installed later recaptures
         self._tdev.fill_(T)
         self._rebind()                 # inputs the eager part reassigned (e.g. net.fading_rho_ms from the radio)
         g = self._graphs.get(key)
@@ -516,6 +512,9 @@ class NRTritonEngine(NRGraphEngine):
             dref = dl_snr_db if dl_snr_db is not None else snr_db + cfg.dl_snr_offset_db
             dl_ref = (dref if dref.dim() == 3 else dref[..., None].expand(-1, -1, S)).contiguous()
         sched = net._schedule(g0)
+        if any(lk is not None and lk.sinr_hook is not None for lk in (net.ul, net.dl)):
+            raise NotImplementedError("SINR hooks (user hooks, core.slot_tap wrappers such as energy / background) are "
+                                      "bypassed by the fused kernel; use backend='graph'")
         own = set(vars(net.ul)) & {"sr_step", "slot"}
         if own and not getattr(self, "_extras", False):
             raise NotImplementedError(f"hooks on net.ul ({', '.join(sorted(own))}) are bypassed by the fused kernel; "

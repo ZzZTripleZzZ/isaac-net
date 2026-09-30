@@ -129,6 +129,32 @@ def _segment(tbs, r, lift_ptr, NL: tl.constexpr, STEP: tl.constexpr):
 
 
 @triton.jit
+def _ul_grants(bsr, sr_t, g, pg_now, SR_DELAY: tl.constexpr):
+    """UL grant step at a data slot (UlMac._pre_slot): proactive grant, then SR -> grant after the SR delay.
+    Kept separate so grant / SR-timer variants plug in here (as in mac_ul.py)."""
+    if pg_now:
+        bsr = tl.maximum(bsr, 1)
+    granted = (sr_t >= 0) & (g - sr_t >= SR_DELAY)
+    bsr = tl.where(granted, tl.maximum(bsr, 1), bsr)
+    sr_t = tl.where(granted, -1, sr_t)
+    return bsr, sr_t
+
+
+@triton.jit
+def _sr_step(enq, sent, bsr, sr_t, g):
+    """SR at an SR opportunity (UlMac.sr_step)."""
+    need_sr = (enq - sent > 0) & (bsr <= 0) & (sr_t < 0)
+    return tl.where(need_sr, g, sr_t)
+
+
+@triton.jit
+def _pf_update(avg, served, PF_A: tl.constexpr, PF_B: tl.constexpr):
+    """PF average after a data slot (MacLink.slot): EWMA of the served bytes of every robot. Kept separate so
+    per-RBG / frozen-while-idle variants plug in here (as in mac.py)."""
+    return PF_A * avg + PF_B * served.to(tl.float32)
+
+
+@triton.jit
 def _gather_p(x, pidx, p):
     """x [RB, PB] at process p [RB] -> [RB]."""
     return tl.sum(tl.where(pidx[None, :] == p[:, None], x, tl.zeros_like(x)), axis=1)
@@ -168,12 +194,8 @@ def _mac_slot(
     unsent = enq - sent
     # DL processes whose ACK has reached the gNB become free
     h_st = tl.where((h_st == 2) & (h_rdy <= g), 0, h_st)
-    if DIR == 0:           # UL: grants
-        if pg_now:
-            bsr = tl.maximum(bsr, 1)
-        granted = (sr_t >= 0) & (g - sr_t >= SR_DELAY)
-        bsr = tl.where(granted, tl.maximum(bsr, 1), bsr)
-        sr_t = tl.where(granted, -1, sr_t)
+    if DIR == 0:           # UL: grants (UlMac._pre_slot)
+        bsr, sr_t = _ul_grants(bsr, sr_t, g, pg_now, SR_DELAY)
     # ---- candidates ----
     rx_el = (h_st == 1) & (h_rdy <= g)
     rx_p = tl.argmin(tl.where(rx_el, h_rdy, BIG), axis=1)
@@ -395,7 +417,7 @@ def _mac_slot(
     if DIR == 0:
         bsr = tl.where(tx, enq - sent, bsr)
         csi = gain
-    avg = PF_A * avg + PF_B * served.to(tl.float32)
+    avg = _pf_update(avg, served, PF_A, PF_B)
     if SCHED == 2:
         last_tx = tl.where(tx, g, last_tx)
     # ---- counters ----
@@ -500,7 +522,7 @@ def nr_step_kernel(
         d_sent, d_floor, d_olla, d_avg, d_bsr, d_srt, d_ltx, d_enq, d_csi, d_hst, d_hlo, d_hhi, d_hrdy, d_hntx,
         d_hmcs, d_htbs, d_hnsb, d_hcomb, d_hlexp, d_hnrb, d_cap, d_qs, d_qe, d_lost, d_fin,
         # inputs and fading
-        h_ptr, uref_ptr, dref_ptr, pc_ptr, t_ptr, ep_ptr, ctr_ptr, s0, chs,
+        h_ptr, uref_ptr, dref_ptr, pc_ptr, t_ptr, env_ptr, ep_ptr, ctr_ptr, s0, chs,
         # traffic arrival gate (per-message stream ends [E,R,NMSG], arrival slots, base [E,R]); see launch_step
         gate_e_ptr, gate_s_ptr, gate_b_ptr, NMSG,
         # per-env accumulators [E, 8 HB]: UL counters, hist ok / tx / fail, then the same for the DL
@@ -542,7 +564,7 @@ def nr_step_kernel(
     t = tl.load(t_ptr)
     ep = u32(tl.load(ep_ptr + e))
     ctr = u32(tl.load(ctr_ptr + e))
-    base0 = mix32(u32(s0) ^ salt(u32(e)))
+    base0 = mix32(u32(s0) ^ salt(u32(tl.load(env_ptr + e))))      # env id key (a shard's global id)
     base0 = mix32(base0 ^ salt(ep))
     base0 = mix32(base0 ^ u32(chs))
     base0 = mix32(base0 ^ salt(ctr))
@@ -653,8 +675,7 @@ def nr_step_kernel(
                     vis = tl.max(tl.where(g_slot <= rel, g_end, g_base[:, None]), axis=1)
                     u_s_enq = tl.maximum(g_base, vis)
             if srf != 0:
-                need_sr = (u_s_enq - u_s_sent > 0) & (u_s_bsr <= 0) & (u_s_srt < 0)
-                u_s_srt = tl.where(need_sr, g, u_s_srt)
+                u_s_srt = _sr_step(u_s_enq, u_s_sent, u_s_bsr, u_s_srt, g)
             if uls != 0:
                 ub = mix32(base0 ^ salt(u32((2 << 16) | rel)))
                 uu = rng_uniform(ub, ridx)
@@ -733,7 +754,7 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
         eng._kernel = nr_step_kernel[(E,)](
             *_link_args(U), *_link_args(D),
             net.h, uref if uref is not None else dref, dref if dref is not None else dummy,
-            pc if pc is not None else dummy, eng._tdev, net.rng.episode, net.rng.ctr[STEP], net.rng.s0, eng._chs,
+            pc if pc is not None else dummy, eng._tdev, net.rng.env, net.rng.episode, net.rng.ctr[STEP], net.rng.s0, eng._chs,
             *(gate if gate is not None else (dummy, dummy, dummy)), gate[0].shape[-1] if gate is not None else 1,
             eng._acc, itab, ftab, K, net.fading_rho_ms if net.fading_rho_ms is not None else net.h,
             tu["tab"], tu["thr"], tu["se"], tu["beta"], tu["rate"], tu["eq"], tu["tbs"], tu["cbs"], tu["ncb"], tu["bg"],
