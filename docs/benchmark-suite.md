@@ -62,7 +62,7 @@ Every episode yields one row per env, and every count is per robot:
 | `offered_mbps`, `delivered_mbps` | application bytes submitted and delivered, per env and second |
 | `energy_j` | per-robot energy, present only when the step dict carries `energy_j [E, R]` (an energy wrapper) |
 
-Task-specific extras (for example `stopped_frac` or `command_age_ms`) are averaged over the episode's steps. The delay quantiles come from a log-spaced histogram per env with 240 bins from 0.1 ms to 60 s (about 6% bin width, plus a bin for zero delay), interpolated inside the bin. All accumulators live on the device with leading dim `[E]`, so a partial reset clears only the envs that ended.
+Tasks add their own extras: `goals` (per robot and episode) in Fleet-Alert, `stopped_frac`, `slow_frac` and `in_hole_frac` in CoverageNav, and `stale_frac`, `command_age_ms` and `edge_drops` (edge and command losses per robot and episode) in EdgeControl. The delay quantiles come from a log-spaced histogram per env with 240 bins from 0.1 ms to 60 s (about 6% bin width, plus a bin for zero delay), interpolated inside the bin. All accumulators live on the device with leading dim `[E]`, so a partial reset clears only the envs that ended.
 
 ## Tasks
 
@@ -165,4 +165,64 @@ A baseline is an object with `reset(task)` and `act(task, obs, done) -> (cont, s
 
 ## Sanity results
 
-Pending.
+These are pipeline sanity results, not baseline results. They show that every task, variant, baseline, backend and the report run end to end. `benchmarks/suite/sanity.sh` produced them on 2026-09-29 and 2026-09-30 on the shared lab RTX 4090, which other jobs kept 97–98% busy, so the timings are pessimistic. Every run used 64 envs × 16 robots and 2 seeds, one evaluation episode on 64 envs, and for PPO only 20 iterations of 32 steps on 64 envs (655,360 robot-steps), far from convergence. The two tables are checks of two engine configurations, one cheap level on the `graph` backend and `L2-legacy` on `triton`, and are not meant to be compared with each other. Entries are mean ± half-width of the 95% t interval over the 2 seeds (t = 12.7 at n = 2, so the intervals are wide). Counts are per robot and episode, the delay is in ms and the AoI in s. At `L0` the delay does not depend on the message size, so its light rows repeat the default rows.
+
+### L0 on graph
+
+| task | variant | baseline | n | task metric | return | deliveries | drops | delay_p95_ms | aoi_mean_s | train s | eval s/step |
+|:---|:---|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| fleet_alert | default | random | 2 | hazard_exposure 0.0217 ± 0.028 ↓ | -6.48 ± 8.5 | 200 ± 1.3 | 0 ± 0 | 11.4 ± 0.056 | 0.15 ± 0.0028 | 0 | 0.0376 |
+| fleet_alert | default | heuristic | 2 | hazard_exposure 0.000151 ± 0.0019 ↓ | 88.2 ± 0.032 | 300 ± 0 | 0 ± 0 | 11.4 ± 0.064 | 0.1 ± 0 | 0 | 0.0367 |
+| fleet_alert | default | ppo_mlp | 2 | hazard_exposure 0.0203 ± 0.015 ↓ | 50.2 ± 3.4 | 80.1 ± 7.3e+02 | 0 ± 0 | 11.4 ± 0.53 | 7.06 ± 74 | 78 | 0.0526 |
+| fleet_alert | default | ppo_gru | 2 | hazard_exposure 0.0206 ± 0.0062 ↓ | 33.2 ± 11 | 155 ± 1.8e+03 | 0 ± 0 | 11.5 ± 0.63 | 7.04 ± 88 | 174 | 0.0340 |
+| fleet_alert | light | random | 2 | hazard_exposure 0.0217 ± 0.028 ↓ | -6.48 ± 8.5 | 200 ± 1.3 | 0 ± 0 | 11.4 ± 0.056 | 0.15 ± 0.0028 | 0 | 0.0109 |
+| fleet_alert | light | heuristic | 2 | hazard_exposure 0.000151 ± 0.0019 ↓ | 88.2 ± 0.032 | 300 ± 0 | 0 ± 0 | 11.4 ± 0.064 | 0.1 ± 0 | 0 | 0.0068 |
+| coop_map | default | random | 2 | map_age_s 4.37 ± 0.54 ↓ | -128 ± 17 | 200 ± 1.3 | 0 ± 0 | 11.4 ± 0.056 | 0.15 ± 0.0028 | 0 | 0.0201 |
+| coop_map | default | heuristic | 2 | map_age_s 2.87 ± 0.63 ↓ | -82.1 ± 19 | 300 ± 0 | 0 ± 0 | 11.4 ± 0.064 | 0.1 ± 0 | 0 | 0.0211 |
+| coop_map | default | ppo_mlp | 2 | map_age_s 5.48 ± 2.5 ↓ | -162 ± 74 | 36.8 ± 1.6e+02 | 0 ± 0 | 11.4 ± 0.38 | 4.28 ± 9.7 | 46 | 0.0279 |
+| coop_map | default | ppo_gru | 2 | map_age_s 4.32 ± 0.18 ↓ | -126 ± 5.3 | 300 ± 0 | 0 ± 0 | 11.4 ± 0.064 | 0.1 ± 0 | 137 | 0.0303 |
+| coop_map | light | random | 2 | map_age_s 4.37 ± 0.54 ↓ | -128 ± 17 | 200 ± 1.3 | 0 ± 0 | 11.4 ± 0.056 | 0.15 ± 0.0028 | 0 | 0.0043 |
+| coop_map | light | heuristic | 2 | map_age_s 2.87 ± 0.63 ↓ | -82.1 ± 19 | 300 ± 0 | 0 ± 0 | 11.4 ± 0.064 | 0.1 ± 0 | 0 | 0.0052 |
+| coverage_nav | default | random | 2 | progress_m 0.0146 ± 0.31 ↑ | 0.0312 ± 0.32 | 200 ± 1.3 | 0 ± 0 | 11.4 ± 0.056 | 0.15 ± 0.0028 | 0 | 0.0314 |
+| coverage_nav | default | heuristic | 2 | progress_m 85 ± 0.6 ↑ | 86.5 ± 0.52 | 300 ± 0 | 0 ± 0 | 11.4 ± 0.064 | 0.1 ± 0 | 0 | 0.0367 |
+| coverage_nav | default | ppo_mlp | 2 | progress_m 61.4 ± 10 ↑ | 61.5 ± 10 | 300 ± 0.55 | 0 ± 0 | 11.4 ± 0.064 | 0.1 ± 0.00051 | 50 | 0.0377 |
+| coverage_nav | default | ppo_gru | 2 | progress_m 42.2 ± 41 ↑ | 42.2 ± 41 | 291 ± 42 | 0 ± 0 | 11.4 ± 0.033 | 0.142 ± 0.018 | 121 | 0.0294 |
+| coverage_nav | light | random | 2 | progress_m 0.0146 ± 0.31 ↑ | 0.0312 ± 0.32 | 200 ± 1.3 | 0 ± 0 | 11.4 ± 0.056 | 0.15 ± 0.0028 | 0 | 0.0065 |
+| coverage_nav | light | heuristic | 2 | progress_m 85 ± 0.6 ↑ | 86.5 ± 0.52 | 300 ± 0 | 0 ± 0 | 11.4 ± 0.064 | 0.1 ± 0 | 0 | 0.0072 |
+| edge_control | default | random | 2 | tracking_error_m 0.502 ± 0.027 ↓ | -75.2 ± 4.1 | 850 ± 4.1 | 0 ± 0 | 2.28 ± 0.0044 | 0.0358 ± 0.00025 | 0 | 0.2456 |
+| edge_control | default | heuristic | 2 | tracking_error_m 0.354 ± 0.032 ↓ | -53.1 ± 4.9 | 1.5e+03 ± 0 | 0 ± 0 | 2.28 ± 0.01 | 0.02 ± 0 | 0 | 0.2612 |
+| edge_control | default | ppo_mlp | 2 | tracking_error_m 0.393 ± 0.67 ↓ | -59 ± 1e+02 | 676 ± 3.2e+03 | 0 ± 0 | 2.28 ± 0.0099 | 0.045 ± 0.09 | 199 | 0.2365 |
+| edge_control | default | ppo_gru | 2 | tracking_error_m 0.395 ± 0.34 ↓ | -59.2 ± 51 | 1.5e+03 ± 18 | 0 ± 0 | 2.28 ± 0.01 | 0.02 ± 0.00035 | 140 | 0.1071 |
+| edge_control | light | random | 2 | tracking_error_m 0.502 ± 0.027 ↓ | -75.2 ± 4.1 | 850 ± 4.1 | 0 ± 0 | 2.28 ± 0.0044 | 0.0358 ± 0.00025 | 0 | 0.0898 |
+| edge_control | light | heuristic | 2 | tracking_error_m 0.354 ± 0.032 ↓ | -53.1 ± 4.9 | 1.5e+03 ± 0 | 0 ± 0 | 2.28 ± 0.01 | 0.02 ± 0 | 0 | 0.1067 |
+
+### L2-legacy on triton
+
+| task | variant | baseline | n | task metric | return | deliveries | drops | delay_p95_ms | aoi_mean_s | train s | eval s/step |
+|:---|:---|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| fleet_alert | default | random | 2 | hazard_exposure 0.0217 ± 0.028 ↓ | -6.48 ± 8.5 | 52.3 ± 19 | 133 ± 21 | 1.99e+03 ± 0.79 | 5.97 ± 1.5 | 0 | 0.0095 |
+| fleet_alert | default | heuristic | 2 | hazard_exposure 0.00105 ± 0.0044 ↓ | 88.1 ± 0.36 | 27 ± 11 | 5.38 ± 2.9 | 1.53e+03 ± 1.3e+02 | 3.62 ± 1.8 | 0 | 0.0092 |
+| fleet_alert | default | ppo_mlp | 2 | hazard_exposure 0.021 ± 0.012 ↓ | 49.9 ± 9.1 | 47.9 ± 2.5e+02 | 172 ± 98 | 1.95e+03 ± 83 | 8.29 ± 22 | 13 | 0.0101 |
+| fleet_alert | default | ppo_gru | 2 | hazard_exposure 0.0215 ± 0.00035 ↓ | 38 ± 29 | 25.1 ± 1.3e+02 | 128 ± 5.3e+02 | 1.95e+03 ± 1.1e+02 | 9.22 ± 12 | 95 | 0.0233 |
+| fleet_alert | light | random | 2 | hazard_exposure 0.0217 ± 0.028 ↓ | -6.48 ± 8.5 | 196 ± 2.9 | 3.4 ± 2.2 | 342 ± 39 | 0.255 ± 0.13 | 0 | 0.0157 |
+| fleet_alert | light | heuristic | 2 | hazard_exposure 0.000151 ± 0.0019 ↓ | 88.2 ± 0.032 | 270 ± 8.7 | 0.0259 ± 0.031 | 127 ± 23 | 0.148 ± 0.0091 | 0 | 0.0127 |
+| coop_map | default | random | 2 | map_age_s 6.24 ± 0.14 ↓ | -185 ± 4.2 | 109 ± 23 | 81.1 ± 23 | 1.93e+03 ± 1.9e+02 | 3.34 ± 1.6 | 0 | 0.0193 |
+| coop_map | default | heuristic | 2 | map_age_s 4.28 ± 0.61 ↓ | -126 ± 19 | 82.6 ± 33 | 4.27 ± 2 | 614 ± 2.5e+02 | 3.36 ± 1.2 | 0 | 0.0224 |
+| coop_map | default | ppo_mlp | 2 | map_age_s 9.69 ± 3.9 ↓ | -291 ± 1.2e+02 | 1.46 ± 19 | 0.154 ± 2 | 1.06e+03 | 14.9 ± 2.3 | 42 | 0.0293 |
+| coop_map | default | ppo_gru | 2 | map_age_s 8.29 ± 0.65 ↓ | -248 ± 20 | 189 ± 2.4 | 81.3 ± 1.8 | 1.49e+03 ± 9.6e+02 | 2.67 ± 0.14 | 141 | 0.0177 |
+| coop_map | light | random | 2 | map_age_s 4.42 ± 0.61 ↓ | -130 ± 19 | 197 ± 3.2 | 2.21 ± 2.1 | 238 ± 1.9e+02 | 0.214 ± 0.035 | 0 | 0.0150 |
+| coop_map | light | heuristic | 2 | map_age_s 2.81 ± 0.26 ↓ | -80.6 ± 8 | 270 ± 5 | 0.0332 ± 0.062 | 126 ± 7.7 | 0.152 ± 0.0048 | 0 | 0.0159 |
+| coverage_nav | default | random | 2 | progress_m -0.0163 ± 0.36 ↑ | -0.000703 ± 0.36 | 133 ± 17 | 59.5 ± 16 | 1.93e+03 ± 1.3e+02 | 2.76 ± 0.49 | 0 | 0.0238 |
+| coverage_nav | default | heuristic | 2 | progress_m 58.9 ± 11 ↑ | 59.8 ± 11 | 123 ± 53 | 3.32 ± 1.1 | 656 ± 3.9e+02 | 2.84 ± 0.86 | 0 | 0.0261 |
+| coverage_nav | default | ppo_mlp | 2 | progress_m 24.8 ± 1.7 ↑ | 24.8 ± 1.8 | 30.5 ± 26 | 0.0249 ± 0.16 | 102 ± 1.7e+02 | 13 ± 1.8 | 45 | 0.0363 |
+| coverage_nav | default | ppo_gru | 2 | progress_m 20.3 ± 8.9 ↑ | 20.3 ± 8.9 | 60.5 ± 3.7e+02 | 2.78 ± 7.4 | 713 ± 2.7e+03 | 10.8 ± 20 | 141 | 0.0302 |
+| coverage_nav | light | random | 2 | progress_m -0.0116 ± 0.29 ↑ | 0.005 ± 0.3 | 173 ± 7.7 | 24.6 ± 6.3 | 548 ± 9.8e+02 | 1.5 ± 0.9 | 0 | 0.0173 |
+| coverage_nav | light | heuristic | 2 | progress_m 74.4 ± 1.4 ↑ | 75.6 ± 1.6 | 227 ± 8.7 | 2.16 ± 0.71 | 117 ± 60 | 1.58 ± 0.52 | 0 | 0.0221 |
+| edge_control | default | random | 2 | tracking_error_m 7.47 ± 6.4 ↓ | -1.12e+03 ± 9.6e+02 | 585 ± 1.7e+02 | 230 ± 1.6e+02 | 451 ± 44 | 1.04 ± 1.8 | 0 | 0.1650 |
+| edge_control | default | heuristic | 2 | tracking_error_m 3.37 ± 2.4 ↓ | -506 ± 3.6e+02 | 872 ± 2.6e+02 | 42 ± 37 | 180 ± 66 | 0.719 ± 1.6 | 0 | 0.2245 |
+| edge_control | default | ppo_mlp | 2 | tracking_error_m 6.21 ± 33 ↓ | -931 ± 4.9e+03 | 576 ± 3.6e+03 | 219 ± 1.6e+03 | 376 ± 4.5e+02 | 0.969 ± 3.5 | 139 | 0.2245 |
+| edge_control | default | ppo_gru | 2 | tracking_error_m 5.14 ± 27 ↓ | -771 ± 4.1e+03 | 398 ± 1.7e+03 | 124 ± 1.1e+03 | 351 ± 1.2e+03 | 1.05 ± 3.2 | 210 | 0.2176 |
+| edge_control | light | random | 2 | tracking_error_m 0.693 ± 0.54 ↓ | -104 ± 81 | 839 ± 22 | 8.5 ± 22 | 69.9 ± 1e+02 | 0.0537 ± 0.032 | 0 | 0.1885 |
+| edge_control | light | heuristic | 2 | tracking_error_m 0.433 ± 0.064 ↓ | -65 ± 9.5 | 1.33e+03 ± 55 | 1.53 ± 0.72 | 32.1 ± 11 | 0.0375 ± 0.0085 | 0 | 0.1569 |
+
+**Timings.** One evaluation step of 64 × 16 robots took 0.004–0.05 s in the three 100 ms tasks and 0.09–0.26 s in EdgeControl, which runs five network steps and the edge stage per task step. PPO training took 13–199 s with the MLP and 95–210 s with the GRU, whose update replays the rollout sequences step by step. The whole script (96 runs and the calibration) took 6,245 s.
