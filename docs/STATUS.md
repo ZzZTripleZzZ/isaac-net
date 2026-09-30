@@ -1,8 +1,8 @@
 # Project status
 
-*State of 2026-09-30: `main` at `2400ed9`, packaged as version 0.1.0, with two work items in flight.*
+*State of 2026-09-30: `main` packaged as version 0.1.0; all planned work items are merged.*
 
-`isaaclab-net` is a research prototype packaged as `isaaclab_net`. Every feature branch of the third round of work is merged on `main`: fast backends for the NR engine, channel models, traffic models, the edge loop, background users, the energy model, multi-GPU sharding, the Wi-Fi level, adaptive fidelity, differentiable models, radio maps from USD scenes, the benchmark suite, the OAI rfsim bridge, the Linux / HPC recipe and the MuJoCo Playground / MJX backend. Two items are still running and will land before the 0.1.0 tag: an uncontended re-run of the speed and scale benchmarks, and the load-gap fixes that turn the 5G-LENA mechanisms found in [fidelity-load-gap.md](fidelity-load-gap.md) into NR engine switches. [CHANGELOG.md](https://github.com/ZzZTripleZzZ/isaaclab-net/blob/main/CHANGELOG.md) lists what 0.1.0 contains, and [RELEASE.md](https://github.com/ZzZTripleZzZ/isaaclab-net/blob/main/RELEASE.md) how a release is cut. A paper describing the engine is in preparation.
+`isaaclab-net` is a research prototype packaged as `isaaclab_net`. Every feature branch of the third round of work is merged on `main`: fast backends for the NR engine, channel models, traffic models, the edge loop, background users, the energy model, multi-GPU sharding, the Wi-Fi level, adaptive fidelity, differentiable models, radio maps from USD scenes, the benchmark suite, the OAI rfsim bridge, the Linux / HPC recipe and the MuJoCo Playground / MJX backend. The speed and scale tables come from an uncontended benchmark campaign on an idle GPU ([performance.md](performance.md)), and the 5G-LENA load-gap mechanisms found in [fidelity-load-gap.md](fidelity-load-gap.md) are NR engine switches with the `lena_match_v2` preset. [CHANGELOG.md](https://github.com/ZzZTripleZzZ/isaaclab-net/blob/main/CHANGELOG.md) lists what 0.1.0 contains, and [RELEASE.md](https://github.com/ZzZTripleZzZ/isaaclab-net/blob/main/RELEASE.md) how a release is cut. A paper describing the engine is in preparation.
 
 ## What is merged
 
@@ -39,11 +39,12 @@ The CPU suite runs in CI (ruff, `pytest -m "not gpu"`, strict docs build). Insta
 
 The following results were produced outside the package code, with scripts in the project's research workspace and on the lab box, and are documented here: the ns-3.48 + 5G-LENA v5.1 reference sweep of 186 runs ([validation-5g-lena.md](validation-5g-lena.md)), the public-data calibration that produced the `srsran_like` and `oai_like` presets ([calibration-public-data.md](calibration-public-data.md)), and the Isaac Lab 3.0 scale sweep up to 8,192 envs × 128 robots on Windows ([isaac-lab.md](isaac-lab.md)).
 
-## In flight
+## Recently merged
 
-**Uncontended re-benchmark.** Every timing so far ran on a GPU that other jobs kept 95–99% busy, which inflates launch-bound code most. A benchmark campaign on a quiet GPU is re-measuring the backend tables at 256×16 and 4096×100, the NR engine backends, and the Isaac Lab scale rows with the network off and on. It will rewrite [performance.md](performance.md), the scale table of [isaac-lab.md](isaac-lab.md) and the speed tables of the README.
-
-**Load-gap fixes in the NR engine.** [fidelity-load-gap.md](fidelity-load-gap.md) attributes the engine's optimism in loaded cells to 5G-LENA's per-RBG PF update with frozen idle averages, TDMA retransmissions, link adaptation on the previous allocation, and a grant pipeline with quantized buffer reports and an RLC tail stall. The prototype in `core/nr_loadfix.py` closes the gap without a fitted parameter. This work moves those mechanisms into the NR MAC as `NRConfig` switches whose defaults keep today's engine bitwise, with the `graph` and `triton` backends, and updates the fidelity pages.
+| Area | What | Evidence |
+|:--|:--|:--|
+| Performance | Uncontended benchmark campaign on an idle RTX 4090 and a dedicated L40: every level and backend, the fleet task, Isaac Lab scale up to 1,048,576 robots with the NR engine, the ns-3 cost recomputation | CSVs and raw JSONL in `benchmarks/results/uncontended/` ([performance.md](performance.md)) |
+| Validation | 5G-LENA load-gap mechanisms as `NRConfig` switches (`pf_update`, `pf_avg_idle`, `ul_retx_sched`, `ul_amc_alloc`, `ul_grant_model`), defaults bitwise unchanged, presets `lena_match_v2` and `lena_validation_v2` with no fitted parameter; `graph` equals the reference exactly, `triton` covers all but the BSR grant pipeline | 153-run replay in `benchmarks/fidelity/results/loadfix_v2/` ([fidelity-vs-lena.md](fidelity-vs-lena.md), [fidelity-load-gap.md](fidelity-load-gap.md)); `test_nr_loadfix` matches a frozen copy of the prototype exactly |
 
 ## Open items, in priority order
 

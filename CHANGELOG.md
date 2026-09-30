@@ -4,7 +4,7 @@ All notable changes to `isaaclab-net` are listed here, grouped by area. The form
 
 ## [0.1.0] - unreleased
 
-The first packaged release. It collects everything built since the initial prototype. Two pieces of work are still in flight and will be merged, with their own entries, before the tag: the load-gap mechanisms folded into the NR engine as `NRConfig` switches, and the uncontended re-benchmark that replaces the speed and scale tables (see [docs/STATUS.md](docs/STATUS.md)).
+The first packaged release. It collects everything built since the initial prototype.
 
 ### Engine and API
 
@@ -22,13 +22,14 @@ The first packaged release. It collects everything built since the initial proto
 - Level `WIFI`: a mean-field 802.11 DCF / EDCA uplink with 802.11ax / ac / a rates, A-MPDU, RTS/CTS, several APs with RSSI association and optional hidden nodes, plus an exact slot-level CSMA/CA event simulator for validation (`core/wifi`).
 - Adaptive and mixed fidelity (`core/adaptive.py`): a cheap and an expensive level behind one engine, per env, with static mixes, load-triggered switching with queue handoff, and curricula.
 - Differentiable fluid models `L1D` and `QAD` (`core/diff`), with gradients of delay, delivery, AoI and energy with respect to send probability, message size, transmit power and position, and a neural-proxy recipe. Exploratory; not a `make_engine` level.
-- A prototype of the load-gap mechanisms (`core/nr_loadfix.py`, subclasses of the NR engine, bitwise equal to it with every switch off).
+- The 5G-LENA load-gap mechanisms as `NRConfig` switches: `pf_update` (`slot` or `rbg`), `pf_avg_idle` (`decay` or `freeze`), `ul_retx_sched` (`ofdma` or `tdma`), `ul_amc_alloc` (`current` or `previous`) and `ul_grant_model` (`lumped` or `bsr`, with `rlc_tail_timer_ms` and the buffer-report parameters). Defaults keep the engine bitwise unchanged; the presets `lena_match_v2` and `lena_validation_v2` turn every switch on with no fitted parameter and bring the median-delay error at moderate and saturated load to within about 1% of 5G-LENA. `graph` captures all switches exactly; `triton` covers all but `ul_grant_model="bsr"`. `core/nr_loadfix.py` is a compatibility shim over these fields.
 
 ### Backends
 
 - `graph` (CUDA graph) backends, bitwise equal to the reference, for every prototype level, the surrogates and bounds, the NR engine (one or several cells), the Wi-Fi level and the edge stage.
 - `triton` fused kernels for `L1`, `L2-legacy` and the single-cell NR engine (uplink and downlink), equal to the reference to rounding.
 - `compile` (torch.compile plus CUDA graph) for the prototype levels.
+- Uncontended benchmark campaign on an idle RTX 4090 and a dedicated L40 (`benchmarks/uncontended/`, results in `benchmarks/results/uncontended/`): network step time for every level and backend at four batch shapes, the fleet task, Isaac Lab scale up to 1,048,576 robots with `L2-legacy` and the NR engine on `triton`, and the ns-3 cost comparison recomputed against them; `benchmarks/isaac/bench.py --repeats` for repeated timing windows.
 - `ShardedEngine` splits the envs over several GPUs behind one engine API. Two shards are bitwise equal to one engine for the prototype levels and `L2-legacy` on the tested backends. `L2` runs sharded but is not shard-invariant.
 
 ### Channels and scenes
