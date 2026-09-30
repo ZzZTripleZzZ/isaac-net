@@ -29,5 +29,5 @@ python $T --E 2048 --R 16 --cheap L1 --out "$OUT/transient_l1.jsonl"
 python $T --E 2048 --R 16 --cheap L05Q --backend graph --cheap_params "$FIT/l05q_fit.pt" --out "$OUT/transient_l05q.jsonl"
 # 6. GPU kernel time per step (contention-light cost estimate)
 python benchmarks/adaptive/kernel_time.py --E 4096 --R 16 --cheap_params "$FIT/l05q_fit.pt" --out "$OUT/kernel_time.jsonl"
-python benchmarks/adaptive/report.py "$OUT"/adaptive_*.jsonl > "$OUT/adaptive_tables.md"
+python benchmarks/adaptive/report.py "$OUT"/adaptive_*.jsonl > "$OUT/tables.md"
 echo DONE > "$OUT/adaptive_DONE"
