@@ -118,8 +118,9 @@ def test_graph_module_bitwise_with_injected_draws(seeded):
     from engine_api import InjectNoise
     from isaaclab_net.core.proto.netsim import S, UL_PER_STEP
     E, T, t_reset, dev = 16, 60, 29, torch.device("cuda")
-    net = NetModule("L2-legacy", E, R, dev, CFG, "graph", pose_chunks=1, seed=5, inject=True)
-    ref = make_engine("L2-legacy", E, R, dev, CFG, "reference", seed=5)
+    cfg = CFG.with_(rng="global")          # InjectNoise feeds the reference through the global-RNG draw sites
+    net = NetModule("L2-legacy", E, R, dev, cfg, "graph", pose_chunks=1, seed=5, inject=True)
+    ref = make_engine("L2-legacy", E, R, dev, cfg, "reference", seed=5)
     g = torch.Generator(device=dev).manual_seed(2)
     pos = torch.rand(E, R, 3, device=dev, generator=g) * 150
     ids = torch.arange(1, E, 4, device=dev)

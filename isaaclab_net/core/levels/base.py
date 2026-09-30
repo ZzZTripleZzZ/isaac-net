@@ -7,8 +7,8 @@ submit / step). The backends run that one implementation:
 
 The FIFO, the enqueue and the end-of-step bookkeeping reuse the prototype's graph-safe bodies
 (proto/netsim_fast.add_body / finish_body), which are bitwise equal to the prototype reference, so every level has
-the prototype's message semantics: F = 16 frames per robot, the 2 s (20-step) application timeout, in-order
-compaction, and the same dict outputs.
+the prototype's message semantics: F frames per robot, a TIMEOUT-step application deadline (fb / timeout, from
+NRConfig.frame_buffer / timeout_steps; defaults 16 and 20), in-order compaction, and the same dict outputs.
 
 A level implements some of these hooks:
   _alloc()                          allocate its state buffers (listed in STATE, so graph capture restores them)
@@ -18,10 +18,12 @@ A level implements some of these hooks:
   _observe(fin, t)                  see this step's outcomes before the FIFO drops them (NN's history)
   _after(dr)                        end-of-step update (GE transition, QA's previous queue)
 SUBMIT_DRAWS / STEP_DRAWS name the random draws a level takes per call, as (name, shape, kind) with shape "ER"
-([E,R]) or "E" and kind "rand" or "randn". They come from the global torch RNG of the device, one value per robot
-or env whether it is used or not, so a partial reset never shifts the stream other envs consume. With
-inject=True they are read instead from static buffers filled by set_noise(submit=..., step=...) (equivalence
-tests feed the reference and the graph backend the same draws).
+([E,R]) or "E" and kind "rand" or "randn", one value per robot or env whether it is used or not. With
+rng="engine" (make_engine's default) they come from the engine's counter-based streams (proto/rng.py; stream =
+position in the spec), and _reset_rand draws the reset values from the same streams keyed by (env, episode).
+With rng="global" they come from the global torch RNG of the device and resets draw from the engine generator.
+With inject=True they are read instead from static buffers filled by set_noise(submit=..., step=...)
+(equivalence tests feed the reference and the graph backend the same draws).
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ import torch
 
 from ..proto import netsim as _ns
 from ..proto.netsim_fast import add_body, finish_body, put_slot
+from ..proto.rng import STEP, SUBMIT, CounterRNG, check_mode
 
 F, TIMEOUT = _ns.F, _ns.TIMEOUT
 Requests, env_index, fill_rows = _ns.Requests, _ns.env_index, _ns.fill_rows
@@ -48,22 +51,26 @@ class LevelNet:
     STEP_DRAWS: tuple = ()
     DELAY_LEVEL = True            # frames get a delivery time at arrival (no byte service)
 
-    def __init__(self, E, R, device, sizes, params=None, backend="reference", inject=False, seed=None):
+    def __init__(self, E, R, device, sizes, params=None, backend="reference", inject=False, seed=None,
+                 fb=F, timeout=TIMEOUT, ul_per_step=_ns.UL_PER_STEP, rng="global"):
         if backend == "eager":
             backend = "reference"
         if backend not in ("reference", "graph"):
             raise ValueError(f"backend {backend!r}: the {self.level} level has 'reference' and 'graph'")
         self.E, self.R, self.dev = E, R, torch.device(device)
+        self.F, self.TIMEOUT, self.K = int(fb), int(timeout), int(ul_per_step)
+        assert self.F >= 1 and self.TIMEOUT >= 1 and self.K >= 1, (fb, timeout, ul_per_step)
+        F = self.F
         if backend == "graph" and self.dev.type != "cuda":
             raise ValueError("the graph backend needs a CUDA device")
         self.backend, self.inject, self.params = backend, inject, params
         self.sizes = torch.tensor(sizes, device=self.dev, dtype=torch.float32)
         self.log_stats = False
         self.log_cap_max = 10 ** 9
-        if seed is None:
-            seed = int(torch.randint(0, 2 ** 62, ()).item())
+        self.seed = _ns.resolve_seed(seed)
         self.gen = torch.Generator(device=self.dev)
-        self.gen.manual_seed(seed)
+        self.gen.manual_seed(self.seed)
+        self.rng = CounterRNG(self.seed, E, self.dev) if check_mode(rng) == "engine" else None
         self.radio = None
         d = self.dev
         z = lambda shape, dt, v: torch.full(shape, v, dtype=dt, device=d)
@@ -110,6 +117,12 @@ class LevelNet:
     def _reset_rows(self, ids, n, gen):
         pass
 
+    def _reset_rand(self, ids, n, stream=0):
+        """U[0, 1) [n] for the reset rows ids: engine streams (rng="engine") or the engine generator."""
+        if self.rng is not None:
+            return self.rng.reset_uniform(ids, stream)
+        return torch.rand(n, device=self.dev, generator=self.gen)
+
     def _arrival(self, new, count, nact, dr):
         raise NotImplementedError
 
@@ -130,6 +143,8 @@ class LevelNet:
         ids = env_index(env_ids, self.E, self.dev)
         if ids is not None and ids.numel() == 0:
             return
+        if self.rng is not None:
+            self.rng.reset(ids)
         for n in self.FIELDS:
             fill_rows(getattr(self, n), ids, self.INIT[n])
         fill_rows(self.clock, ids, 0)
@@ -161,11 +176,16 @@ class LevelNet:
                 for (name, _, _), v in zip(spec, vals):
                     self._noise[name].copy_(v)
 
-    def _draws(self, spec):
+    def _draws(self, spec, channel):
         if self.inject:
             return {name: self._noise[name] for name, _, _ in spec}
         E, R, d = self.E, self.R, self.dev
         out = {}
+        if self.rng is not None:
+            for i, (name, shape, kind) in enumerate(spec):
+                fn = self.rng.uniform if kind == "rand" else self.rng.normal
+                out[name] = fn(channel, i, R) if shape == "ER" else fn(channel, i, 1).view(E)
+            return out
         for name, shape, kind in spec:
             fn = torch.rand if kind == "rand" else torch.randn
             out[name] = fn((E, R) if shape == "ER" else (E,), device=d)
@@ -200,6 +220,8 @@ class LevelNet:
             self._hid_in.copy_(req.hid)
         self._last_hid.copy_(self._hid_in)
         self._snr_add.copy_(self._last_snr if snr_db is None else snr_db)
+        if self.rng is not None:
+            self.rng.tick(SUBMIT)
         self._run("add")
         if self.log_stats:
             self.stats["overflow"] += int(self._overflow)
@@ -227,6 +249,8 @@ class LevelNet:
         self._snr.copy_(snr)
         self._last_snr.copy_(snr)
         self._cur_hid.copy_(self._last_hid if cur_hid is None else cur_hid)
+        if self.rng is not None:
+            self.rng.tick(STEP)
         self._run("step")
         if self.log_stats:
             st, cap = self.stats, pre["cap"]
@@ -253,17 +277,17 @@ class LevelNet:
         self._overflow.copy_(overflow)
         self._accepted.copy_(new)
         if self.DELAY_LEVEL:
-            dl = self._arrival(new, count, nact, self._draws(self.SUBMIT_DRAWS))
+            dl = self._arrival(new, count, nact, self._draws(self.SUBMIT_DRAWS, SUBMIT))
             put_slot(self.dlv, idx, new, dl)
 
     @torch.no_grad()
     def _step_region(self):
         t = self._t
-        dr = self._draws(self.STEP_DRAWS)
+        dr = self._draws(self.STEP_DRAWS, STEP)
         fin = self._serve(t, dr)
         self._observe(fin, t)
         fields, outs = finish_body(self.cap, self.cls, self.det, self.hid, self.rem, self.dlv, self.f_nact,
-                                   self.f_snr, self.f_own, fin, t, self._cur_hid)
+                                   self.f_snr, self.f_own, fin, t, self._cur_hid, self.TIMEOUT)
         for name, v in zip(self.OUTS, outs):          # outputs first: cap_out / cls_out may alias self.cap / cls
             getattr(self, "_" + name).copy_(v)
         for name, v in zip(self.FIELDS, fields):

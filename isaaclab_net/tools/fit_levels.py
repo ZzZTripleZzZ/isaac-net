@@ -15,6 +15,11 @@ RolloutLogger wraps the engine through its public API only (submit / step dicts)
 source, and records every resolved frame with its send-time features. Only frames captured at or before step
 T - TIMEOUT - 1 are kept, so no outcome is right-censored. Delays are in control steps from the capture step.
 
+Configuration. The source runs under the preset's NRConfig, with --frame-buffer, --timeout-steps, --control-step-ms
+and --slots-per-step overriding its application fields (any values). The fit file records them in meta
+(frame_buffer, timeout_steps, control_step_ms, ul_slots_per_step), and make_engine refuses to load the fit under a
+config whose values differ, because the fitted delays are in control steps of that configuration.
+
 Fits.
   TR  every (episode, env) of the training rollouts is one trace. For trace j, class c and step t the file stores
       the slice of outcomes of the class-c frames captured at t* = the step of trace j nearest to t with at least
@@ -44,12 +49,11 @@ import torch
 
 from ..core import config as _config
 from ..core.engine import make_engine
-from ..core.levels import DelayNet, nn_features
+from ..core.levels import DelayNet, fit_app, nn_features
 from ..core.levels.surrogates import H
 from ..core.proto import netsim as _ns
 from ..examples.fleet_task import TASK_SIZES, FleetEnv
 
-TIMEOUT, F = _ns.TIMEOUT, _ns.F
 FEATURES = ("cls", "snr", "own", "ownb", "nact", "totb", "to") + tuple(f"h{k}" for k in range(H))
 PRESETS = ("default", "netslot_compat", "lena_like", "srsran_like", "oai_like")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -67,12 +71,12 @@ class RolloutLogger:
     plus cap, env, ep (episode) and the outcome delay (inf if lost). Nominal (not remaining) bytes, so that the NN
     level, which serves no bytes, computes the same features. backlog records the end-of-step env backlog."""
 
-    def __init__(self, net, sizes, cap_max):
+    def __init__(self, net, sizes, cap_max, timeout=_ns.TIMEOUT):
         self.net, self.E, self.R = net, net.E, net.R
         self.dev = torch.device(net.dev) if not isinstance(net.dev, torch.device) else net.dev
         self.sizes = torch.tensor(sizes, dtype=torch.float32, device=self.dev)
         self.cap_max = cap_max
-        self.W = TIMEOUT + 2                            # a frame lives at most TIMEOUT steps
+        self.W = timeout + 2                            # a frame lives at most `timeout` steps
         E, R, d = self.E, self.R, self.dev
         self.ring = {k: torch.zeros(E, R, self.W, device=d) for k in FEATURES}
         self.hist = torch.zeros(E, H, device=d)
@@ -183,14 +187,13 @@ def behavior(env, net, episodes, mode="fit"):
             env.step(vel.clamp(-1, 1), send)
 
 
-def source_config(source, preset):
+def source_config(source, preset, **app):
+    """NRConfig of the source: the preset with the application overrides in app (frame_buffer, timeout_steps,
+    control_step_ms, proto_ul_slots_per_step; None = keep the preset's value). Any values are accepted; they are
+    recorded in the fit file and checked when it is loaded."""
     cfg = _config.NRConfig() if preset in (None, "default") else getattr(_config, preset)()
-    want = {"frame_buffer": F, "timeout_steps": TIMEOUT, "control_step_ms": 100.0}
-    bad = {k: getattr(cfg, k) for k, v in want.items() if getattr(cfg, k) != v}
-    if bad:
-        raise ValueError(f"the surrogate levels run with frame_buffer={F}, timeout_steps={TIMEOUT} and 100 ms "
-                         f"steps; preset {preset!r} has {bad}")
-    return cfg
+    over = {k: v for k, v in app.items() if v is not None}
+    return cfg.with_(**over) if over else cfg
 
 
 def log_rollouts(source, E, R, episodes, seed, device, sizes, config=None, T=300, backend="reference",
@@ -198,7 +201,8 @@ def log_rollouts(source, E, R, episodes, seed, device, sizes, config=None, T=300
     """Roll out `source` (any make_engine level) under the behavior policy; returns (frames, B, seconds/step)."""
     torch.manual_seed(seed)
     net = make_engine(source, E, R, device, config, backend, sizes=sizes, params=params, seed=seed)
-    log = RolloutLogger(net, sizes, cap_max=T - TIMEOUT - 1)
+    timeout = (config or _config.NRConfig()).timeout_steps
+    log = RolloutLogger(net, sizes, cap_max=T - timeout - 1, timeout=timeout)
     env = FleetEnv(E, R, log, torch.device(device))
     env.T = T
     t0 = time.time()
@@ -279,15 +283,15 @@ def fit_ge(fr, B, min_n=30):
     return {"P": P, "pi0": pi0, "mu": mu, "sig": sig, "p": p, "q": q, "theta": torch.tensor(theta)}, info
 
 
-def nn_x(fr, R):
+def nn_x(fr, R, F=_ns.F):
     hist = torch.stack([fr[f"h{k}"] for k in range(H)], -1)
-    return nn_features(fr["cls"], fr["snr"], fr["own"], fr["ownb"], fr["nact"], fr["totb"], fr["to"], hist, R)
+    return nn_features(fr["cls"], fr["snr"], fr["own"], fr["ownb"], fr["nact"], fr["totb"], fr["to"], hist, R, F)
 
 
-def fit_nn(fr, R, device, Q=32, h=128, steps=6000, bs=8192, lr=2e-3, seed=0):
+def fit_nn(fr, R, device, Q=32, h=128, steps=6000, bs=8192, lr=2e-3, seed=0, F=_ns.F):
     torch.manual_seed(seed)
     dev = torch.device(device)
-    X = nn_x(fr, R)
+    X = nn_x(fr, R, F)
     xm, xs = X.mean(0), X.std(0).nan_to_num(1.0).clamp(min=1e-3)
     Xn = ((X - xm) / xs).to(dev)
     drop = fr["drop"].float().to(dev)
@@ -333,27 +337,34 @@ def l05_cells(fr):
     return (nb * (len(_ns.SNR_EDGES) + 1) + sb) * 2 + c
 
 
-def censored_cell_w1(ref, st, min_ref=100, min_st=20):
-    """Frame-weighted per-L05-cell W1 (ms) of the censored delay (lost = TIMEOUT)."""
+def censored_cell_w1(ref, st, min_ref=100, min_st=20, timeout=_ns.TIMEOUT, step_ms=100.0):
+    """Frame-weighted per-L05-cell W1 (ms) of the censored delay (lost = timeout steps)."""
     cr, cs = l05_cells(ref), l05_cells(st)
-    a_all, b_all = ref["delay"].clamp(max=TIMEOUT), st["delay"].clamp(max=TIMEOUT)
+    a_all, b_all = ref["delay"].clamp(max=timeout), st["delay"].clamp(max=timeout)
     tot, ws = 0.0, 0
     for cid in cr.unique():
         a, b = a_all[cr == cid], b_all[cs == cid]
         if a.numel() < min_ref or b.numel() < min_st:
             continue
-        tot += w1(a * 100, b * 100) * a.numel()
+        tot += w1(a * step_ms, b * step_ms) * a.numel()
         ws += a.numel()
     return tot / ws if ws else float("nan")
 
 
-def calibrate_qa(ref, E, R, device, sizes, T, seed, etas=(0.4, 0.55, 0.7, 0.85, 1.0, 1.15), episodes=1):
+def calibrate_qa(ref, E, R, device, sizes, T, seed, etas=(0.4, 0.55, 0.7, 0.85, 1.0, 1.15), episodes=1, cfg=None):
+    """QA runs under the source's application fields (frame buffer, timeout, control step, slots per step); its
+    radio is the legacy one whatever the source's."""
+    src = cfg if cfg is not None else _config.NRConfig()
+    qcfg = _config.NRConfig(frame_buffer=src.frame_buffer, timeout_steps=src.timeout_steps,
+                            control_step_ms=src.control_step_ms, proto_ul_slots_per_step=src.proto_slots_per_step,
+                            rng=src.rng)
     rows = []
     for pf in (True, False):
         for eta in etas:
-            st, _, _ = log_rollouts("QA", E, R, episodes, seed, device, sizes, T=T,
+            st, _, _ = log_rollouts("QA", E, R, episodes, seed, device, sizes, config=qcfg, T=T,
                                     params={"eta": eta, "pf": pf})
-            rows.append({"eta": eta, "pf": pf, "w1_ms": censored_cell_w1(ref, st),
+            w = censored_cell_w1(ref, st, timeout=qcfg.timeout_steps, step_ms=qcfg.control_step_ms)
+            rows.append({"eta": eta, "pf": pf, "w1_ms": w,
                          "drop_rate": float(st["drop"].float().mean())})
     ok = [r for r in rows if not math.isnan(r["w1_ms"])]
     best = min(ok, key=lambda r: r["w1_ms"]) if ok else {"eta": 0.9, "pf": True}
@@ -361,7 +372,7 @@ def calibrate_qa(ref, E, R, device, sizes, T, seed, etas=(0.4, 0.55, 0.7, 0.85, 
 
 
 @torch.no_grad()
-def heldout(te, Bte, fit, R, device, seed=4242):
+def heldout(te, Bte, fit, R, device, seed=4242, F=_ns.F, step_ms=100.0):
     """Teacher-forced fit quality of NN and GE on held-out frames: pooled delay W1 (ms) and drop Brier score."""
     torch.manual_seed(seed)
     dm = ~te["drop"]
@@ -370,10 +381,10 @@ def heldout(te, Bte, fit, R, device, seed=4242):
     p = fit["NN"]
     net = DelayNet(p["din"], p["Q"], p["h"])
     net.load_state_dict(p["state"])
-    logit, q = net((nn_x(te, R) - p["xm"]) / p["xs"])
+    logit, q = net((nn_x(te, R, F) - p["xm"]) / p["xs"])
     pd = torch.sigmoid(logit)
     samp = torch.exp(DelayNet.sample_quantiles(q, torch.rand(q.shape[0])))[dm]
-    out["NN"] = {"w1_pooled_ms": w1(ref * 100, samp * 100), "brier": float(((pd - te["drop"].float()) ** 2).mean())}
+    out["NN"] = {"w1_pooled_ms": w1(ref * step_ms, samp * step_ms), "brier": float(((pd - te["drop"].float()) ** 2).mean())}
     g = fit["GE"]
     s = ge_states(Bte, float(g["theta"]))[te["ep"], te["cap"], te["env"]]
     c = te["cls"] - 1
@@ -381,7 +392,7 @@ def heldout(te, Bte, fit, R, device, seed=4242):
     lo = u.floor().long().clamp(max=99)
     qf = g["q"][s[dm], c[dm]]
     gs = qf.gather(1, lo[:, None]).squeeze(1) * (1 - (u - lo)) + qf.gather(1, (lo + 1)[:, None]).squeeze(1) * (u - lo)
-    out["GE"] = {"w1_pooled_ms": w1(ref * 100, gs * 100),
+    out["GE"] = {"w1_pooled_ms": w1(ref * step_ms, gs * step_ms),
                  "brier": float(((g["p"][s, c] - te["drop"].float()) ** 2).mean())}
     return out
 
@@ -389,30 +400,38 @@ def heldout(te, Bte, fit, R, device, seed=4242):
 # ----------------------------------------------------------------------------- driver
 def fit_levels(source="L2-legacy", E=64, R=16, episodes=12, test_episodes=4, T=300, sizes=TASK_SIZES["T1"],
                device="cuda", preset=None, backend="reference", seed=31337, nn_steps=6000, qa_envs=32,
-               qa_etas=(0.4, 0.55, 0.7, 0.85, 1.0, 1.15), log=print):
-    """Roll out `source`, fit TR / GE / NN, calibrate QA; returns (fit dict for torch.save, info dict)."""
+               qa_etas=(0.4, 0.55, 0.7, 0.85, 1.0, 1.15), log=print, frame_buffer=None, timeout_steps=None,
+               control_step_ms=None, slots_per_step=None):
+    """Roll out `source`, fit TR / GE / NN, calibrate QA; returns (fit dict for torch.save, info dict).
+    frame_buffer, timeout_steps, control_step_ms, slots_per_step: overrides of the preset's application fields
+    (None = the preset's); the fit records the values it used."""
     if source not in ("L2", "L2-legacy"):
         raise ValueError("fit from 'L2' or 'L2-legacy'")
     sizes = tuple(float(s) for s in sizes)
     if len(sizes) != 2:
         raise ValueError("the surrogate fits have two traffic classes; pass two message sizes")
-    cfg = source_config(source, preset)
+    cfg = source_config(source, preset, frame_buffer=frame_buffer, timeout_steps=timeout_steps,
+                        control_step_ms=control_step_ms, proto_ul_slots_per_step=slots_per_step)
+    app = fit_app(cfg)
+    if T <= cfg.timeout_steps + 1:
+        raise ValueError(f"episode length T={T} leaves no uncensored frames with timeout_steps={cfg.timeout_steps}")
     t0 = time.time()
     tr, Btr, sps = log_rollouts(source, E, R, episodes, seed, device, sizes, cfg, T, backend)
     te, Bte, _ = log_rollouts(source, E, R, test_episodes, seed + 1, device, sizes, cfg, T, backend)
     log(f"logged {tr['delay'].numel()} training frames ({int(tr['drop'].sum())} lost), {te['delay'].numel()} "
         f"held-out, {source} {sps * 1e3:.1f} ms/step, {time.time() - t0:.0f} s")
     info = {"source": source, "preset": preset or "default", "sizes": list(sizes), "E": E, "R": R, "T": T,
-            "episodes": episodes, "test_episodes": test_episodes, "seed": seed, "source_ms_per_step": sps * 1e3}
+            "episodes": episodes, "test_episodes": test_episodes, "seed": seed, "source_ms_per_step": sps * 1e3,
+            **app}
     fit = {}
     fit["TR"], info["TR"] = fit_tr(tr, E, int(Btr.shape[0]), T)
     fit["GE"], info["GE"] = fit_ge(tr, Btr)
-    fit["NN"], info["NN"] = fit_nn(tr, R, device, steps=nn_steps)
-    fit["QA"], info["QA_grid"] = calibrate_qa(te, qa_envs, R, device, sizes, T, seed + 2, qa_etas)
+    fit["NN"], info["NN"] = fit_nn(tr, R, device, steps=nn_steps, F=cfg.frame_buffer)
+    fit["QA"], info["QA_grid"] = calibrate_qa(te, qa_envs, R, device, sizes, T, seed + 2, qa_etas, cfg=cfg)
     info["QA"] = fit["QA"]
-    info["heldout"] = heldout(te, Bte, fit, R, device)
+    info["heldout"] = heldout(te, Bte, fit, R, device, F=cfg.frame_buffer, step_ms=cfg.control_step_ms)
     fit["meta"] = {"version": 1, "source": source, "preset": preset or "default", "sizes": list(sizes), "R": R,
-                   "T": T, "frame_buffer": F, "timeout_steps": TIMEOUT}
+                   "T": T, **app}
     log(f"fitted in {time.time() - t0:.0f} s: QA {fit['QA']}, held-out {json.dumps(info['heldout'])}")
     return fit, info
 
@@ -451,6 +470,11 @@ def main(argv=None):
     p.add_argument("--nn-steps", type=int, default=6000)
     p.add_argument("--qa-envs", type=int, default=32)
     p.add_argument("--seed", type=int, default=31337)
+    p.add_argument("--frame-buffer", type=int, default=None, help="frames per robot (default: the preset's)")
+    p.add_argument("--timeout-steps", type=int, default=None, help="application deadline in control steps")
+    p.add_argument("--control-step-ms", type=float, default=None, help="control step in ms")
+    p.add_argument("--slots-per-step", type=int, default=None,
+                   help="UL slots per control step of the prototype levels (default control-step-ms / 2.5)")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--backend", default="reference", help="source backend (graph for L2-legacy on CUDA)")
     p.add_argument("--out", default="", help="output .pt (default: $ISAACLAB_NET_LEVELS_DIR or "
@@ -458,7 +482,9 @@ def main(argv=None):
     a = p.parse_args(argv)
     sizes = tuple(float(s) for s in a.sizes.split(",")) if a.sizes else TASK_SIZES[a.task]
     fit, info = fit_levels(a.source, a.envs, a.robots, a.episodes, a.test_episodes, a.episode_steps, sizes,
-                           a.device, a.preset, a.backend, a.seed, a.nn_steps, a.qa_envs)
+                           a.device, a.preset, a.backend, a.seed, a.nn_steps, a.qa_envs,
+                           frame_buffer=a.frame_buffer, timeout_steps=a.timeout_steps,
+                           control_step_ms=a.control_step_ms, slots_per_step=a.slots_per_step)
     tag = a.task if not a.sizes else "s" + "-".join(str(int(s)) for s in sizes)
     path = save_fit(fit, a.out or default_fit_path(f"{a.source}_{tag}"), info)
     print("saved", path)

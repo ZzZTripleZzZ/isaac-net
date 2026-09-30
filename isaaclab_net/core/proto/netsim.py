@@ -11,14 +11,25 @@ Time is a per-env clock: t is None (use the engine clock net.clock [E], which re
 advances), an int (same step for every env) or a long tensor [E]. The legacy calls add_frames(t, send, det,
 hid, snr_db) and step(t, snr_db, cur_hid) -> (newest, det_env) remain as thin wrappers.
 
-Randomness: resets draw from the engine's own generator net.gen (seeded by the `seed` argument), so a
-partial reset never shifts the random stream that the other envs consume while stepping.
+Randomness (rng argument):
+  "global" (the default of these constructors; the prototype behavior): resets draw from the engine's own generator
+      net.gen (seeded by `seed`), so a partial reset never shifts the random stream that the other envs consume;
+      stepping draws (fading, BLER, delay samples) come from the global torch RNG.
+  "engine" (what make_engine uses by default, NRConfig.rng): every draw, reset and stepping, comes from the
+      engine's counter-based streams net.rng (proto/rng.py), keyed by (seed, env, episode, call), so the global
+      RNG never changes the network and each env's randomness depends only on its own history.
+
+Application constants: F (frame buffer), TIMEOUT (application deadline in control steps) and UL_PER_STEP (UL slots
+per control step) are the defaults of the constructor arguments fb, timeout and ul_per_step; engines read their
+own copies net.F, net.TIMEOUT and net.K.
 """
 import math
 from dataclasses import dataclass
 from typing import Optional
 
 import torch
+
+from .rng import STEP, SUBMIT, CounterRNG, check_mode
 
 UL_PER_STEP = 40            # 100 ms control step, TDD DDDSU at 30 kHz SCS: one UL slot per 2.5 ms
 S = 5                       # subbands of 10 PRBs (20 MHz carrier)
@@ -51,12 +62,15 @@ def l0dr_ranges(params):
     return {**L0DR_RANGES, **{k: tuple(map(float, v)) for k, v in (params or {}).items() if k in L0DR_RANGES}}
 
 
-def l0dr_draw(n, dr, kw):
-    """Per-env (mu, sig, p) of L0DR for n rows from generator kw; same ops as the fixed ranges before."""
+def l0dr_draw(n, dr, kw=None, rand=None):
+    """Per-env (mu, sig, p) of L0DR for n rows; same ops as the fixed ranges before. The three uniform vectors come
+    from torch.rand(n, **kw) or, if given, from rand(i) for i = 0, 1, 2."""
+    if rand is None:
+        rand = lambda i: torch.rand(n, **kw)            # noqa: E731
     (m0, m1), (s0, s1), (p0, p1) = dr["median_steps"], dr["log_sigma"], dr["loss"]
-    mu = math.log(m0) + (math.log(m1) - math.log(m0)) * torch.rand(n, **kw)
-    sig = s0 + (s1 - s0) * torch.rand(n, **kw)
-    p = (p1 - p0) * torch.rand(n, **kw)
+    mu = math.log(m0) + (math.log(m1) - math.log(m0)) * rand(0)
+    sig = s0 + (s1 - s0) * rand(1)
+    p = (p1 - p0) * rand(2)
     return mu, sig, (p if p0 == 0.0 else p0 + p)
 
 
@@ -75,6 +89,15 @@ def serve_fifo(rem, b):
     new = torch.diff(newcum, dim=-1, prepend=torch.zeros_like(newcum[..., :1]))
     fin = (rem > 0) & (new <= 1e-3)
     return torch.where(fin, torch.zeros_like(new), new), fin
+
+
+def next_pow2(n):
+    return 1 << max(0, int(n) - 1).bit_length()
+
+
+def resolve_seed(seed):
+    """Engine seed: the given int, or one drawn from the global torch RNG (as before)."""
+    return int(torch.randint(0, 2 ** 62, ()).item()) if seed is None else int(seed)
 
 
 def lookup_edges(device):
@@ -143,8 +166,8 @@ class Requests:
 class Radio:
     """Log-distance path loss from a gNB at the origin plus spatially correlated shadowing."""
 
-    def __init__(self, E, device, K=8, sigma=6.0, generator=None):
-        self.E, self.K, self.dev, self.gen = E, K, device, generator
+    def __init__(self, E, device, K=8, sigma=6.0, generator=None, rng=None):
+        self.E, self.K, self.dev, self.gen, self.rng = E, K, device, generator, rng
         self.k = torch.zeros(E, K, 2, device=device)
         self.phi = torch.zeros(E, K, device=device)
         self.amp = sigma * math.sqrt(2 / K)
@@ -156,11 +179,15 @@ class Radio:
         n = self.E if ids is None else ids.numel()
         if n == 0:
             return
-        kw = dict(device=self.dev, generator=self.gen)
-        ang = torch.rand(n, self.K, **kw) * 2 * math.pi
-        wl = 20 + 40 * torch.rand(n, self.K, **kw)
+        if self.rng is not None:        # engine streams: keyed by (env, episode), set by the engine's reset
+            rand = lambda i: self.rng.reset_uniform(ids, 10 + i, self.K)   # noqa: E731
+        else:
+            kw = dict(device=self.dev, generator=self.gen)
+            rand = lambda i: torch.rand(n, self.K, **kw)                     # noqa: E731
+        ang = rand(0) * 2 * math.pi
+        wl = 20 + 40 * rand(1)
         k = torch.stack([torch.cos(ang), torch.sin(ang)], -1) * (2 * math.pi / wl)[..., None]
-        phi = torch.rand(n, self.K, **kw) * 2 * math.pi
+        phi = rand(2) * 2 * math.pi
         fill_rows(self.k, ids, k)
         fill_rows(self.phi, ids, phi)
 
@@ -181,19 +208,21 @@ class NetBase:
     DTYPE = {"cap": torch.long, "cls": torch.long, "det": torch.bool, "hid": torch.long, "rem": torch.float32,
              "dlv": torch.float32, "f_nact": torch.long, "f_snr": torch.float32, "f_own": torch.long}
 
-    def __init__(self, E, R, device, sizes, seed=None):
+    def __init__(self, E, R, device, sizes, seed=None, fb=F, timeout=TIMEOUT, ul_per_step=UL_PER_STEP, rng="global"):
         self.E, self.R, self.dev = E, R, torch.device(device)
+        self.F, self.TIMEOUT, self.K = int(fb), int(timeout), int(ul_per_step)
+        assert self.F >= 1 and self.TIMEOUT >= 1 and self.K >= 1, (fb, timeout, ul_per_step)
         self.sizes = torch.tensor(sizes, device=self.dev, dtype=torch.float32)
         self.log_stats = False
         self.log_cap_max = 10 ** 9      # only log frames captured at or before this step (avoid censoring)
-        if seed is None:
-            seed = int(torch.randint(0, 2 ** 62, ()).item())
+        self.seed = resolve_seed(seed)
         self.gen = torch.Generator(device=self.dev)
-        self.gen.manual_seed(seed)
+        self.gen.manual_seed(self.seed)
+        self.rng = CounterRNG(self.seed, E, self.dev) if check_mode(rng) == "engine" else None
         self.radio = None
         E, R, d = self.E, self.R, self.dev
         for n in self.FIELDS:
-            setattr(self, n, torch.full((E, R, F), self.INIT[n], dtype=self.DTYPE[n], device=d))
+            setattr(self, n, torch.full((E, R, self.F), self.INIT[n], dtype=self.DTYPE[n], device=d))
         self.clock = torch.zeros(E, dtype=torch.long, device=d)
         self._last_snr = torch.zeros(E, R, device=d)
         self._last_hid = torch.zeros(E, dtype=torch.long, device=d)
@@ -207,9 +236,13 @@ class NetBase:
         ids = env_index(env_ids, self.E, self.dev)
         if ids is not None and ids.numel() == 0:
             return
+        if self.rng is not None:
+            self.rng.reset(ids)
         for n in self.FIELDS:
             fill_rows(getattr(self, n), ids, self.INIT[n])
         fill_rows(self.clock, ids, 0)
+        # _last_snr / _last_hid may alias the caller's tensors from the last step / submit: never write into them
+        self._last_snr, self._last_hid = self._last_snr.clone(), self._last_hid.clone()
         fill_rows(self._last_snr, ids, 0.0)
         fill_rows(self._last_hid, ids, 0)
         self._reset_state(ids)
@@ -252,7 +285,7 @@ class NetBase:
         """x is SNR [E,R] in dB, or positions [E,R,2|3] that go through the engine's Radio."""
         if x.dim() == 3:
             if self.radio is None:
-                self.radio = Radio(self.E, self.dev, generator=self.gen)
+                self.radio = Radio(self.E, self.dev, generator=self.gen, rng=self.rng)
             return self.radio.snr_db(x)
         return x
 
@@ -279,9 +312,11 @@ class NetBase:
 
     def _enqueue(self, t, send, det, hid, snr_db):
         count = self.queued()
-        new = (send > 0) & (count < F)
+        new = (send > 0) & (count < self.F)
         if self.log_stats:
-            self.stats["overflow"] += int(((send > 0) & (count >= F)).sum())
+            self.stats["overflow"] += int(((send > 0) & (count >= self.F)).sum())
+        if self.rng is not None:
+            self.rng.tick(SUBMIT)
         draws = self._arrival_draws()
         e, r = new.nonzero(as_tuple=True)
         if e.numel() == 0:
@@ -333,12 +368,14 @@ class NetBase:
         self._last_snr = snr_db
         if cur_hid is None:
             cur_hid = self._last_hid
+        if self.rng is not None:
+            self.rng.tick(STEP)
         fin = self._transmit(t, snr_db)
         delivered = (self.cap >= 0) & torch.isfinite(fin)
         capd = torch.where(delivered, self.cap, torch.full_like(self.cap, -1))
         newest = capd.max(-1).values
         det_env = (delivered & self.det & (self.hid == cur_hid[:, None, None])).flatten(1).any(-1)
-        timed = (self.cap >= 0) & ~delivered & ((t[:, None, None] + 1 - self.cap) >= TIMEOUT)
+        timed = (self.cap >= 0) & ~delivered & ((t[:, None, None] + 1 - self.cap) >= self.TIMEOUT)
         out = {"newest": newest, "det_env": det_env}
         if full:
             out.update(delivered=delivered, timed_out=timed, cap=self.cap.clone(), cls=self.cls.clone(),
@@ -364,7 +401,7 @@ class NetBase:
         return out
 
     def _compact(self):
-        key = (self.cap < 0).long() * F + torch.arange(F, device=self.dev)
+        key = (self.cap < 0).long() * self.F + torch.arange(self.F, device=self.dev)
         order = key.argsort(-1)
         for n in self.FIELDS:
             setattr(self, n, getattr(self, n).gather(-1, order))
@@ -375,10 +412,9 @@ class NetBase:
     def _transmit(self, t, snr_db):
         raise NotImplementedError
 
-    @staticmethod
-    def _finvals(t, k):
-        """Finish time of UL slot k of step t, [E,1,1] float32 (double add, then rounded, as float(t + (k+1)/40))."""
-        return (t.double() + (k + 1) / UL_PER_STEP).float()[:, None, None]
+    def _finvals(self, t, k):
+        """Finish time of UL slot k of step t, [E,1,1] float32 (double add, then rounded, as float(t + (k+1)/K))."""
+        return (t.double() + (k + 1) / self.K).float()[:, None, None]
 
     def collect(self):
         st = self.stats
@@ -389,9 +425,9 @@ class NetBase:
 class NetDelay(NetBase):
     """L0 / L0DR / L05: each frame gets a sampled delivery time at arrival, no queue interaction."""
 
-    def __init__(self, E, R, device, sizes, mode, params, seed=None):
+    def __init__(self, E, R, device, sizes, mode, params, seed=None, **app):
         self.mode, self.params = mode, params
-        super().__init__(E, R, device, sizes, seed=seed)
+        super().__init__(E, R, device, sizes, seed=seed, **app)
 
     def _alloc_state(self):
         E, d = self.E, self.dev
@@ -407,7 +443,8 @@ class NetDelay(NetBase):
     def _reset_state(self, ids):
         if self.mode == "L0DR":     # per-env randomized delay/loss, redrawn at reset
             n, kw = self._nrows(ids), dict(device=self.dev, generator=self.gen)
-            mu, sig, p = l0dr_draw(n, self.dr, kw)
+            rand = None if self.rng is None else (lambda i: self.rng.reset_uniform(ids, 1 + i))
+            mu, sig, p = l0dr_draw(n, self.dr, kw, rand)
             fill_rows(self.mu, ids, mu)
             fill_rows(self.sig, ids, sig)
             fill_rows(self.p, ids, p)
@@ -416,6 +453,8 @@ class NetDelay(NetBase):
         """Per-robot draws [E,R] for every submit (positional, so one env's arrivals never shift another's):
         z ~ N(0,1) and u1, u2 ~ U(0,1). L0/L0DR use z (delay) and u1 (loss); L05/L05Q use u1 (quantile), u2 (loss)."""
         E, R, d = self.E, self.R, self.dev
+        if self.rng is not None:
+            return self.rng.normal(SUBMIT, 0, R), self.rng.uniform(SUBMIT, 1, R), self.rng.uniform(SUBMIT, 2, R)
         return torch.randn(E, R, device=d), torch.rand(E, R, device=d), torch.rand(E, R, device=d)
 
     def _on_arrival(self, t, e, r, i, draws):
@@ -448,13 +487,13 @@ class NetDelay(NetBase):
 class NetFluid(NetBase):
     """L1: equal share of subbands among backlogged robots, no MAC state. params["eta"]: goodput factor."""
 
-    def __init__(self, E, R, device, sizes, params=None, seed=None):
+    def __init__(self, E, R, device, sizes, params=None, seed=None, **app):
         self.eta = float((params or {}).get("eta", L1_ETA))
-        super().__init__(E, R, device, sizes, seed=seed)
+        super().__init__(E, R, device, sizes, seed=seed, **app)
 
     def _transmit(self, t, snr_db):
         fin_t = torch.full_like(self.rem, float("inf"))
-        for k in range(UL_PER_STEP):
+        for k in range(self.K):
             q = self.rem.sum(-1)
             back = q > 0
             nb = back.sum(-1, keepdim=True).clamp(min=1).float()
@@ -489,7 +528,19 @@ class NetSlot(NetBase):
         for n, v in self.MAC_INIT.items():
             fill_rows(getattr(self, n), ids, v)
         n = self._nrows(ids)
-        fill_rows(self.h, ids, torch.randn(n, self.R, S, 2, device=self.dev, generator=self.gen) / math.sqrt(2))
+        fill_rows(self.h, ids, self._reset_h(ids, n, (self.R, S, 2)) / math.sqrt(2))
+
+    def _reset_h(self, ids, n, shape):
+        """N(0, 1) draws [n, *shape] for the fading state of reset rows."""
+        if self.rng is not None:
+            return self.rng.reset_normal(ids, 0, *shape)
+        return torch.randn(n, *shape, device=self.dev, generator=self.gen)
+
+    def _slot_draws(self, shape_h):
+        """Engine streams: fading innovations [E,K,*shape_h] and BLER uniforms [E,K,R] of this step (else None)."""
+        if self.rng is None:
+            return None, None
+        return self.rng.normal(STEP, 0, self.K, *shape_h), self.rng.uniform(STEP, 1, self.K, self.R)
 
     def _gain_db(self):
         return 10 * torch.log10((self.h ** 2).sum(-1).clamp(min=1e-6))
@@ -497,8 +548,9 @@ class NetSlot(NetBase):
     def _transmit(self, t, snr_db):
         fin_t = torch.full_like(self.rem, float("inf"))
         ar = self.ar
-        for k in range(UL_PER_STEP):
-            g = (t * UL_PER_STEP + k)[:, None]          # [E,1] env-clock slot index
+        nz_all, u_all = self._slot_draws((self.R, S, 2))
+        for k in range(self.K):
+            g = (t * self.K + k)[:, None]          # [E,1] env-clock slot index
             q = self.rem.sum(-1)
             # scheduling request for newly backlogged robots unknown to the gNB
             need_sr = (q > 0) & (self.bsr <= 0) & (self.sr_t < 0)
@@ -508,7 +560,8 @@ class NetSlot(NetBase):
             self.sr_t[granted] = -1
             # fading: gNB estimate from previous slot, transmission sees the new one
             gain_prev = self._gain_db()
-            self.h = RHO * self.h + math.sqrt(1 - RHO ** 2) * torch.randn_like(self.h) / math.sqrt(2)
+            nz = torch.randn_like(self.h) if nz_all is None else nz_all[:, k]
+            self.h = RHO * self.h + math.sqrt(1 - RHO ** 2) * nz / math.sqrt(2)
             gain_now = self._gain_db()
             bonus = 3.0 * self.hcnt          # chase-combining gain; retransmissions reuse the MCS
             est_db = snr_db[..., None] + gain_prev + self.olla[..., None]
@@ -537,7 +590,8 @@ class NetSlot(NetBase):
             act = snr_db[..., None] - split_db[..., None] + gain_now
             act_eff = (act * won).sum(-1) / nf + bonus
             p_ok = torch.sigmoid(1.5 * (act_eff - req_db(se)))
-            ok_tb = tx & (torch.rand_like(p_ok) < p_ok)
+            u = torch.rand_like(p_ok) if u_all is None else u_all[:, k]
+            ok_tb = tx & (u < p_ok)
             fail = tx & ~ok_tb
             served = torch.minimum(n * se * BYTES_PER_SE * ok_tb, q)
             self.rem, fin = serve_fifo(self.rem, served)
@@ -559,11 +613,12 @@ class NetSlot(NetBase):
         self.hcnt = torch.where(q > 0, self.hcnt, torch.zeros_like(self.hcnt))
 
 
-def make_net(rung, E, R, device, sizes, params=None, seed=None):
+def make_net(rung, E, R, device, sizes, params=None, seed=None, **app):
+    """Reference engine of `rung`. app: fb, timeout, ul_per_step, rng (see NetBase)."""
     if rung in ("L0", "L0DR", "L05", "L05Q"):
-        return NetDelay(E, R, device, sizes, rung, params, seed=seed)
+        return NetDelay(E, R, device, sizes, rung, params, seed=seed, **app)
     if rung == "L1":
-        return NetFluid(E, R, device, sizes, params, seed=seed)
+        return NetFluid(E, R, device, sizes, params, seed=seed, **app)
     if rung == "L2":
-        return NetSlot(E, R, device, sizes, seed=seed)
+        return NetSlot(E, R, device, sizes, seed=seed, **app)
     raise ValueError(rung)

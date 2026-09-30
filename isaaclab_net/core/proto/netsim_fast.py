@@ -17,10 +17,14 @@ Levels and backends
 Randomness
   L2 draws, per UL slot k, randn [E,R,S,2] (fading innovation) and rand [E,R] (BLER). NetDelay draws, per
   submit, randn [E,R] and two rand [E,R] (L0/L0DR: delay, loss; L05/L05Q: quantile, loss) for every robot and
-  uses the draws of robots that enqueue. All come from the default CUDA generator inside the graph
-  (graph-safe Philox) or, with inject=True, from static buffers filled by set_noise(...) so that tests can
-  feed the reference and this engine the same draws. Resets draw from the engine generator self.gen, exactly
-  as netsim does (same seed -> same reset draws as the reference).
+  uses the draws of robots that enqueue. With inject=True they come from static buffers filled by
+  set_noise(...) so that tests can feed the reference and this engine the same draws. Otherwise:
+    rng="engine"  the engine's counter-based streams (proto/rng.py), exactly the draws of the netsim reference
+                  with the same seed: pure functions of (seed, env, episode, call) computed inside the graph from
+                  device counters that submit / step advance before each replay, so graph == reference bitwise
+                  without injection. The triton backend hashes the same counters inside its kernel.
+    rng="global"  the default CUDA generator inside the graph (graph-safe Philox); triton uses its own Philox
+                  seed. Resets draw from the engine generator self.gen, exactly as netsim does.
 
 Partial resets
   reset(env_ids) runs eagerly between graph replays and only writes rows of the persistent buffers in place
@@ -41,6 +45,8 @@ import math
 import torch
 
 from . import netsim as _ns
+
+from .rng import STEP, SUBMIT, CounterRNG, check_mode
 
 UL_PER_STEP, S, BYTES_PER_SE, F = _ns.UL_PER_STEP, _ns.S, _ns.BYTES_PER_SE, _ns.F
 TIMEOUT, SR_DELAY, HARQ_RTT, HARQ_MAX = _ns.TIMEOUT, _ns.SR_DELAY, _ns.HARQ_RTT, _ns.HARQ_MAX
@@ -127,7 +133,9 @@ def fluid_body(rem, fin_t, snr_db, finv, eta=_ns.L1_ETA):
 
 def add_body(cap, cls, det, hid, rem, f_nact, f_snr, f_own, send, det_in, hid_in, snr_in, t, sizes):
     """Enqueue in place: each accepting robot writes its new frame into FIFO slot count[e,r].
-    O(E*R) gather/scatter at the write slot (robots that do not enqueue write their old value back)."""
+    O(E*R) gather/scatter at the write slot (robots that do not enqueue write their old value back).
+    The FIFO depth F is the last dimension of cap."""
+    F = cap.shape[-1]
     count = (cap >= 0).sum(-1)
     new = (send > 0) & (count < F)
     overflow = ((send > 0) & (count >= F)).sum()
@@ -172,12 +180,12 @@ def arrival_body(mode, new, send, count, nact, snr_in, t, z, u1, u2, lvl):
     return torch.where(lost, torch.full_like(d, INF), d)
 
 
-def finish_body(cap, cls, det, hid, rem, dlv, f_nact, f_snr, f_own, fin, t, cur_hid):
+def finish_body(cap, cls, det, hid, rem, dlv, f_nact, f_snr, f_own, fin, t, cur_hid, timeout=TIMEOUT):
     delivered = (cap >= 0) & torch.isfinite(fin)
     capd = torch.where(delivered, cap, torch.full_like(cap, -1))
     newest = capd.max(-1).values
     det_env = (delivered & det & (hid == cur_hid[:, None, None])).flatten(1).any(-1)
-    timed = (cap >= 0) & ~delivered & ((t[:, None, None] + 1 - cap) >= TIMEOUT)
+    timed = (cap >= 0) & ~delivered & ((t[:, None, None] + 1 - cap) >= timeout)
     delay = torch.where(delivered, fin - cap.float(), torch.full_like(fin, float("nan")))
     cap_out, cls_out = cap, cls
     gone = delivered | timed
@@ -212,21 +220,25 @@ class NetFast:
     MAC = _ns.NetSlot.MAC
     OUTS = ["newest", "det_env", "delivered", "timed", "delay", "cap_out", "cls_out"]
 
-    def __init__(self, rung, E, R, device, sizes, params=None, backend="graph", inject=False, seed=None):
+    def __init__(self, rung, E, R, device, sizes, params=None, backend="graph", inject=False, seed=None,
+                 fb=F, timeout=TIMEOUT, ul_per_step=UL_PER_STEP, rng="global"):
         assert rung in _ns.RUNGS, rung
         assert backend in ("eager", "graph", "compile", "triton")
         if backend == "triton" and rung not in ("L1", "L2"):
             raise ValueError(f"no triton kernel for {rung}; use graph")
         self.rung, self.mode = rung, rung
         self.E, self.R, self.dev = E, R, torch.device(device)
+        self.F, self.TIMEOUT, self.K = int(fb), int(timeout), int(ul_per_step)
+        assert self.F >= 1 and self.TIMEOUT >= 1 and self.K >= 1, (fb, timeout, ul_per_step)
+        F, K = self.F, self.K
         self.backend, self.inject, self.params = backend, inject, params
         self.sizes = torch.tensor(sizes, device=self.dev, dtype=torch.float32)
         self.log_stats = False
         self.log_cap_max = 10 ** 9      # only log frames captured at or before this step (avoid censoring)
-        if seed is None:
-            seed = int(torch.randint(0, 2 ** 62, ()).item())
+        self.seed = _ns.resolve_seed(seed)
         self.gen = torch.Generator(device=self.dev)
-        self.gen.manual_seed(seed)
+        self.gen.manual_seed(self.seed)
+        self.rng = CounterRNG(self.seed, E, self.dev) if check_mode(rng) == "engine" else None
         self.radio = None
         d = self.dev
         z = lambda shape, dt, v: torch.full(shape, v, dtype=dt, device=d)
@@ -276,18 +288,21 @@ class NetFast:
         self._accepted = z((E, R), torch.bool, False)
         self._fin = z((E, R, F), torch.float32, INF)
         self._overflow = torch.zeros((), dtype=torch.long, device=d)
-        self._kfrac = torch.tensor([(k + 1) / UL_PER_STEP for k in range(UL_PER_STEP)], dtype=torch.float64, device=d)
+        self._kfrac = torch.tensor([(k + 1) / K for k in range(K)], dtype=torch.float64, device=d)
         self._arR = torch.arange(R, device=d)
         self._arF = torch.arange(F, device=d)
         if inject:
             if rung == "L2":
-                self._nz = torch.zeros((UL_PER_STEP, E, R, S, 2), device=d)
-                self._u = torch.zeros((UL_PER_STEP, E, R), device=d)
+                self._nz = torch.zeros((K, E, R, S, 2), device=d)
+                self._u = torch.zeros((K, E, R), device=d)
             elif rung in DELAY_RUNGS:
                 self._z = torch.zeros((E, R), device=d)
                 self._u1 = torch.zeros((E, R), device=d)
                 self._u2 = torch.zeros((E, R), device=d)
-        self._seed = torch.randint(0, 2 ** 30, (), dtype=torch.long).to(d)   # Philox seed for the triton backend
+        if self.rng is None:     # Philox seed for the triton backend (global mode draws it from the global RNG)
+            self._seed = torch.randint(0, 2 ** 30, (), dtype=torch.long).to(d)
+        else:
+            self._seed = torch.zeros((), dtype=torch.long, device=d)
         if backend == "compile":
             # static shapes: one specialization per (E, R); allow many sizes in one process
             torch._dynamo.config.recompile_limit = max(torch._dynamo.config.recompile_limit, 256)
@@ -309,6 +324,8 @@ class NetFast:
         ids = env_index(env_ids, self.E, self.dev)
         if ids is not None and ids.numel() == 0:
             return
+        if self.rng is not None:
+            self.rng.reset(ids)
         for n in self.FIELDS:
             fill_rows(getattr(self, n), ids, self.INIT[n])
         fill_rows(self.clock, ids, 0)
@@ -319,9 +336,12 @@ class NetFast:
         if self.rung == "L2":
             for name, v in _ns.NetSlot.MAC_INIT.items():
                 fill_rows(getattr(self, name), ids, v)
-            fill_rows(self.h, ids, torch.randn(n, self.R, S, 2, **kw) / math.sqrt(2))
+            h0 = (torch.randn(n, self.R, S, 2, **kw) if self.rng is None
+                  else self.rng.reset_normal(ids, 0, self.R, S, 2))
+            fill_rows(self.h, ids, h0 / math.sqrt(2))
         elif self.rung == "L0DR":
-            mu, sig, p = _ns.l0dr_draw(n, self._dr, kw)
+            rand = None if self.rng is None else (lambda i: self.rng.reset_uniform(ids, 1 + i))
+            mu, sig, p = _ns.l0dr_draw(n, self._dr, kw, rand)
             fill_rows(self.mu, ids, mu)
             fill_rows(self.sig, ids, sig)
             fill_rows(self.p, ids, p)
@@ -369,6 +389,8 @@ class NetFast:
             self._hid_in.copy_(req.hid)
         self._last_hid.copy_(self._hid_in)
         self._snr_add.copy_(self._last_snr if snr_db is None else snr_db)
+        if self.rng is not None:
+            self.rng.tick(SUBMIT)
         self._run("add")
         if self.log_stats:
             self.stats["overflow"] += int(self._overflow)
@@ -394,6 +416,8 @@ class NetFast:
         self._snr.copy_(snr)
         self._last_snr.copy_(snr)
         self._cur_hid.copy_(self._last_hid if cur_hid is None else cur_hid)
+        if self.rng is not None:
+            self.rng.tick(STEP)
         self._run("step")
         if self.log_stats:
             st, cap = self.stats, pre["cap"]
@@ -427,6 +451,8 @@ class NetFast:
             E, R, d = self.E, self.R, self.dev
             if self.inject:
                 z, u1, u2 = self._z, self._u1, self._u2
+            elif self.rng is not None:
+                z, u1, u2 = self.rng.normal(SUBMIT, 0, R), self.rng.uniform(SUBMIT, 1, R), self.rng.uniform(SUBMIT, 2, R)
             else:
                 z = torch.randn(E, R, device=d)
                 u1 = torch.rand(E, R, device=d)
@@ -446,14 +472,14 @@ class NetFast:
                 fin = self._fin
             else:
                 rem, fin = self.rem, torch.full_like(self.rem, INF)
-                for k in range(UL_PER_STEP):
+                for k in range(self.K):
                     rem, fin = self._fluid(rem, fin, self._snr, finvals[:, k, None, None], self._eta)
                 self.rem.copy_(rem)
         else:
             ok = (self.cap >= 0) & (self.dlv < (t + 1)[:, None, None])
             fin = torch.where(ok, self.dlv, torch.full_like(self.dlv, INF))
         fields, outs = self._finish(self.cap, self.cls, self.det, self.hid, self.rem, self.dlv, self.f_nact,
-                                    self.f_snr, self.f_own, fin, t, self._cur_hid)
+                                    self.f_snr, self.f_own, fin, t, self._cur_hid, self.TIMEOUT)
         for name, v in zip(self.OUTS, outs):          # outputs first: cap_out/cls_out may alias self.cap/self.cls
             getattr(self, "_" + name).copy_(v)
         for name, v in zip(self.FIELDS, fields):
@@ -472,15 +498,21 @@ class NetFast:
         E, R, d = self.E, self.R, self.dev
         if self.backend == "triton":
             from .triton_slot import launch
-            self._seed.add_(1)
+            if self.rng is None:
+                self._seed.add_(1)
             launch(self, self.inject)                       # updates MAC state and rem in place, writes _fin
             return self._fin
-        gbase = t * UL_PER_STEP
+        gbase = t * self.K
         st = (self.rem, self.bsr, self.sr_t, self.avg, self.olla, self.wait, self.hcnt, self.h,
               torch.full_like(self.rem, INF))
-        for k in range(UL_PER_STEP):
+        nz_all = u_all = None
+        if self.rng is not None and not self.inject:
+            nz_all, u_all = self.rng.normal(STEP, 0, self.K, R, S, 2), self.rng.uniform(STEP, 1, self.K, R)
+        for k in range(self.K):
             if self.inject:
                 nz, u = self._nz[k], self._u[k]
+            elif nz_all is not None:
+                nz, u = nz_all[:, k], u_all[:, k]
             else:
                 nz = torch.randn(E, R, S, 2, device=d)
                 u = torch.rand(E, R, device=d)
@@ -545,12 +577,13 @@ class NetFast:
 class NetSlotFast(NetFast):
     """L2 (kept for backward compatibility with the original constructor signature)."""
 
-    def __init__(self, E, R, device, sizes, backend="compile", inject=False, seed=None):
-        super().__init__("L2", E, R, device, sizes, backend=backend, inject=inject, seed=seed)
+    def __init__(self, E, R, device, sizes, backend="compile", inject=False, seed=None, **app):
+        super().__init__("L2", E, R, device, sizes, backend=backend, inject=inject, seed=seed, **app)
 
 
-def make_net_fast(rung, E, R, device, sizes, params=None, backend="compile", inject=False, seed=None):
-    """Any level on any backend. backend="reference" (or "orig") returns the eager netsim engine."""
+def make_net_fast(rung, E, R, device, sizes, params=None, backend="compile", inject=False, seed=None, **app):
+    """Any level on any backend. backend="reference" (or "orig") returns the eager netsim engine.
+    app: fb, timeout, ul_per_step, rng (see netsim.NetBase)."""
     if backend in ("reference", "orig"):
-        return _ns.make_net(rung, E, R, device, sizes, params, seed=seed)
-    return NetFast(rung, E, R, device, sizes, params=params, backend=backend, inject=inject, seed=seed)
+        return _ns.make_net(rung, E, R, device, sizes, params, seed=seed, **app)
+    return NetFast(rung, E, R, device, sizes, params=params, backend=backend, inject=inject, seed=seed, **app)

@@ -48,11 +48,13 @@ def fading_rho_from_speed(speed_mps, carrier_ghz=3.5, anchor_ms=2.5):
 
 
 # NRConfig fields by the part of the package that reads them (see fields_read_by / unused_fields). The prototype
-# levels, the surrogates and the bounds read only APP (and their own level block); their radio is the fixed legacy
-# one. The channel fields (radio group) are read by radio.RadioMC, which L2 and NetSlotMC use; per-robot Doppler
-# (fading_doppler) needs the NR engine's fading, so it sits in the NR group.
+# levels, the surrogates and the bounds read only APP and PROTO (and their own level block); their radio is the fixed
+# legacy one. The channel fields (radio group) are read by radio.RadioMC, which L2 and NetSlotMC use; per-robot Doppler
+# (fading_doppler) needs the NR engine's fading, so it sits in the NR group. The NR engine (L2) reads APP but not
+# PROTO (its step draws use the global RNG; its slots per step come from the numerology and TDD pattern).
 FIELD_GROUPS = {
-    "app": ("control_step_ms", "frame_buffer", "timeout_steps", "msg_sizes", "edge"),
+    "app": ("control_step_ms", "frame_buffer", "timeout_steps", "msg_sizes", "edge", "seed"),
+    "proto": ("rng", "proto_ul_slots_per_step"),
     "l0": ("l0_delay_median_steps", "l0_delay_log_sigma", "l0_loss"),
     "l0dr": ("dr_delay_median_steps", "dr_delay_log_sigma", "dr_loss"),
     "l1": ("l1_eta",),
@@ -87,11 +89,11 @@ TR38901_SHORT = {"tr38901_rma": "RMa", "tr38901_uma": "UMa", "tr38901_umi": "UMi
 
 def fields_read_by(level, cfg=None):
     """NRConfig fields that the engine make_engine(level, ..., cfg) actually reads."""
-    groups = {"L0": ("app", "l0"), "L0DR": ("app", "l0dr"), "L1": ("app", "l1"),
-              "L2": ("app", "frame", "nr", "link", "radio", "multicell", "nr_multicell", "traffic")}.get(level,
-                                                                                                     ("app",))
+    groups = {"L0": ("app", "proto", "l0"), "L0DR": ("app", "proto", "l0dr"), "L1": ("app", "proto", "l1"),
+              "L2": ("app", "frame", "nr", "link", "radio", "multicell", "nr_multicell", "traffic")}.get(
+        level, ("app", "proto"))
     if level == "L2-legacy" and cfg is not None and not cfg.is_legacy_cell():
-        groups = ("app", "frame", "link", "radio", "multicell")        # NetSlotMC
+        groups = ("app", "proto", "frame", "link", "radio", "multicell")        # NetSlotMC
     read = {f for g in groups for f in FIELD_GROUPS[g]}
     if cfg is not None and cfg.traffic is not None and not any(m.generates for m in cfg.traffic):
         read.add("traffic")            # policy() only: the submit() path every level has
@@ -315,6 +317,15 @@ class NRConfig:
     dr_delay_log_sigma: tuple = (0.2, 1.2)        # L0DR: per-env sigma of the log delay, uniform
     dr_loss: tuple = (0.0, 0.2)                   # L0DR: per-env loss probability, uniform
     l1_eta: float = 0.9                  # L1: goodput factor on 0.75 log2(1 + SNR) (all backends, triton included)
+    # ---- randomness and prototype timing ----
+    seed: int | None = None              # engine seed (make_engine(seed=...) overrides it); None = drawn from the
+                                         # global torch RNG at construction
+    rng: str = "engine"                  # prototype, surrogate and bound levels: "engine" = every draw from the
+                                         # engine's counter-based streams keyed by (seed, env, episode, call), so a
+                                         # policy's use of the global RNG never changes the network; "global" = the
+                                         # earlier behavior (stepping draws from the global torch RNG)
+    proto_ul_slots_per_step: int | None = None   # prototype levels (L1, L2-legacy, QA): UL slots per control step;
+                                                 # None = control_step_ms / 2.5 ms (the legacy DDDSU UL spacing)
     # ---- edge-computing loop (core/edge.py): make_engine wraps any level in EdgeLoop when set ----
     edge: EdgeConfig | None = None
 
@@ -343,6 +354,9 @@ class NRConfig:
         assert 0 < self.dr_delay_median_steps[0] <= self.dr_delay_median_steps[1]
         assert self.dr_delay_log_sigma[0] <= self.dr_delay_log_sigma[1] and 0 <= self.dr_loss[0] <= self.dr_loss[1] <= 1
         assert self.l0_delay_median_steps > 0 and 0 <= self.l0_loss <= 1 and self.l1_eta > 0
+        assert self.rng in ("engine", "global"), "rng must be 'engine' or 'global'"
+        assert self.frame_buffer >= 1 and self.timeout_steps >= 1 and self.control_step_ms > 0
+        assert self.proto_ul_slots_per_step is None or self.proto_ul_slots_per_step >= 1
         if self.ue_speed_mps is not None:
             self.fading_rho_per_ms = fading_rho_from_speed(self.ue_speed_mps, self.carrier_ghz)
         if self.channel in TR38901_SHORT:
@@ -402,6 +416,18 @@ class NRConfig:
     def slots_per_step(self):
         n = self.control_step_ms / self.slot_ms
         assert abs(n - round(n)) < 1e-9, "control step must be a whole number of slots"
+        return int(round(n))
+
+    @property
+    def proto_slots_per_step(self):
+        """UL slots per control step of the prototype levels: proto_ul_slots_per_step, or control_step_ms / 2.5 ms
+        (100 ms -> 40, the prototype value; 50 ms -> 20)."""
+        if self.proto_ul_slots_per_step is not None:
+            return int(self.proto_ul_slots_per_step)
+        n = self.control_step_ms / 2.5
+        if abs(n - round(n)) > 1e-9 or round(n) < 1:
+            raise ValueError(f"control_step_ms={self.control_step_ms} is not a whole number of 2.5 ms UL slots; set "
+                             "proto_ul_slots_per_step for the prototype levels")
         return int(round(n))
 
     def slot_symbols(self, pos):

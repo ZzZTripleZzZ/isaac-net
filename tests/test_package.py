@@ -26,7 +26,7 @@ MODULES = [
     "isaaclab_net.bridges.ns3_offline.replay_error", "isaaclab_net.bridges.ns3_offline.lena_replay",
     "isaaclab_net.tools", "isaaclab_net.tools.extract_lena_tables",
     "isaaclab_net.core.levels", "isaaclab_net.core.levels.base", "isaaclab_net.core.levels.surrogates",
-    "isaaclab_net.core.levels.bounds", "isaaclab_net.tools.fit_levels",
+    "isaaclab_net.core.levels.bounds", "isaaclab_net.tools.fit_levels", "isaaclab_net.core.proto.rng",
 ]
 
 
@@ -84,7 +84,7 @@ def test_make_engine_rejects_bad_requests():
     with pytest.raises(NotImplementedError):
         make_engine("L2", 2, 2, backend="graph")
     with pytest.raises(ValueError):
-        make_engine("L1", 2, 2, config=NRConfig(frame_buffer=32))
+        make_engine("L1", 2, 2, config=NRConfig(control_step_ms=33.0))     # not a whole number of UL slots
     with pytest.raises(ValueError):
         make_engine("L1", 2, 2, config=NRConfig(noise_model="thermal"))
     with pytest.raises(ValueError):

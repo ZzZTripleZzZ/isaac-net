@@ -39,7 +39,7 @@ import torch
 
 from .channels import install_per_robot_fading, rho_per_ms_from_speed
 from .config import NRConfig
-from .levels import BOUND_LEVELS, SURROGATE_LEVELS, make_level
+from .levels import BOUND_LEVELS, SURROGATE_LEVELS, fit_app, make_level
 from .nr_engine import NRNet
 from .proto import netsim as _proto
 from .radio import RadioMC
@@ -53,14 +53,15 @@ FAST_BACKENDS = ("eager", "graph", "compile", "triton")
 BACKENDS = ("reference",) + FAST_BACKENDS
 
 
+def _proto_app(cfg: NRConfig):
+    """Application constants and RNG mode of the prototype, surrogate and bound levels (constructor kwargs)."""
+    return {"fb": cfg.frame_buffer, "timeout": cfg.timeout_steps, "ul_per_step": cfg.proto_slots_per_step,
+            "rng": cfg.rng}
+
+
 def _check_proto_config(level, cfg: NRConfig):
-    """The prototype levels are compiled around fixed constants; refuse a config that asks for something else."""
-    want = {"frame_buffer": _proto.F, "timeout_steps": _proto.TIMEOUT, "control_step_ms": 100.0}
-    bad = {k: (getattr(cfg, k), v) for k, v in want.items() if getattr(cfg, k) != v}
-    if bad:
-        raise ValueError(f"level {level} has fixed {', '.join(f'{k}={v[1]}' for k, v in bad.items())}; "
-                         f"the config asks for {', '.join(f'{k}={v[0]}' for k, v in bad.items())}. "
-                         "Use level 'L2' for a configurable engine.")
+    """What the prototype levels cannot honor: multi-cell (except L2-legacy) and non-legacy radio (L1, QA)."""
+    cfg.proto_slots_per_step          # raises if the control step is not a whole number of UL slots
     if level != "L2-legacy" and cfg.n_cells != 1:
         raise ValueError(f"level {level} is single-cell; multi-cell runs on 'L2' or 'L2-legacy'")
     if level in ("L1", "QA") and not cfg.is_legacy_cell():
@@ -111,11 +112,13 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     """Build the network engine of fidelity `level` for E envs x R robots.
 
     config: NRConfig shared by every module (default NRConfig()); the prototype levels read only its application
-      fields (frame_buffer, timeout_steps, control_step_ms, msg_sizes) and check that they match their constants.
+      fields (frame_buffer, timeout_steps, control_step_ms -> UL slots per step, msg_sizes) and rng / seed.
     sizes: override of config.msg_sizes. params: fitted parameters of L0 ({"mu", "sig", "p"}) and L05 / L05Q
       ({"q", "pdrop"}); for TR / GE / QA / NN a fit file path, a fit-file dict or the level's own dict (see
-      levels.load_level_params). seed: engine generator (reset draws); stepping draws come from the global
-      torch RNG.
+      levels.load_level_params). seed: overrides config.seed. With config.rng = "engine" (default) every draw of
+      the prototype, surrogate and bound levels comes from the engine's streams seeded by it (proto/rng.py);
+      with "global", reset draws use the engine generator and stepping draws the global torch RNG. The NR engine
+      (L2) seeds its generator with it; its stepping draws still use the global RNG.
     inject: fast backends only, take the per-slot random draws from set_noise(...) (equivalence tests).
     strict: raise if the config sets fields away from their defaults that this level ignores
       (config.unused_fields(level)); by default they are ignored silently.
@@ -138,6 +141,8 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     if level != "L2":
         _check_traffic(level, cfg)
     params = _level_params(level, cfg, params)
+    if seed is None:
+        seed = cfg.seed
     if level == "L2":
         if backend != "reference":
             raise NotImplementedError(f"backend {backend!r} is not available for the NR engine yet (follow-up); use "
@@ -147,21 +152,23 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     if level in SURROGATE_LEVELS + BOUND_LEVELS:
         if backend not in ("reference", "eager", "graph"):
             raise NotImplementedError(f"level {level} has the backends 'reference' and 'graph', not {backend!r}")
-        net = make_level(level, E, R, device, sizes, params, backend=backend, inject=inject, seed=seed)
+        net = make_level(level, E, R, device, sizes, params, backend=backend, inject=inject, seed=seed,
+                         app=fit_app(cfg), **_proto_app(cfg))
         net.config = cfg
         return net
     if level == "L2-legacy" and not cfg.is_legacy_cell():
         if backend != "reference":
             raise NotImplementedError("the multi-cell legacy engine (NetSlotMC) has only the reference backend")
         from .proto.netsim_mc import NetSlotMC
-        net = NetSlotMC(E, R, device, sizes, cfg, seed=seed)
+        net = NetSlotMC(E, R, device, sizes, cfg, seed=seed, **_proto_app(cfg))
     else:
         rung = "L2" if level == "L2-legacy" else level
         if backend == "reference":
-            net = _proto.make_net(rung, E, R, device, sizes, params, seed=seed)
+            net = _proto.make_net(rung, E, R, device, sizes, params, seed=seed, **_proto_app(cfg))
         else:
             from .proto.netsim_fast import NetFast
-            net = NetFast(rung, E, R, device, sizes, params=params, backend=backend, inject=inject, seed=seed)
+            net = NetFast(rung, E, R, device, sizes, params=params, backend=backend, inject=inject, seed=seed,
+                          **_proto_app(cfg))
     net.level, net.config = level, cfg
     return net
 
@@ -421,8 +428,8 @@ class NREngine:
             self.T = 0
             self.epoch.zero_()
             self._uniform_epoch = 0
-            self._last_snr.zero_()
-            self._last_hid.zero_()
+            self._last_snr = torch.zeros_like(self._last_snr)     # may alias the caller's tensors: replace
+            self._last_hid = torch.zeros_like(self._last_hid)
             if self.radio is not None:
                 self.radio.reset(None)
             return
@@ -431,8 +438,8 @@ class NREngine:
         self.net.reset(ids)
         self.epoch.index_fill_(0, ids, self.T)
         self._uniform_epoch = None
-        self._last_snr.index_fill_(0, ids, 0.0)
-        self._last_hid.index_fill_(0, ids, 0)
+        self._last_snr = self._last_snr.clone().index_fill_(0, ids, 0.0)
+        self._last_hid = self._last_hid.clone().index_fill_(0, ids, 0)
         if self.radio is not None:
             self.radio.reset(ids)
 

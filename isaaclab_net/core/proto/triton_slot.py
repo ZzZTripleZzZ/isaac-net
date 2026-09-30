@@ -5,10 +5,18 @@ One program per env; robots x subbands (and robots x frame slots) live in regist
 so state is read and written once per control step instead of ~100 times per slot.
 Semantics follow netsim.NetSlot._transmit (audited version). Math uses libdevice (same CUDA math library
 as ATen), but reduction/scan orders differ, so results agree with NetSlot to float rounding, not bitwise.
+
+The frame buffer F, the UL slots per step K and the random-number mode are compile-time constants; FB is F
+rounded up to a power of two (tl.arange needs one) and the extra lanes are masked. RNG: 0 = injected draws,
+1 = in-kernel Philox with the engine's _seed (rng="global"), 2 = the engine's counter-based streams of
+proto/rng.py hashed in the kernel (rng="engine"; the same uniforms as the reference, normals to rounding).
 """
 import triton
 import triton.language as tl
 from triton.language.extra import libdevice
+
+from . import rng as _rng
+from . import rng_triton as _rt
 
 
 @triton.jit
@@ -19,9 +27,9 @@ def _se(x, SE_MIN: tl.constexpr, SE_MAX: tl.constexpr):
 
 @triton.jit
 def slot_loop_kernel(rem_ptr, bsr_ptr, srt_ptr, avg_ptr, olla_ptr, wait_ptr, hcnt_ptr, h_ptr,
-                     snr_ptr, fin_ptr, nz_ptr, u_ptr, t_ptr, seed_ptr, E, R,
-                     RB: tl.constexpr, FB: tl.constexpr, SB: tl.constexpr, S_: tl.constexpr,
-                     K: tl.constexpr, INJECT: tl.constexpr,
+                     snr_ptr, fin_ptr, nz_ptr, u_ptr, t_ptr, seed_ptr, ep_ptr, ctr_ptr, s0, chs, st_n, st_u, E, R,
+                     RB: tl.constexpr, FB: tl.constexpr, F_: tl.constexpr, SB: tl.constexpr, S_: tl.constexpr,
+                     K: tl.constexpr, RNG: tl.constexpr,
                      RHO: tl.constexpr, C1: tl.constexpr, SQ2: tl.constexpr, BYTES: tl.constexpr,
                      SE_MIN: tl.constexpr, SE_MAX: tl.constexpr, SR_DELAY: tl.constexpr,
                      HARQ_RTT: tl.constexpr, HARQ_MAX: tl.constexpr, RLC_EXTRA: tl.constexpr,
@@ -33,10 +41,17 @@ def slot_loop_kernel(rem_ptr, bsr_ptr, srt_ptr, avg_ptr, olla_ptr, wait_ptr, hcn
     s = tl.arange(0, SB)
     sm = s < S_
     er = e * R + r
-    o_rf = er[:, None] * FB + f[None, :]
-    m_rf = rm[:, None] & (f[None, :] < FB)
+    o_rf = er[:, None] * F_ + f[None, :]
+    m_rf = rm[:, None] & (f[None, :] < F_)
     o_rs = er[:, None] * (S_ * 2) + s[None, :] * 2
     m_rs = rm[:, None] & sm[None, :]
+    if RNG == 2:
+        ep = _rt.u32(tl.load(ep_ptr + e))
+        ctr = _rt.u32(tl.load(ctr_ptr + e))
+        env = _rt.u32(e)
+        base_n = _rt.key(_rt.u32(s0), env, ep, _rt.u32(chs), ctr, _rt.u32(st_n))
+        base_u = _rt.key(_rt.u32(s0), env, ep, _rt.u32(chs), ctr, _rt.u32(st_u))
+        i_rs = (r[:, None] * S_ + s[None, :]) * 2          # within-env index of (r, s, re) in [K,R,S,2]
 
     rem = tl.load(rem_ptr + o_rf, mask=m_rf, other=0.0)
     bsr = tl.load(bsr_ptr + er, mask=rm, other=0.0)
@@ -62,10 +77,14 @@ def slot_loop_kernel(rem_ptr, bsr_ptr, srt_ptr, avg_ptr, olla_ptr, wait_ptr, hcn
         bsr = tl.where(granted, tl.maximum(bsr, 1.0), bsr)
         sr_t = tl.where(granted, -1, sr_t)
         gain_prev = 10.0 * libdevice.log10(tl.maximum(hr * hr + hi * hi, 1e-6))
-        if INJECT:
+        if RNG == 0:
             no = k * (ER * S_ * 2) + o_rs
             nr = tl.load(nz_ptr + no, mask=m_rs, other=0.0)
             ni = tl.load(nz_ptr + no + 1, mask=m_rs, other=0.0)
+        elif RNG == 2:
+            ik = k * (R * S_ * 2) + i_rs
+            nr = _rt.normal(base_n, ik)
+            ni = _rt.normal(base_n, ik + 1)
         else:
             no = (k * (ER * S_ * 2) + o_rs).to(tl.int32)
             nr = tl.randn(seed, no)
@@ -99,8 +118,10 @@ def slot_loop_kernel(rem_ptr, bsr_ptr, srt_ptr, avg_ptr, olla_ptr, wait_ptr, hcn
         act_eff = tl.sum(act * wf, axis=1) / nf + 3.0 * hcnt
         req = 10.0 * libdevice.log10(libdevice.exp2(se / 0.75) - 1.0)
         p_ok = 1.0 / (1.0 + libdevice.exp(-(1.5 * (act_eff - req))))
-        if INJECT:
+        if RNG == 0:
             u = tl.load(u_ptr + k * ER + er, mask=rm, other=1.0)
+        elif RNG == 2:
+            u = _rt.uniform(base_u, k * R + r)
         else:
             u = tl.rand(seed, (K * ER * S_ * 2 + k * ER + er).to(tl.int32))
         ok_tb = tx & (u < p_ok)
@@ -145,11 +166,15 @@ def launch(net, inject):
     RB = max(16, triton.next_power_of_2(R))
     nw = 8 if RB >= 128 else (4 if RB >= 64 else 2)
     dummy = net.bsr
+    mode = 0 if inject else (1 if net.rng is None else 2)
+    ep = net.rng.episode if mode == 2 else net.sr_t
+    ctr = net.rng.ctr[_rng.STEP] if mode == 2 else net.sr_t
+    s0 = net.rng.s0 if mode == 2 else 0
     slot_loop_kernel[(E,)](
         net.rem, net.bsr, net.sr_t, net.avg, net.olla, net.wait, net.hcnt, net.h,
         net._snr, net._fin, net._nz if inject else dummy, net._u if inject else dummy,
-        net._t, net._seed, E, R,
-        RB=RB, FB=ns.F, SB=8, S_=ns.S, K=ns.UL_PER_STEP, INJECT=inject,
+        net._t, net._seed, ep, ctr, s0, _rng.salt(_rng.STEP), _rng.salt(0), _rng.salt(1), E, R,
+        RB=RB, FB=ns.next_pow2(net.F), F_=net.F, SB=8, S_=ns.S, K=net.K, RNG=mode,
         RHO=ns.RHO, C1=math.sqrt(1 - ns.RHO ** 2), SQ2=math.sqrt(2), BYTES=ns.BYTES_PER_SE,
         SE_MIN=ns.SE_MIN, SE_MAX=ns.SE_MAX, SR_DELAY=ns.SR_DELAY, HARQ_RTT=ns.HARQ_RTT,
         HARQ_MAX=ns.HARQ_MAX, RLC_EXTRA=ns.RLC_EXTRA, PF_A=1 - 1 / ns.PF_T, PF_B=1 / ns.PF_T, PF_MIN=ns.PF_AVG_MIN,
@@ -158,7 +183,7 @@ def launch(net, inject):
 
 @triton.jit
 def fluid_loop_kernel(rem_ptr, snr_ptr, fin_ptr, t_ptr, R,
-                      RB: tl.constexpr, FB: tl.constexpr, K: tl.constexpr, S_: tl.constexpr,
+                      RB: tl.constexpr, FB: tl.constexpr, F_: tl.constexpr, K: tl.constexpr, S_: tl.constexpr,
                       BYTES: tl.constexpr, SE_MAX: tl.constexpr, ETA: tl.constexpr):
     """L1 fluid model (netsim.NetFluid._transmit): equal subband share among backlogged robots."""
     e = tl.program_id(0).to(tl.int64)
@@ -166,8 +191,8 @@ def fluid_loop_kernel(rem_ptr, snr_ptr, fin_ptr, t_ptr, R,
     rm = r < R
     f = tl.arange(0, FB)
     er = e * R + r
-    o_rf = er[:, None] * FB + f[None, :]
-    m_rf = rm[:, None] & (f[None, :] < FB)
+    o_rf = er[:, None] * F_ + f[None, :]
+    m_rf = rm[:, None] & (f[None, :] < F_)
     rem = tl.load(rem_ptr + o_rf, mask=m_rf, other=0.0)
     snr = tl.load(snr_ptr + er, mask=rm, other=0.0)
     t = tl.load(t_ptr + e)
@@ -199,5 +224,5 @@ def launch_fluid(net):
     RB = max(16, triton.next_power_of_2(net.R))
     nw = 8 if RB >= 128 else (4 if RB >= 64 else 2)
     fluid_loop_kernel[(net.E,)](net.rem, net._snr, net._fin, net._t, net.R,
-                                RB=RB, FB=ns.F, K=ns.UL_PER_STEP, S_=ns.S, BYTES=ns.BYTES_PER_SE,
+                                RB=RB, FB=ns.next_pow2(net.F), F_=net.F, K=net.K, S_=ns.S, BYTES=ns.BYTES_PER_SE,
                                 SE_MAX=ns.SE_MAX, ETA=net._eta, num_warps=nw)

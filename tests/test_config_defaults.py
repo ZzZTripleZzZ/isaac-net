@@ -34,7 +34,7 @@ def test_l0dr_default_ranges_are_bitwise_the_old_draws():
 
 
 def test_l0dr_engine_defaults_match_and_ranges_apply():
-    a = make_engine("L0DR", E, R, "cpu", seed=5)
+    a = make_engine("L0DR", E, R, "cpu", NRConfig(rng="global"), seed=5)     # reset draws from the engine generator
     g = torch.Generator().manual_seed(5)
     mu, sig, p = _old_l0dr_draw(E, g)
     assert torch.equal(a.mu, mu) and torch.equal(a.sig, sig) and torch.equal(a.p, p)

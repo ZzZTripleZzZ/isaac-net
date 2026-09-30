@@ -85,7 +85,7 @@ def test_l2_legacy_equals_prototype_netslot(seeded):
     torch.manual_seed(7)
     a = make_engine("L2-legacy", E, R, "cpu", seed=11)
     torch.manual_seed(7)
-    b = netsim.make_net("L2", E, R, "cpu", (4000.0, 30000.0), seed=11)
+    b = netsim.make_net("L2", E, R, "cpu", (4000.0, 30000.0), seed=11, rng="engine")
     assert type(a) is netsim.NetSlot
     g1, g2 = torch.Generator().manual_seed(1), torch.Generator().manual_seed(1)
     torch.manual_seed(8)

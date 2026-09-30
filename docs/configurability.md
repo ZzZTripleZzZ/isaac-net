@@ -4,7 +4,7 @@ Users should be able to choose the network model they train against, not inherit
 
 ## How configuration works today
 
-One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module, and `make_engine(level, E, R, device, config, backend)` builds every fidelity level. The configurable NR engine (`L2`) reads almost all of it. The other levels read much less. The prototype levels (`L0` to `L1`, `L2-legacy`), the fitted surrogates and the bounds read only the application fields, and they refuse a config whose frame buffer, timeout or control step differs from their compiled constants. `L2-legacy` with more than one cell or thermal noise runs `NetSlotMC`, which reads the radio, cell, power-control and handover fields but none of the NR MAC fields. `L2` reads those cell fields too, plus `dl_interference`. Until this branch, a field that a level does not read was ignored without notice. For example, `make_engine("L0", config=NRConfig(pathloss_exp=3.0))` runs with the fixed legacy radio, and `make_engine("L2-legacy", config=NRConfig(olla_up_db=0.1))` runs with the legacy OLLA steps. `NRConfig.unused_fields(level)` now lists such fields and `make_engine(..., strict=True)` refuses them (see the last section).
+One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module, and `make_engine(level, E, R, device, config, backend)` builds every fidelity level. The configurable NR engine (`L2`) reads almost all of it. The other levels read much less. The prototype levels (`L0` to `L1`, `L2-legacy`), the fitted surrogates and the bounds read only the application fields (frame buffer, timeout, control step and UL slots per step, message sizes) and the randomness fields (`seed`, `rng`); since `feat/protolevels` they accept any values of these (see "Engine-owned randomness and the application constants"). `L2-legacy` with more than one cell or thermal noise runs `NetSlotMC`, which reads the radio, cell, power-control and handover fields but none of the NR MAC fields. `L2` reads those cell fields too, plus `dl_interference`. Until this branch, a field that a level does not read was ignored without notice. For example, `make_engine("L0", config=NRConfig(pathloss_exp=3.0))` runs with the fixed legacy radio, and `make_engine("L2-legacy", config=NRConfig(olla_up_db=0.1))` runs with the legacy OLLA steps. `NRConfig.unused_fields(level)` now lists such fields and `make_engine(..., strict=True)` refuses them (see the last section).
 
 ## Inventory of hard-coded choices
 
@@ -14,15 +14,15 @@ One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module
 
 | Choice | Where | Value | In NRConfig | Fast backends |
 |:---|:---|:---|:---|:---|
-| Frame buffer depth | `proto/netsim.py:29` (`F`), `levels/base.py:33` | 16 frames per robot | `frame_buffer`, read by `L2` only; all other levels refuse other values | constexpr (`FB`); surrogates allocate `[E,R,16]` |
-| Application timeout | `proto/netsim.py:30` (`TIMEOUT`) | 20 control steps (2 s) | `timeout_steps`, `L2` only | used in graph bodies as a Python constant |
-| Control step | `proto/netsim.py:23` (`UL_PER_STEP`), `engine.py` check | 100 ms, 40 UL slots | `control_step_ms`, `L2` only | constexpr (`K`) |
+| Frame buffer depth | `proto/netsim.py` (`F`, default of `fb`) | 16 frames per robot | `frame_buffer`, every level | constexpr (`F_`, padded to a power of two `FB`) |
+| Application timeout | `proto/netsim.py` (`TIMEOUT`, default of `timeout`) | 20 control steps (2 s) | `timeout_steps`, every level | argument of the graph bodies |
+| Control step | `proto/netsim.py` (`UL_PER_STEP`, default of `ul_per_step`) | 100 ms, 40 UL slots | `control_step_ms` (every level) and `proto_ul_slots_per_step` (default `control_step_ms / 2.5`) | constexpr (`K`) |
 | Message size classes | `config.py` `msg_sizes` | (4000, 30000) B | yes, every level | per-call tensor, safe |
 | Isaac-side message sizes | `isaac/netmodule.py:54` | (1500, 12000) B | yes since 9c642ce: the Isaac layer reads `NRConfig.msg_sizes` (4000, 30000) | n/a |
 | Policy messages per robot per step | `traffic.py`, `Requests.send` | at most one, class index 0, 1, 2, ... | no; generated traffic: `traffic` (see [Traffic models](#traffic-models)), `L2` only | fixed shape `[E,R]` |
 | Per-message tag | `Requests.det` / `hid`; `submit(..., tag=, priority=, deadline_ms=)` | one bool per message, one id per env; tag, priority and deadline per message on `L2` | no | safe |
 | Stack processing offset | `config.py` `proc_offset_ms` | 0 ms | yes, `L2` | n/a |
-| Stepping randomness | every engine; `seed` covers reset draws only | global torch RNG | no | graph backends draw from the device's default Philox generator |
+| Stepping randomness | every engine | engine-owned counter streams (`proto/rng.py`), except `L2` | `seed`, `rng` (`"engine"` default, `"global"` = earlier behavior) | hashed inside the graph and the Triton kernel |
 
 ### Radio
 
@@ -74,7 +74,7 @@ One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module
 | L05 / L05Q bins | `proto/netsim.py:39-41` | active robots {2, 5, 9}, SNR {0, 10, 20, 30} dB, own queue {0, 1, 3} | no; fixed in the fit format | device tensors |
 | QA efficiency and PF gain | `levels/__init__.py:23` | η = 0.9, PF diversity on | through `params` only | graph-safe |
 | NN history and features | `levels/surrogates.py:23, 207` | 4-step history, SNR / 40, own queue / 16 | no; part of the fit format | graph-safe |
-| Surrogate message semantics | `levels/base.py:10` | F = 16, 20-step timeout, 100 ms step | no; refused by the fit tool otherwise | graph-safe |
+| Surrogate message semantics | `levels/base.py:10` | F = 16, 20-step timeout, 100 ms step | yes; the fit file records them and loading refuses a mismatch | graph-safe |
 | ORACLE / NOCOMM | `levels/bounds.py` | delay 0 and never lost; never delivered, FIFO fills and overflows | no | graph-safe |
 
 ### Isaac layer and example task
@@ -173,10 +173,10 @@ Every proposal keeps today's behavior as the default, so existing results and th
 
 | Switch | API | Interaction with levels and backends |
 |:---|:---|:---|
-| Engine-owned step RNG | `make_engine(..., seed=..., step_generator=True)` | the draws already sit at fixed positions per robot; they would come from `net.gen` instead of the global RNG, so a policy's own sampling no longer shifts the network's random stream. Graph capture needs a registered generator (`graph.register_generator_state`) |
+| Engine-owned step RNG | `NRConfig(seed=..., rng="engine")` | **done** on `feat/protolevels` for every level except `L2` (the NR engine; plan in the branch report) |
 | Traffic generators | **done** on `feat/traffic`: `NRConfig(traffic=[TrafficModel.periodic(...), .bursty(...), .video(...), .event(...), .policy()])`, see [Traffic models](#traffic-models) | `L2` only; they run inside the engine step because sub-step arrivals must gate the MAC, so the other levels refuse them |
 | Several messages per robot per step | **done** for generated traffic (fixed `max_msgs_per_step` per model, arrival offset in slots); policy `Requests` stay one per step | `L2`; a multi-message `Requests(send=[E,R,M])` for the policy is still open |
-| Configurable F, timeout and step for every level | `NRConfig(frame_buffer=32, timeout_steps=10)` accepted by `L0` to `L1` and the surrogates | the kernel takes `FB` and `K` as constexprs; the eager and graph bodies need instance fields; surrogate fits must record them |
+| Configurable F, timeout and step for every level | `NRConfig(frame_buffer=32, timeout_steps=40, control_step_ms=50.0)` | **done** on `feat/protolevels`: every level and backend; fits record them |
 | 38.901 path loss and LOS probability | `NRConfig(channel="tr38901_inf_sh")` (also `rma`, `uma`, `umi`, `inh`, `inf_sl`, `inf_dl`, `inf_dh`) | **done** on `feat/channel`: `RadioMC` model with LOS state, shadow fading and O2I; fast fading and MAC unchanged |
 | Radio-map input | `NRConfig(channel="radio_map", radio_map_path="map.npz")` or `RadioMC(..., radio_map=RadioMap(gain [C, H, W], bounds))` | **done** on `feat/channel`: bilinear lookup in `RadioMC`; `tools/bake_radio_map_sionna.py` bakes a map with Sionna RT |
 | Robot blockage and per-robot Doppler | `NRConfig(blockage=True, fading_doppler="per_robot")` | **done** on `feat/channel`; per-robot Doppler needs the NR engine (`L2`) and pose input |
@@ -246,3 +246,9 @@ obs_age = out["act_age"]             # age of the action each robot holds, in co
 **Resets and graphs.** `reset(env_ids)` resets the engine and clears the edge state, the commands in flight and the counters of those envs only. `EdgeLoop(engine, cfg, graph=True)` captures the edge stage (not the engine) in a CUDA graph on its first step. It is bitwise equal to the eager stage with deterministic service, including partial resets, around the `graph` backend of `L2-legacy` (`tests/test_edge.py`). Random service and jitter draw from the default device generator, as the engines' graph backends do. `"nr_dl"` runs eagerly, since the NR engine has only its reference backend.
 
 **Limits.** An arrival is admitted at its own time, but when the engine reports a message after the edge clock has passed its arrival (only possible after a lagged step), the edge admits it at its current time. Messages are processed one per job; batching at the edge is not modelled. The legacy `step(t, snr, hid)` form passes through without the edge stage.
+
+## Engine-owned randomness and the application constants (`feat/protolevels`)
+
+`NRConfig.rng = "engine"` (the default) makes every draw of the prototype, surrogate and bound levels, on every backend, a pure function of (seed, env id, episode of that env, channel, call counter of that env, draw site, element), computed by a counter-based 32-bit hash (`proto/rng.py`; one Triton kernel per draw on CUDA, a torch fallback elsewhere). The seed is `make_engine(seed=...)` or `NRConfig.seed`. A policy's use of the global torch RNG never changes the network, an env's randomness in its k-th episode depends only on (seed, env, k) and its own inputs, and `reset(env_ids)` re-seeds exactly those envs. The draws are computed inside the captured graphs from device counters that `submit` / `step` advance before each replay, so the `graph` backend stays bitwise equal to the reference without injected draws; the `triton` backend hashes the same counters in its kernel (same uniforms, normals to float rounding). `rng="global"` keeps the earlier behavior (stepping draws from the global RNG, resets from the engine generator) and is bitwise equal to `main` at `1d533e9` for every level and backend (`tests/scripts/regress_main.py`). The low-level constructors (`netsim.make_net`, `NetFast`, `LevelNet`) default to `"global"`, so code that builds them directly and the injection tests are unchanged. Known gaps: the NR engine `L2` still draws its stepping randomness from the global RNG, and `RadioMC` (multi-cell shadowing) draws from the engine's sequential generator at reset.
+
+`frame_buffer`, `timeout_steps`, `control_step_ms` and `proto_ul_slots_per_step` (default `control_step_ms / 2.5`, the legacy UL slot spacing) now configure every level and backend; the defaults resolve to the prototype constants (16, 20, 100 ms, 40). Delays, timeouts and the L0 / L0DR delay parameters stay in control steps, and the per-UL-slot MAC constants of `L2-legacy` (SR delay, HARQ RTT, fading correlation) stay per UL slot. `python -m isaaclab_net.tools.fit_levels --frame-buffer 32 --timeout-steps 40 --control-step-ms 50` fits under any values and records them in `meta`; `make_engine` refuses a fit whose values differ from the config (a fit file without them counts as the prototype values).

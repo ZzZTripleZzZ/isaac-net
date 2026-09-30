@@ -30,7 +30,7 @@ from ..config import NRConfig, multicell
 from ..queues import onehot
 from ..radio import CellAssociation, RadioMC, pick
 from .netsim import (BYTES_PER_SE, HARQ_MAX, HARQ_RTT, PF_AVG_MIN, PF_T, PHR_MIN_DB, RHO, RLC_EXTRA, SR_DELAY,
-                     UL_PER_STEP, NetSlot, S, fill_rows, req_db, se_from_snr_db, serve_fifo)
+                     NetSlot, S, fill_rows, req_db, se_from_snr_db, serve_fifo)
 
 
 class NetSlotMC(NetSlot):
@@ -40,7 +40,7 @@ class NetSlotMC(NetSlot):
     FRAME_INIT = dict(NetSlot.INIT)
     MAC_INIT_MC = {**NetSlot.MAC_INIT, "ioN_sum": 0.0, "n_flushed": 0}
 
-    def __init__(self, E, R, device, sizes, cfg: NRConfig | None = None, seed=None):
+    def __init__(self, E, R, device, sizes, cfg: NRConfig | None = None, seed=None, **app):
         self.cfg = cfg if cfg is not None else multicell()
         self.C = self.cfg.n_cells
         self.gnb_xy = self.cfg.gnb_xy()
@@ -50,7 +50,7 @@ class NetSlotMC(NetSlot):
         self.slot_trace = None          # robot index: per-slot (served, cell, in HO, queue) of that robot
         self.log_sinr = False           # per-TB SINR samples (sanity sweeps, small E)
         self._rx_in = None
-        super().__init__(E, R, device, sizes, seed=seed)
+        super().__init__(E, R, device, sizes, seed=seed, **app)
 
     # ---- state and partial reset ------------------------------------------------------------------
     def _alloc_state(self):
@@ -58,7 +58,7 @@ class NetSlotMC(NetSlot):
         E, R, C, d = self.E, self.R, self.C, self.dev
         self.h = torch.zeros(E, R, C, S, 2, device=d)
         self.ar_r = torch.arange(R, device=d)
-        self.assoc = CellAssociation(self.cfg, E, R, C, d, UL_PER_STEP)
+        self.assoc = CellAssociation(self.cfg, E, R, C, d, self.K)
         # measured noise plus interference per gNB and subband (mW), used by link adaptation
         self.ni_meas = torch.full((E, C, S), self.noise_mw, device=d)
         self.ioN_sum = torch.zeros(E, C, S, device=d)
@@ -71,7 +71,7 @@ class NetSlotMC(NetSlot):
         for n, v in NetSlot.MAC_INIT.items():
             fill_rows(getattr(self, n), ids, v)
         n = self._nrows(ids)
-        fill_rows(self.h, ids, torch.randn(n, self.R, self.C, S, 2, device=self.dev, generator=self.gen) / math.sqrt(2))
+        fill_rows(self.h, ids, self._reset_h(ids, n, (self.R, self.C, S, 2)) / math.sqrt(2))
         fill_rows(self.ni_meas, ids, self.noise_mw)
         fill_rows(self.ioN_sum, ids, 0.0)
         fill_rows(self.n_flushed, ids, 0)
@@ -165,8 +165,9 @@ class NetSlotMC(NetSlot):
         gain_now = self._gain_db()
         if self.log_sinr:
             geo = self.geometry_db(rx).clamp(max=99.0)
-        for k in range(UL_PER_STEP):
-            g = (t * UL_PER_STEP + k)[:, None]                          # [E,1] env-clock slot index
+        nz_all, u_all = self._slot_draws((R, C, S, 2))
+        for k in range(self.K):
+            g = (t * self.K + k)[:, None]                          # [E,1] env-clock slot index
             if C > 1:     # sync-free: robots whose A3 trigger falls in this slot switch now
                 self._handover(k_ho == k, tgt, g)
                 rx_serv = pick(rx, self.serv)
@@ -182,7 +183,8 @@ class NetSlotMC(NetSlot):
             self.sr_t[granted] = -1
             # fading on every link: estimate from the previous slot, transmission sees the new one
             gain_prev = gain_now
-            self.h = RHO * self.h + math.sqrt(1 - RHO ** 2) * torch.randn_like(self.h) / math.sqrt(2)
+            nz = torch.randn_like(self.h) if nz_all is None else nz_all[:, k]
+            self.h = RHO * self.h + math.sqrt(1 - RHO ** 2) * nz / math.sqrt(2)
             gain_now = self._gain_db()
             gp_s = pick(gain_prev, self.serv)                            # [E,R,S]
             gn_s = pick(gain_now, self.serv)
@@ -240,7 +242,8 @@ class NetSlotMC(NetSlot):
             self.n_slots += 1
             act_eff = (act * won).sum(-1) / nf + bonus
             p_ok = torch.sigmoid(1.5 * (act_eff - req_db(se)))
-            ok_tb = tx & (torch.rand_like(p_ok) < p_ok)
+            u = torch.rand_like(p_ok) if u_all is None else u_all[:, k]
+            ok_tb = tx & (u < p_ok)
             fail = tx & ~ok_tb
             served = torch.minimum(n * se * BYTES_PER_SE * ok_tb, q)
             self.rem, fin = serve_fifo(self.rem, served)

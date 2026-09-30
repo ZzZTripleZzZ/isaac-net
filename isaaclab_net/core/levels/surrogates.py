@@ -16,9 +16,9 @@ import torch
 import torch.nn as nn
 
 from ..proto import netsim as _ns
-from .base import INF, TIMEOUT, LevelNet
+from .base import INF, LevelNet
 
-UL_PER_STEP, S, BYTES_PER_SE, SE_MAX = _ns.UL_PER_STEP, _ns.S, _ns.BYTES_PER_SE, _ns.SE_MAX
+S, BYTES_PER_SE, SE_MAX = _ns.S, _ns.BYTES_PER_SE, _ns.SE_MAX
 PHR_MIN_DB, SR_DELAY = _ns.PHR_MIN_DB, _ns.SR_DELAY
 H = 4                                                    # NN: env delay-history length in control steps
 RAYLEIGH_DB = 10 * math.log10(math.exp(-0.5772156649))   # ergodic Rayleigh loss, -2.51 dB
@@ -58,7 +58,11 @@ class NetTR(LevelNet):
         self.trace = torch.zeros(self.E, dtype=torch.long, device=d)
 
     def _reset_rows(self, ids, n, gen):
-        _ns.fill_rows(self.trace, ids, torch.randint(0, self.J, (n,), device=self.dev, generator=gen))
+        if self.rng is None:
+            pick = torch.randint(0, self.J, (n,), device=self.dev, generator=gen)
+        else:
+            pick = (self._reset_rand(ids, n) * self.J).long().clamp(max=self.J - 1)
+        _ns.fill_rows(self.trace, ids, pick)
 
     def _arrival(self, new, count, nact, dr):
         t = self._t
@@ -96,16 +100,15 @@ class NetGE(LevelNet):
         self.cum0 = p["pi0"].to(d, torch.float32).cumsum(-1)
         self.mu, self.sig, self.p = (p[k].to(d, torch.float32) for k in ("mu", "sig", "p"))
         self.q = p["q"].to(d, torch.float32) if "q" in p else None
-        self.K = self.P.shape[0]
+        self.n_states = self.P.shape[0]        # (self.K is the UL slots per step)
         self.s = torch.zeros(self.E, dtype=torch.long, device=d)
 
     def _pick(self, cum, u):
         """Inverse CDF: the first state whose cumulative probability exceeds u."""
-        return (u[..., None] >= cum).sum(-1).clamp(max=self.K - 1)
+        return (u[..., None] >= cum).sum(-1).clamp(max=self.n_states - 1)
 
     def _reset_rows(self, ids, n, gen):
-        u = torch.rand(n, device=self.dev, generator=gen)
-        _ns.fill_rows(self.s, ids, self._pick(self.cum0, u))
+        _ns.fill_rows(self.s, ids, self._pick(self.cum0, self._reset_rand(ids, n)))
 
     def _arrival(self, new, count, nact, dr):
         c = (self._send - 1).clamp(0, self.p.shape[1] - 1)
@@ -129,7 +132,7 @@ class NetQA(LevelNet):
     the L2-legacy power-headroom cap), with its power split over more than one subband as in L1. With pf, the
     per-subband SNR gains the analytic PF multi-user-diversity term 10 log10(H_n) + RAYLEIGH_DB (H_n = the n-th
     harmonic number). The byte rate per step is b = share * eta * 0.75 log2(1 + SNR) (SE capped) * BYTES_PER_SE
-    * 40. A robot whose queue was empty at the end of the previous step starts SR_DELAY slots late. Frames are
+    * K (UL slots per control step). A robot whose queue was empty at the end of the previous step starts SR_DELAY slots late. Frames are
     served FIFO in continuous time: a frame finishes at t + off + (bytes through it) / b if that is within the
     step. Params: eta (default 0.9) and pf (default True), calibrated by the fit tool.
     """
@@ -159,8 +162,8 @@ class NetQA(LevelNet):
         if self.pf:
             snr_sb = snr_sb + 10 * torch.log10(self.harm[nb - 1]) + RAYLEIGH_DB
         se = (0.75 * torch.log2(1 + 10 ** (snr_sb / 10))).clamp(max=SE_MAX) * self.eta
-        b = share * se * BYTES_PER_SE * UL_PER_STEP * back                 # bytes per control step
-        off = torch.where(back & (self.prev_q <= 0), torch.full_like(q, SR_DELAY / UL_PER_STEP),
+        b = share * se * BYTES_PER_SE * self.K * back                      # bytes per control step
+        off = torch.where(back & (self.prev_q <= 0), torch.full_like(q, SR_DELAY / self.K),
                           torch.zeros_like(q))
         cum = self.rem.cumsum(-1)
         rem, fin = _ns.serve_fifo(self.rem, b * (1 - off))
@@ -199,12 +202,13 @@ class DelayNet(nn.Module):
         return q.gather(1, lo[:, None]).squeeze(1) * (1 - w) + q.gather(1, (lo + 1)[:, None]).squeeze(1) * w
 
 
-def nn_features(cls, snr, own, ownb, nact, totb, to, hist, R):
-    """Raw NN input [n, 9 + H] from send-time features (the fit stores a mean / std normalizer on top):
+def nn_features(cls, snr, own, ownb, nact, totb, to, hist, R, F=_ns.F):
+    """Raw NN input [n, 9 + H] from send-time features (the fit stores a mean / std normalizer on top; F is the
+    frame buffer the fit used, recorded in the fit file):
     cls traffic class, snr own SNR (dB), own frames queued ahead, ownb their nominal bytes, nact backlogged
     robots in the env after this submit, totb nominal bytes queued in the env including this step's arrivals,
     to EWMA of timeouts per robot per step, hist [n, H] mean delivered delay of the env in the last H steps."""
-    cols = [(cls == 1).float(), (cls == 2).float(), snr / 40.0, own.float() / _ns.F,
+    cols = [(cls == 1).float(), (cls == 2).float(), snr / 40.0, own.float() / F,
             torch.log1p(ownb / 1000.0), nact.float() / R, torch.log1p(totb / 1000.0), to]
     cols += [torch.log1p(10.0 * hist[:, k]) for k in range(hist.shape[1])]
     cols += [(hist[:, 0] > 0).float()]
@@ -251,13 +255,13 @@ class NetNN(LevelNet):
         ER = lambda x: x.reshape(E * R)
         x = nn_features(ER(cls), ER(self._snr_add), ER(count), ER(ownb), ER(nact[:, None].expand(E, R)),
                         ER(totb), ER(self.to_ewma[:, None].expand(E, R)),
-                        self.hist[:, None, :].expand(E, R, H).reshape(E * R, H), R)
+                        self.hist[:, None, :].expand(E, R, H).reshape(E * R, H), R, self.F)
         logit, q = self.model((x - self.xm) / self.xs)
         lost = ER(dr["u_drop"]) < torch.sigmoid(logit)
         delay = torch.exp(DelayNet.sample_quantiles(q, ER(dr["u_delay"])))
         dlv = self._t[:, None] + delay.view(E, R)
         if self.fifo:
-            val = torch.where(torch.isfinite(self.dlv), self.dlv, self.cap.float() + TIMEOUT)
+            val = torch.where(torch.isfinite(self.dlv), self.dlv, self.cap.float() + self.TIMEOUT)
             ahead = self._arF < count[..., None]
             bound = torch.where(ahead, val, torch.full_like(val, -INF)).max(-1).values
             dlv = torch.maximum(dlv, bound)
@@ -266,7 +270,7 @@ class NetNN(LevelNet):
     def _observe(self, fin, t):
         live = self.cap >= 0
         dlv = live & torch.isfinite(fin)
-        timed = live & ~dlv & ((t[:, None, None] + 1 - self.cap) >= TIMEOUT)
+        timed = live & ~dlv & ((t[:, None, None] + 1 - self.cap) >= self.TIMEOUT)
         n = dlv.sum((1, 2))
         dsum = torch.where(dlv, fin - self.cap.float(), torch.zeros_like(fin)).sum((1, 2))
         newest = torch.where(n > 0, dsum / n.clamp(min=1), self.hist[:, 0])
