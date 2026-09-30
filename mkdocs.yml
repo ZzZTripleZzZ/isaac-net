@@ -62,6 +62,7 @@ nav:
       - Public-data calibration: calibration-public-data.md
       - Performance: performance.md
       - Isaac Lab on Windows: isaac-lab.md
+      - "Second backend: MuJoCo Playground / MJX": backends-mjx.md
       - Multi-cell networks: multicell.md
       - ns-3 bridges in depth: bridges.md
       - Configurability: configurability.md

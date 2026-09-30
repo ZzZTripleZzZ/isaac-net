@@ -16,6 +16,9 @@ dependencies = ["torch>=2.4", "numpy>=1.23"]
 [project.optional-dependencies]
 dev = ["pytest>=7.4", "ruff>=0.5"]
 # The docs site (mkdocs.yml): `mkdocs build --strict`. Reads the sources statically; torch is not needed.
+# MuJoCo Playground / MJX backend (isaaclab_net.mjx, docs/backends-mjx.md). JAX is pinned: Brax 0.14.2 PPO fails on
+# JAX 0.10. Install torch (CUDA build) first, then `pip install -e ".[mjx]"`.
+mjx = ["jax[cuda12]==0.9.2", "playground==0.2.0", "brax==0.14.2"]
 docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.26", "mkdocs-jupyter>=0.25"]
 
 [tool.setuptools.packages.find]
@@ -33,6 +36,7 @@ pythonpath = [".", "tests"]
 markers = [
     "gpu: needs a CUDA GPU (skipped automatically without one)",
     "slow: longer runs (deselect with -m 'not slow')",
+    "mjx: needs JAX (CUDA), MuJoCo MJX and MuJoCo Playground (skipped automatically without them)",
 ]
 addopts = "-ra"
 

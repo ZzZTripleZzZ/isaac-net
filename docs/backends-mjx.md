@@ -17,7 +17,7 @@ Tested on the lab box (WSL2 Ubuntu 20.04 on Windows 11, RTX 4090, Windows driver
 ```bash
 python3.11 -m venv venv && . venv/bin/activate && pip install uv
 uv pip install torch --index-url https://download.pytorch.org/whl/cu126
-uv pip install "jax[cuda12]==0.9.2" "flax" "brax==0.14.2" "playground==0.2.0"
+uv pip install "jax[cuda12]==0.9.2" "flax" "brax==0.14.2" "playground==0.2.0"   # = the `mjx` extra
 uv pip install --no-deps -e .              # isaaclab_net; --no-deps keeps the CUDA build of torch
 export XLA_PYTHON_CLIENT_PREALLOCATE=false  # otherwise JAX takes 75% of the GPU before torch allocates the engine
 ```
@@ -53,7 +53,7 @@ def step(self, state, action):                        # one env; vmapped over E 
 
 ## The MJX fleet env
 
-[`isaaclab_net/examples/mjx_fleet_env.py`](../isaaclab_net/examples/mjx_fleet_env.py) (`MJXFleetEnv`) mirrors the Isaac demo env. One MJX model per env holds R bodies, each with two slide joints (x, y) and two velocity actuators (kv = 20, mass 1 kg), gravity off and no contacts. The time step is 1/50 s with 5 substeps per 0.1 s control step. The task is the same as in the Isaac env: a 150 m × 150 m arena with the gNB on a 6 m mast at the corner, per-robot velocity plus a send choice as the action, hazards that the fleet learns about only when a detecting frame is delivered, and the same 12-value observation per robot. Level `"off"` gives the ideal link with zero network features. Any `make_engine` level and backend works, because the env builds its network through `NetModuleMJX`.
+[`isaaclab_net/examples/mjx_fleet_env.py`](https://github.com/ZzZTripleZzZ/isaaclab-net/blob/main/isaaclab_net/examples/mjx_fleet_env.py) (`MJXFleetEnv`) mirrors the Isaac demo env. One MJX model per env holds R bodies, each with two slide joints (x, y) and two velocity actuators (kv = 20, mass 1 kg), gravity off and no contacts. The time step is 1/50 s with 5 substeps per 0.1 s control step. The task is the same as in the Isaac env: a 150 m × 150 m arena with the gNB on a 6 m mast at the corner, per-robot velocity plus a send choice as the action, hazards that the fleet learns about only when a detecting frame is delivered, and the same 12-value observation per robot. Level `"off"` gives the ideal link with zero network features. Any `make_engine` level and backend works, because the env builds its network through `NetModuleMJX`.
 
 Differences from the Isaac env: robot-robot contacts are off (the Isaac env keeps them), the robots follow the commanded velocity through actuators rather than having it written to the simulator, and a done env restarts from its cached first state (Playground's default autoreset) rather than from fresh random poses. The warp implementation of MJX needs `njmax > 0` even for a model without constraints: with `njmax = 0` nothing moves and no error is raised, so the env sets `njmax = 8`.
 
@@ -94,4 +94,3 @@ Raw rows: `benchmarks/mjx/run_grid.sh` appends one JSON line per run; the rows o
 1. **Masked reset in the core.** A `reset_mask(mask [E])` that draws the reset state for all E envs and keeps the rows of the masked ones would let the callback skip the one host sync per step. It changes the reset RNG stream (E draws instead of n), so it has to be a separate call next to `reset(env_ids)`.
 2. **Capture the NetModule step.** The callback's cost is dominated by host-side launches of the NetModule step (the radio's pose chunks, the output dict, `net_features`) rather than by the triton kernel, which is why the network time barely changes from 256 to 4096 envs. Capturing the whole NetModule step in one CUDA graph would cut it to a few graph launches. That capture belongs in the `isaac/` layer or in a neutral module, not here.
 3. **A neutral home for NetModule.** `NetModuleMJX` imports `isaaclab_net.isaac.net_module`, which is simulator-free but sits under `isaac/`. Moving `NetModule`, `IsaacRadio` and `MessageHistory` to a neutral package (for example `isaaclab_net.module`), with `isaac/` re-exporting them, would make the dependency direction explicit.
-4. **Packaging.** An optional extra `mjx = ["jax[cuda12]==0.9.2", "playground==0.2.0", "brax==0.14.2"]` in `pyproject.toml` and the `mjx` marker in its pytest marker list (it is registered in `tests/mjx/conftest.py` for now).
