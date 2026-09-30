@@ -89,27 +89,27 @@ One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module
 
 ## Feature matrix
 
-The comparison uses the public documentation of ns-3 5G-LENA v5.1, Sionna SYS 2.x and Simu5G. Entries for the other tools are brief and should be checked against their manuals before a paper cites them. "Have" means a user can select it today through `NRConfig` or `make_engine`.
+The comparison was checked line by line against the official documentation of ns-3 5G-LENA `v5.1` (NR manual sources and `FEATURES.md` at that tag), NVIDIA Sionna SYS `v2.2.0` (API docs and tutorials) and Simu5G `v1.7.0` (simu5g.org user's guide and the repository at that tag), all accessed on 2026-09-29. [feature-matrix-sources.md](feature-matrix-sources.md) gives, for every (tool, feature) cell, the status, the feature name the tool's documentation uses, and the URL and section. The status words there are *supported*, *partial* and *not supported*. A cell confirmed only by source code, not by a manual, is marked as such there. "Have" means a user can select it today through `NRConfig` or `make_engine`. Sionna SYS is a set of system-level blocks on top of Sionna PHY and RT, so its cells name the companion package when the capability lives there.
 
 | Feature | isaaclab-net | 5G-LENA | Sionna SYS | Simu5G | Our status and reason |
 |:---|:---|:---|:---|:---|:---|
-| Numerology | μ = 0, 1, 2 (`L2`) | 0–4 (FR1, FR2) | via Sionna PHY | multiple numerologies | **partial**: FR2 (μ = 3) missing, cheap once tables allow |
-| Bandwidth / PRBs | any 38.101 FR1 value (`L2`) | any | any | any | **have** (`L2`); legacy fixed at 50 PRB |
-| TDD / FDD | any TDD string (`L2`) | TDD and FDD | slot abstraction | TDD and FDD | **partial**: FDD missing (an all-`U` pattern with a paired DL carrier) |
-| Schedulers | PF (subband or wideband) | PF, RR, MR in TDMA and OFDMA, QoS-aware | PF | Max C/I, PF, DRR | **partial**: RR and max-C/I are one line each in `mac.py` |
-| HARQ | multi-process, chase or IR, max tx | yes | abstraction with HARQ feedback to link adaptation | yes | **have** (`L2`) |
+| Numerology | μ = 0, 1, 2 (`L2`) | μ = 0–4 (FR1, FR2) | no numerology model; any subcarrier spacing via Sionna PHY `ResourceGrid` | μ = 0–4, one per component carrier | **partial**: FR2 (μ = 3) missing, cheap once tables allow |
+| Bandwidth / PRBs | any 38.101 FR1 value (`L2`) | any, up to 275 PRBs per BWP | any (`ResourceGrid`, scheduler `num_freq_res`) | any (`numBands` per carrier) | **have** (`L2`); legacy fixed at 50 PRB |
+| TDD / FDD | any TDD string (`L2`) | TDD and FDD | none; one direction (DL or UL) per run | TDD (fixed DL/UL symbol split) and FDD | **partial**: FDD missing (an all-`U` pattern with a paired DL carrier) |
+| Schedulers | PF (subband or wideband) | PF, RR, MR in TDMA and OFDMA, QoS-aware, random, RL-based | PF (SU-MIMO) | Max C/I (and variants), PF, DRR, QoS-aware PF | **partial**: RR and max-C/I are one line each in `mac.py` |
+| HARQ | multi-process, chase or IR, max tx | IR and CC, multi-process, max retx | ACK/NACK feedback to link adaptation, no retransmissions | yes (processes, max retx) | **have** (`L2`) |
 | RLC | AM retry or UM loss, PDCP discard | UM, AM, TM | none | UM, AM, TM | **partial**: no RLC segmentation timers or status reports |
-| Link adaptation | BLER target, OLLA, MCS caps | AMC, error-model based | inner and outer loop | CQI-based AMC | **have**; OLLA clamp and legacy steps fixed |
-| Power control | UL fractional (legacy multi-cell only) | UL and DL power control | UL open loop, DL fair power | yes | **partial**: not in the NR engine |
-| MIMO / beamforming | none (one layer) | MIMO and beamforming | through Sionna PHY | limited | **missing**: layers could scale TBS and SINR (moderate); beamforming is large |
-| Channel model | log-distance, plane-wave shadowing, AR(1) Rayleigh | 3GPP TR 38.901 (UMa, UMi, RMa, InH, InF, V2X) | TR 38.901 and ray-traced radio maps via Sionna RT | 3GPP path loss and fading | **partial**: no 38.901 scenarios, no LOS probability, no radio map |
-| Mobility | from the simulator's poses | ns-3 mobility models | user-supplied | INET mobility models | **have**: poses come from Isaac Lab, which is the point of the package |
-| Traffic | one message per robot per step, size classes; DL bytes | any ns-3 application | full-buffer or user queues | any INET application | **partial**: no periodic, bursty or video generators |
-| UL / DL / sidelink | UL, DL (`L2`) | UL, DL, NR sidelink | UL, DL | UL, DL, D2D | **partial**: sidelink out of scope for now |
-| QoS / slicing | none | QoS schedulers, BWP-based | none | limited | **missing** |
-| Multi-cell / handover | 1–7 cells, A3 handover (legacy); NR in progress | multi-cell, handover | multi-cell hex layouts, wraparound | multi-cell, X2 handover | **partial**: NR multi-cell on `feat/nr-multicell` |
-| Interference | same-slot UL (legacy MC); NR hook | full | full | full | **partial** |
-| Carrier aggregation / BWP | none | CA and BWPs | none | CA | **out of scope** for robot fleets on one carrier |
+| Link adaptation | BLER target, OLLA, MCS caps | AMC, error-model or Shannon based | inner and outer loop | CQI-based AMC | **have**; OLLA clamp and legacy steps fixed |
+| Power control | UL fractional (legacy multi-cell only) | UL open and closed loop; DL uniform power allocation only | UL open loop, DL fair power | none documented (fixed transmit powers) | **partial**: not in the NR engine |
+| MIMO / beamforming | none (one layer) | SU-MIMO up to rank 4, analog beamforming | SU-MIMO streams; precoding via Sionna PHY | none (incomplete MIMO removed in v1.4.3) | **missing**: layers could scale TBS and SINR (moderate); beamforming is large |
+| Channel model | log-distance, plane-wave shadowing, AR(1) Rayleigh | 3GPP TR 38.901 (RMa, UMa, UMi, InH, V2V, NTN), NYUSIM (incl. InF), FTR, Sionna RT | TR 38.901 via Sionna PHY (UMi, UMa, RMa, InH, InF); ray tracing via Sionna RT | 3GPP TR 36.814, 36.873, 38.901 path loss, shadowing, Rayleigh or Jakes fading | **partial**: no 38.901 scenarios, no LOS probability, no radio map |
+| Mobility | from the simulator's poses | ns-3 mobility models | random UT velocities in the topology generators; trajectories user-coded | INET mobility models, Veins | **have**: poses come from Isaac Lab, which is the point of the package |
+| Traffic | one message per robot per step, size classes; DL bytes | NGMN, 3GPP XR, FTP Model 1, HTTP generators | none (scheduler takes rates only) | any INET application | **partial**: no periodic, bursty or video generators |
+| UL / DL / sidelink | UL, DL (`L2`) | UL, DL; sidelink only in a separate v3.1-based branch | UL, DL | UL, DL, network-assisted D2D (prototype) | **partial**: sidelink out of scope for now |
+| QoS / slicing | none | 5QI QoS schedulers, BWP-based slicing | none | 5QI QoS flows, SDAP, QoS-aware PF; no slicing | **missing** |
+| Multi-cell / handover | 1–7 cells, A3 handover (legacy); NR in progress | multi-cell, X2 handover, hex wraparound | multi-cell hex layouts, wraparound; no handover | multi-cell, X2 handover, background cells | **partial**: NR multi-cell on `feat/nr-multicell` |
+| Interference | same-slot UL (legacy MC); NR hook | all co-channel transmitters, incl. DL–UL cross-link | inter-cell, in the post-equalization SINR | inter-cell DL and UL (configurable), background cells | **partial** |
+| Carrier aggregation / BWP | none | CA and BWPs | none | CA; BWPs not documented | **out of scope** for robot fleets on one carrier |
 
 ## Proposed modes and switches
 
