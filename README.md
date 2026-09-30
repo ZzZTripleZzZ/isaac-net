@@ -127,11 +127,29 @@ Every level exposes the same API, so a task switches fidelity by changing one ar
 | `L05`, `L05Q` | lookup tables fitted offline from `L2` rollouts | cheap state-conditioned delay |
 | `L1` | fluid slot model with equal PRB shares and FIFO queues | contention without MAC detail |
 | `L2` | configurable NR MAC and PHY (table above) | the fidelity model |
-| `L2-legacy` | the prototype slot-level MAC and PHY, frozen; multi-cell capable | reproducing the kill-test results, and speed at scale |
+| `L2-legacy` | the prototype slot-level MAC and PHY, frozen; multi-cell capable | reproducing the earlier prototype experiments, and speed at scale |
+| `TR` | trace replay: each env replays one recorded `L2` env-episode, open loop | the replayed-trace baseline |
+| `GE` | 3-state Markov-modulated delay and loss, one chain per env | the Gilbert–Elliott-style baseline |
+| `QA` | analytic processor-sharing queue per control step, FIFO service, SR delay | contention without slot simulation |
+| `NN` | learned stateful surrogate: MLP drop probability and delay quantiles from send-time features | the learned-surrogate baseline |
+| `ORACLE` | every message delivered at capture, delay 0, never lost | upper bound on what any network gives a task |
+| `NOCOMM` | no message ever delivered | lower bound: the task without communication |
+
+`TR`, `GE`, `QA` and `NN` are fitted from `L2` or `L2-legacy` rollouts of the example fleet task. The fit writes one parameter file outside the repository, and every engine loads it:
+
+```bash
+python -m isaaclab_net.tools.fit_levels --source L2-legacy --task T1 --backend graph   # ~/.cache/isaaclab_net/levels/L2-legacy_T1.pt
+```
+
+```python
+net = make_engine("NN", E, R, dev, params="~/.cache/isaaclab_net/levels/L2-legacy_T1.pt", backend="graph")
+```
+
+`ORACLE` and `NOCOMM` are value-of-information bounds for task design. Run a task under both first: a task in which network fidelity can matter must show a large gap between its `ORACLE` and `NOCOMM` returns. If the gap is small, the policy gains little from what the network delivers, and the task cannot tell fidelity levels apart.
 
 ## Backends and speed
 
-Every prototype level (`L0` to `L1`, `L2-legacy`) has a readable eager reference in `isaaclab_net/core/proto/netsim.py` and graph-safe fast versions in `isaaclab_net/core/proto/netsim_fast.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference at every level (per-message outputs, every queue and MAC state, with random partial resets). `triton` (`L1`, `L2-legacy`) runs all 40 slots of a control step in one fused kernel and matches the reference to rounding: from an identical state every finish time agrees, and over long runs aggregate delivery and delay agree to three or four significant digits. `compile` (torch.compile + CUDA graph) also agrees to rounding. The NR engine (`L2`) and the multi-cell engine have only the `reference` backend so far. On a shared GPU the NR uplink costs about 2.6–3.9 times the legacy reference per step, and the multi-cell engine about 1.2 times.
+Every prototype level (`L0` to `L1`, `L2-legacy`) has a readable eager reference in `isaaclab_net/core/proto/netsim.py` and graph-safe fast versions in `isaaclab_net/core/proto/netsim_fast.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference at every level (per-message outputs, every queue and MAC state, with random partial resets). `triton` (`L1`, `L2-legacy`) runs all 40 slots of a control step in one fused kernel and matches the reference to rounding: from an identical state every finish time agrees, and over long runs aggregate delivery and delay agree to three or four significant digits. `compile` (torch.compile + CUDA graph) also agrees to rounding. The NR engine (`L2`) and the multi-cell engine have only the `reference` backend so far. The surrogate and bound levels (`TR` to `NOCOMM`) are written once with graph-safe ops, so their `reference` backend runs the same operations as `graph`, which is bitwise identical to it. On a shared GPU the NR uplink costs about 2.6–3.9 times the legacy reference per step, and the multi-cell engine about 1.2 times.
 
 Network step time (`submit` + `step`, dict outputs) in ms, on an RTX 4090 that other jobs kept 98–99% busy, so absolute numbers are pessimistic:
 
@@ -161,6 +179,7 @@ The reference simulator is ns-3.48 with 5G-LENA NR v5.1, used unmodified except 
 - [ ] Isaac Lab 3.0 integration, demo tasks and scaling benchmarks (in development)
 - [ ] Validation against ns-3 5G-LENA and public measurement traces
 - [x] Test suite (CPU tests, GPU equivalence tests) and CI
+- [x] Fitted surrogate levels (trace replay, Markov-modulated, analytic queue, learned) and ORACLE / NOCOMM bounds
 
 ## Repository layout
 
@@ -175,13 +194,14 @@ isaaclab-net/
 │   │   ├── mac.py mac_ul.py mac_dl.py   # per-slot MAC: multi-HARQ, PF, link adaptation; UL and DL hooks
 │   │   ├── radio.py  traffic.py  #   per-link radio, cell association and handover; Requests
 │   │   ├── data/                 #   Sionna BLER tables (Apache-2.0)
-│   │   └── proto/                #   prototype levels L0 ... L1 and L2-legacy: reference, fast backends,
-│   │                             #   Triton kernels, and the multi-cell NetSlotMC
+│   │   ├── proto/                #   prototype levels L0 ... L1 and L2-legacy: reference, fast backends,
+│   │   │                         #   Triton kernels, and the multi-cell NetSlotMC
+│   │   └── levels/               #   fitted surrogates TR, GE, QA, NN and the ORACLE / NOCOMM bounds
 │   ├── isaac/                    # Isaac Lab layer: NetModule, DirectRLEnv mixin, mdp terms, skeletons
 │   ├── bridges/                  # ns-3 co-simulation (lockstep, process pool, offline replay), validation only
 │   │   └── ns3/                  #   the C++ ns-3 programs and their build scripts
 │   ├── examples/                 # fleet_task.py (pure torch), isaac_fleet_env.py (Isaac Lab demo env)
-│   └── tools/                    # PHY table export and the local 5G-LENA table extraction
+│   └── tools/                    # PHY table export, local 5G-LENA table extraction, surrogate fits (fit_levels)
 ├── tests/                        # pytest suite; scripts/ (equivalence scripts), bridges/ (need ns-3)
 ├── benchmarks/                   # engine, NR, multi-cell, Isaac and ns-3 scaling benchmarks
 ├── prototype/                    # compatibility shims for the old module paths
