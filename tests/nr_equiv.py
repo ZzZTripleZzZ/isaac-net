@@ -38,6 +38,9 @@ CFGS = {
     "cells3": lambda: multicell(3, dl=True),
     "ul_lena": lambda: NRConfig(n_harq=16, harq_fail="drop", discard="pdcp_arrival", pf_metric="wideband",
                                 harq_combining="ir_lena", phr_cap=False, olla=False),
+    "ul_doppler": lambda: NRConfig(fading_doppler="per_robot", doppler_min_speed_mps=0.5, scheduler="rr"),
+    "ul_maxci_pc": lambda: NRConfig(scheduler="maxci", ul_pc=True, proactive_grant="per_period", dl=True,
+                                    harq_combining="none"),
     "ul_compat": lambda: NRConfig(n_prb=50, rbg_size=10, dmrs_re_per_prb=0, n_harq=1, eff_sinr="mean_db",
                                   sr_grant_delay_slots=10, ul_harq_rtt_slots=20),
 }

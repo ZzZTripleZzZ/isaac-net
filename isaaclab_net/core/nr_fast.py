@@ -102,6 +102,20 @@ class NRGraphEngine(NREngine):
         """[(owner key, attribute, dict key or None, persistent buffer)] for every state tensor."""
         return state_items(self)
 
+    def _extend_registry(self):
+        """Attributes that the step creates (ul.pc_backoff, member, _ni_la_ul, ...) become persistent buffers too, so
+        they hold this step's values after a replay, as in the reference."""
+        have = {(ok, n, k) for ok, n, k, _ in self._reg}
+        for ok, n, k, v in state_items(self):
+            if (ok, n, k) not in have:
+                buf = v.clone()
+                o = state_owners(self)[ok]
+                if k is None:
+                    setattr(o, n, buf)
+                else:
+                    getattr(o, n)[k] = buf
+                self._reg.append((ok, n, k, buf))
+
     def _rebind(self):
         """Copy reassigned state into the persistent buffers and point the attributes back at them."""
         own = state_owners(self)
@@ -195,6 +209,7 @@ class NRGraphEngine(NREngine):
         skey = g0 % math.lcm(P, cfg.sr_period_slots, cfg.cqi_period_slots)
         key = (skey, dt0, kind, tuple((k, tuple(v.shape)) for k, v in ins.items()), bool(self.log_stats), gate)
         self._tdev.fill_(T)
+        self._rebind()                 # inputs the eager part reassigned (e.g. net.fading_rho_ms from the radio)
         g = self._graphs.get(key)
         if g is None:
             g = self._capture(key, T, kind, ins)
@@ -293,6 +308,7 @@ class NRGraphEngine(NREngine):
                 out = self._region(T, kind, ins)
                 restore()
         torch.cuda.current_stream(self.dev).wait_stream(s)
+        self._extend_registry()
         for k, v in out.items():
             if k not in self._out:
                 self._out[k] = torch.empty_like(v)
@@ -442,7 +458,7 @@ class NRTritonEngine(NRGraphEngine):
             nsd = self._nsym["dl"].index(dls) if dls else 0
             it.append([rel, dls, uls, int(sr), int(cqi), ack, int(pg), nsu, nsd, 0])
             ft.append([rho, math.sqrt(1 - rho ** 2), (rel + 1) / N, re(uls), re(dls),
-                       cfg.proc_offset_ms / cfg.control_step_ms])
+                       cfg.proc_offset_ms / cfg.control_step_ms, dt * cfg.slot_ms])
         tab = (torch.tensor(it, dtype=torch.long, device=self.dev).contiguous(),
                torch.tensor(ft, dtype=torch.float64, device=self.dev).contiguous(), len(it),
                sum(1 for s in sched if s[2]), sum(1 for s in sched if s[1]))

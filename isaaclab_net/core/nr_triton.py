@@ -583,8 +583,8 @@ def nr_step_kernel(
         gate_e_ptr, gate_s_ptr, gate_b_ptr, NMSG,
         # per-env accumulators [E, 8 HB]: UL counters, hist ok / tx / fail, then the same for the DL
         acc_ptr,
-        # schedule of this step: itab [K, 10] int64, ftab [K, 6] float64
-        itab_ptr, ftab_ptr, K,
+        # schedule of this step: itab [K, 10] int64, ftab [K, 7] float64; per-robot fading rho per ms [E,R]
+        itab_ptr, ftab_ptr, K, rho_ptr,
         # tables per direction (UL, DL)
         u_tab, u_thr, u_se, u_beta, u_rate, u_eq, u_tbs, u_cbs, u_ncb, u_bg, u_ci0, u_cwi,
         d_tab, d_thr, d_se, d_beta, d_rate, d_eq, d_tbs, d_cbs, d_ncb, d_bg, d_ci0, d_cwi,
@@ -593,6 +593,7 @@ def nr_step_kernel(
         F: tl.constexpr, FB: tl.constexpr, M: tl.constexpr, MB: tl.constexpr, HB: tl.constexpr,
         C: tl.constexpr, G: tl.constexpr, NL: tl.constexpr, EQW: tl.constexpr, NPRB: tl.constexpr,
         UL: tl.constexpr, DL: tl.constexpr, FADING: tl.constexpr, GATE: tl.constexpr, MMB: tl.constexpr,
+        RHO_R: tl.constexpr,
         MODE: tl.constexpr, COMB: tl.constexpr, SCHED: tl.constexpr, WIDEBAND: tl.constexpr,
         HARQ_DROP: tl.constexpr, OLLA: tl.constexpr, PHR_CAP: tl.constexpr, WHOLE_BAND: tl.constexpr,
         PC: tl.constexpr, STEP: tl.constexpr, RETX_PRIO: tl.constexpr,
@@ -628,6 +629,8 @@ def nr_step_kernel(
     hr = tl.load(h_ptr + o_h, mask=m_rs, other=1.0)
     hi = tl.load(h_ptr + o_h + 1, mask=m_rs, other=0.0)
     jn = (ridx[:, None] * S_ + sidx[None, :]) * 2
+    if RHO_R:
+        rho_ms = tl.load(rho_ptr + er, mask=rm, other=0.5)
     zero_rs = tl.zeros([RB, SB], tl.float32)
     if UL:
         (u_s_sent, u_s_floor, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_enq, u_s_csi, u_s_hst, u_s_hlo,
@@ -674,20 +677,26 @@ def nr_step_kernel(
         pgn = tl.load(itab_ptr + k * 10 + 6)
         nsi_u = tl.load(itab_ptr + k * 10 + 7)
         nsi_d = tl.load(itab_ptr + k * 10 + 8)
-        rho = tl.load(ftab_ptr + k * 6 + 0).to(tl.float32)
-        c1 = tl.load(ftab_ptr + k * 6 + 1).to(tl.float32)
-        fr = tl.load(ftab_ptr + k * 6 + 2)
-        re_u = tl.load(ftab_ptr + k * 6 + 3).to(tl.float32)
-        re_d = tl.load(ftab_ptr + k * 6 + 4).to(tl.float32)
-        fin_off = tl.load(ftab_ptr + k * 6 + 5)
+        rho = tl.load(ftab_ptr + k * 7 + 0).to(tl.float32)
+        c1 = tl.load(ftab_ptr + k * 7 + 1).to(tl.float32)
+        fr = tl.load(ftab_ptr + k * 7 + 2)
+        re_u = tl.load(ftab_ptr + k * 7 + 3).to(tl.float32)
+        re_d = tl.load(ftab_ptr + k * 7 + 4).to(tl.float32)
+        fin_off = tl.load(ftab_ptr + k * 7 + 5)
         g = t * N + rel
         fin_val = (t.to(tl.float64) + fr) + fin_off
         if FADING:
             base = mix32(base0 ^ salt(u32((1 << 16) | rel)))
             zr = rng_normal(base, jn)
             zi = rng_normal(base, jn + 1)
-            hr = rho * hr + c1 * zr / 1.4142135623730951
-            hi = rho * hi + c1 * zi / 1.4142135623730951
+            if RHO_R:      # per-robot Doppler: rho_r ** (dt * slot_ms), as NRNet._evolve with fading_rho_ms
+                rr = libdevice.pow(rho_ms, tl.load(ftab_ptr + k * 7 + 6).to(tl.float32))[:, None]
+                cr = libdevice.sqrt(1.0 - rr * rr)
+                hr = rr * hr + cr * zr / 1.4142135623730951
+                hi = rr * hi + cr * zi / 1.4142135623730951
+            else:
+                hr = rho * hr + c1 * zr / 1.4142135623730951
+                hi = rho * hi + c1 * zi / 1.4142135623730951
             gain = 10.0 * libdevice.log10(tl.maximum(hr * hr + hi * hi, 1e-6))
         else:
             gain = zero_rs
@@ -797,11 +806,11 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
         net.h, uref if uref is not None else dref, dref if dref is not None else dummy,
         pc if pc is not None else dummy, eng._tdev, net.rng.episode, net.rng.ctr, net.rng.s0, eng._chs,
         *(gate if gate is not None else (dummy, dummy, dummy)), gate[0].shape[-1] if gate is not None else 1,
-        eng._acc, itab, ftab, K,
+        eng._acc, itab, ftab, K, net.fading_rho_ms if net.fading_rho_ms is not None else net.h,
         tu["tab"], tu["thr"], tu["se"], tu["beta"], tu["rate"], tu["eq"], tu["tbs"], tu["cbs"], tu["ncb"], tu["bg"],
         tu["ci0"], tu["cwi"],
         td["tab"], td["thr"], td["se"], td["beta"], td["rate"], td["eq"], td["tbs"], td["cbs"], td["ncb"], td["bg"],
         td["ci0"], td["cwi"],
         tb["lift"], tb["cax"], tb["w"], tb["S0"], tb["DS"], tb["C0"], tb["DC"], R, cfg.slots_per_step,
-        GATE=gate is not None, MMB=triton.next_power_of_2(gate[0].shape[-1]) if gate is not None else 1,
+        GATE=gate is not None, RHO_R=net.fading_rho_ms is not None, MMB=triton.next_power_of_2(gate[0].shape[-1]) if gate is not None else 1,
         **eng._const, num_warps=eng._num_warps)

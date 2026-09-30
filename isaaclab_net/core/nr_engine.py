@@ -60,6 +60,8 @@ class NRNet:
         self.gen = generator       # rng="global": draws of reset() (fading state); stepping uses the global RNG
         self.rng = make_rng(self.cfg, E, device, seed)     # rng="engine": every draw (nr_rng.py)
         self._tdev = None          # graph capture: 0-dim long device tensor holding t (see the module docstring)
+        self.fading_rho_ms = None  # optional per-robot AR(1) fading correlation per ms [E,R] (per-robot Doppler,
+                                   # channels.doppler); None = the global cfg.fading_rho_per_ms
         self.E, self.R, self.dev = E, R, device
         self.sizes = torch.tensor(sizes, device=device, dtype=torch.float32)
         self.S = self.cfg.n_subbands
@@ -240,17 +242,23 @@ class NRNet:
         return self._sched_cache[key]
 
     def _evolve(self, g, rel=0):
-        """AR(1) fading step to slot g (host int); rel = slot index inside the control step (engine RNG stream)."""
+        """AR(1) fading step to slot g (host int); rel = slot index inside the control step (engine RNG stream).
+        With self.fading_rho_ms [E,R] set (per-robot Doppler) every robot uses its own correlation per ms."""
         if not self.cfg.fading:
             return
         dt = 1 if self.last_g is None else g - self.last_g
         if dt > 0:
-            rho = self.cfg.fading_rho_per_ms ** (dt * self.cfg.slot_ms)
             if self.rng is None:
                 z = torch.randn_like(self.h)
             else:
                 z = self.rng.normal(FADING, rel, self.h[0].numel()).view(self.h.shape)
-            self.h = rho * self.h + math.sqrt(1 - rho ** 2) * z / math.sqrt(2)
+            if self.fading_rho_ms is None:
+                rho = self.cfg.fading_rho_per_ms ** (dt * self.cfg.slot_ms)
+                self.h = rho * self.h + math.sqrt(1 - rho ** 2) * z / math.sqrt(2)
+            else:
+                r = self.fading_rho_ms
+                rho = (r ** (dt * self.cfg.slot_ms)).reshape(*r.shape, *([1] * (self.h.dim() - 2)))
+                self.h = rho * self.h + torch.sqrt(1 - rho ** 2) * z / math.sqrt(2)
         self.last_g = g
 
     def _times(self, t):

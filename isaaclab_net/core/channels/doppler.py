@@ -6,15 +6,14 @@ gets its own rho from its own speed: rho_ms = J0(2 pi f_D 2.5 ms)^(1 / 2.5), f_D
 config.fading_rho_from_speed applied per robot. The speed comes from the velocity input of the step, or from
 consecutive poses (|x_t - x_{t-1}| / control step), floored at doppler_min_speed_mps.
 
-install_per_robot_fading(net) replaces the NR engine's `_evolve(g)` on that NRNet instance by the same recursion
-with a per-robot rho tensor net.fading_rho_ms [E,R] (initially the global rho). The random draws (randn_like on
-the fading state) are the same calls in the same order, so with every robot at the global speed the result equals
-the global model up to float rounding of rho.
+install_per_robot_fading(net) gives an NRNet a per-robot rho tensor net.fading_rho_ms [E,R] (initially the global
+rho), which NRNet._evolve reads directly (the NR engine's per-robot fading input; the graph and triton backends take it
+as a static-shape input). The random draws are the same calls in the same order, so with every robot at the global
+speed the result equals the global model up to float rounding of rho.
 """
 from __future__ import annotations
 
 import math
-import types
 
 import torch
 
@@ -28,21 +27,9 @@ def rho_per_ms_from_speed(speed_mps, carrier_ghz, anchor_ms=2.5):
     return j0.clamp(0.0, 1.0) ** (1 / anchor_ms)
 
 
-def _evolve_per_robot(net, g):
-    if not net.cfg.fading:
-        return
-    dt = 1 if net.last_g is None else g - net.last_g
-    if dt > 0:
-        h = net.h
-        rho = (net.fading_rho_ms ** (dt * net.cfg.slot_ms)).reshape(*net.fading_rho_ms.shape, *([1] * (h.dim() - 2)))
-        net.h = rho * h + torch.sqrt(1 - rho ** 2) * torch.randn_like(h) / math.sqrt(2)
-    net.last_g = g
-
-
 def install_per_robot_fading(net):
     """Give an NRNet per-robot fading correlation (net.fading_rho_ms [E,R], updated by the caller every step)."""
-    if not (hasattr(net, "_evolve") and hasattr(net, "h") and hasattr(net, "last_g")):
-        raise RuntimeError("per-robot Doppler needs the NR engine's AR(1) fading state (NRNet.h, _evolve, last_g)")
+    if not (hasattr(net, "fading_rho_ms") and hasattr(net, "h") and hasattr(net, "last_g")):
+        raise RuntimeError("per-robot Doppler needs the NR engine's AR(1) fading state (NRNet.h, fading_rho_ms)")
     net.fading_rho_ms = torch.full((net.E, net.R), float(net.cfg.fading_rho_per_ms), device=net.dev)
-    net._evolve = types.MethodType(_evolve_per_robot, net)
     return net
