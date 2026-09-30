@@ -211,6 +211,10 @@ isaaclab-net/
 └── LICENSE
 ```
 
+## Documentation
+
+Collaborator documentation lives in [`docs/`](docs/README.md): the [project status](docs/STATUS.md) with open items and starter tasks, the [5G-LENA validation](docs/validation-5g-lena.md), the [public-data calibration](docs/calibration-public-data.md), [performance](docs/performance.md) with the backend equivalence methodology, the [Isaac Lab integration](docs/isaac-lab.md), [multi-cell networks](docs/multicell.md) and the [ns-3 bridges](docs/bridges.md).
+
 ## Contributing
 
 The repository is private while the first paper is in preparation. Collaborators should start from [CONTRIBUTING.md](CONTRIBUTING.md) and the open roadmap items. Changes to the prototype levels go into the eager reference first, and the `graph` backend must stay bitwise equal to it. New MAC and PHY modelling goes into the NR engine.
