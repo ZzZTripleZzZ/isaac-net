@@ -6,9 +6,18 @@ results/
 logs/
 fits/
 data/
+# shipped Sionna BLER tables (Apache-2.0)
+!isaaclab_net/core/data/
 .DS_Store
 *.egg-info/
 .venv/
 .pytest_cache/
 .ruff_cache/
 venv*/
+# GPL-derived 5G-LENA tables: generated locally, never committed (see README)
+*lena_eesm_tables*.npz
+lena_src/
+# ns-3 bridge build outputs
+bin/
+obj/
+*.so
