@@ -140,8 +140,8 @@ class EdgeLoop:
     def config(self):
         return self.engine.config
 
-    def submit(self, t, requests, snr_db=None):
-        return self.engine.submit(t, requests, snr_db)
+    def submit(self, t, requests, snr_db=None, **kw):
+        return self.engine.submit(t, requests, snr_db, **kw)
 
     def add_frames(self, t, send, det, hid, snr_db):
         return self.engine.add_frames(t, send, det, hid, snr_db)
@@ -188,7 +188,10 @@ class EdgeLoop:
 
     def process(self, out):
         """Edge loop of one control step from the engine's step dict; returns the added keys."""
-        ins = (out["delivered"], out["cap"], out["cls"], out["delay"], out["t"],
+        delay = out["delay"]
+        if "arrival" in out:        # traffic models: delay counts from the in-step arrival, not the capture step
+            delay = delay + (out["arrival"] - out["cap"].double()).nan_to_num(0.0).to(delay.dtype)
+        ins = (out["delivered"], out["cap"], out["cls"], delay, out["t"],
                out.get("sinr_db", torch.zeros(self.E, self.R, device=self.dev)))
         if self.cfg.return_path == "nr_dl":
             self._dl_lost = torch.zeros(self.E, self.R, dtype=torch.long, device=self.dev)

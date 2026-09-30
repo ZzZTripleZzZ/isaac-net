@@ -75,6 +75,7 @@ FIELD_GROUPS = {
     "multicell": ("ul_interference", "li_alpha", "ul_pc", "ul_pc_p0_dbm", "ul_pc_alpha", "a3_offset_db",
                   "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc"),
     "nr_multicell": ("dl_interference",),      # read by the NR engine only (NetSlotMC has no downlink)
+    "traffic": ("traffic",),
 }
 
 CHANNELS = ("log_distance", "tr38901", "radio_map")
@@ -87,10 +88,14 @@ TR38901_SHORT = {"tr38901_rma": "RMa", "tr38901_uma": "UMa", "tr38901_umi": "UMi
 def fields_read_by(level, cfg=None):
     """NRConfig fields that the engine make_engine(level, ..., cfg) actually reads."""
     groups = {"L0": ("app", "l0"), "L0DR": ("app", "l0dr"), "L1": ("app", "l1"),
-              "L2": ("app", "frame", "nr", "link", "radio", "multicell", "nr_multicell")}.get(level, ("app",))
+              "L2": ("app", "frame", "nr", "link", "radio", "multicell", "nr_multicell", "traffic")}.get(level,
+                                                                                                     ("app",))
     if level == "L2-legacy" and cfg is not None and not cfg.is_legacy_cell():
         groups = ("app", "frame", "link", "radio", "multicell")        # NetSlotMC
-    return {f for g in groups for f in FIELD_GROUPS[g]}
+    read = {f for g in groups for f in FIELD_GROUPS[g]}
+    if cfg is not None and cfg.traffic is not None and not any(m.generates for m in cfg.traffic):
+        read.add("traffic")            # policy() only: the submit() path every level has
+    return read
 
 
 @dataclass
@@ -300,6 +305,8 @@ class NRConfig:
     frame_buffer: int = 16               # frames per robot per direction
     timeout_steps: int = 20              # application deadline in control steps
     msg_sizes: tuple = (4000.0, 30000.0) # bytes of traffic classes 1, 2, ... (Requests.send = class index)
+    traffic: tuple | None = None         # traffic models run inside the step (traffic.TrafficModel), level L2 only;
+                                         # None = policy messages only. A model or a list is turned into a tuple
     # ---- delay levels (make_engine fills the level params from these when params is None) ----
     l0_delay_median_steps: float = 0.05  # L0: i.i.d. lognormal delay, median in control steps
     l0_delay_log_sigma: float = 0.5      # L0: sigma of the log delay
@@ -331,6 +338,8 @@ class NRConfig:
                 f"cell_layout='custom' needs one position per cell ({self.n_cells}); use cell_layout='hex' or "
                 "'grid', or the multicell() preset")
         assert len(self.msg_sizes) >= 1
+        from .traffic import normalize_traffic
+        self.traffic = normalize_traffic(self.traffic)
         assert 0 < self.dr_delay_median_steps[0] <= self.dr_delay_median_steps[1]
         assert self.dr_delay_log_sigma[0] <= self.dr_delay_log_sigma[1] and 0 <= self.dr_loss[0] <= self.dr_loss[1] <= 1
         assert self.l0_delay_median_steps > 0 and 0 <= self.l0_loss <= 1 and self.l1_eta > 0

@@ -17,7 +17,7 @@ net.reset(done_ids)                       # partial reset of the envs whose epis
 | Call | Meaning |
 |:---|:---|
 | `reset(env_ids=None)` | Re-initialize `env_ids` (all if `None`; an index tensor, a list or a bool mask `[E]`): queues, MAC and HARQ state, link adaptation, fading, radio and clock. Other environments stay bit for bit unaffected, and the reset's random draws come from the engine generator. |
-| `submit(t, requests, snr_db=None)` | Enqueue new messages captured at `t`. `requests` is a [`Requests`](traffic.md) or a `send [E, R]` tensor. `snr_db [E, R]` is recorded as a message feature (default: the SNR of the previous step). Returns `accepted [E, R]` bool. |
+| `submit(t, requests, snr_db=None)` | Enqueue new messages captured at `t`. `requests` is a [`Requests`](traffic.md) or a `send [E, R]` tensor. `snr_db [E, R]` is recorded as a message feature (default: the SNR of the previous step). Returns `accepted [E, R]` bool. On `L2`, the keyword arguments `tag=`, `priority=` and `deadline_ms=` attach per-message extras. |
 | `step(t, poses_or_snr)` | Advance every environment from `t` to `t + 1` and return the output dict below. Positions `[E, R, 2]` or `[E, R, 3]` go through the engine's radio; an `[E, R]` tensor is taken as the SNR in dB. |
 | `clock` | `[E]` long, control steps since each environment's last reset. |
 | `queued()` | `[E, R]` long, messages in each robot's queue. |
@@ -50,6 +50,8 @@ Some engines add entries:
 | `serving_cell` | `L2`, multi-cell `L2-legacy` | serving cell of each robot `[E, R]` (0 with one cell) |
 | `dropped` | `L2` | `[E, R, F]` messages lost under RLC unacknowledged mode (`harq_fail="drop"`) and resolved this step |
 | `dl_newest`, `dl_queue_len` | `L2` with `NRConfig(dl=True)` | downlink counterparts of `newest` and `queue_len` |
+| `arrival`, `arrival_slot`, `tag`, `priority`, `bytes`, `deadline_miss` | `L2` with traffic models or `submit` extras | per message `[E, R, F]`: arrival time in the env clock including the in-step offset, its slot, the extras, bytes on the air, and whether the deadline was missed; `delay` then counts from the arrival slot |
+| `gen_accepted`, `gen_bytes` | `L2` with traffic models | `[E, R]` generated messages and bytes accepted this step |
 
 Capture steps in every output are in the environment's own clock, so after a reset they restart at 0.
 

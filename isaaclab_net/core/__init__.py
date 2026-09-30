@@ -4,7 +4,7 @@
     net = make_engine("L2", E, R, "cuda", NRConfig())          # or any level in LEVELS, see engine.py
 
 Modules: config (NRConfig and presets), engine (make_engine, NREngine), nr_engine (NRNet), phy, queues,
-mac / mac_ul / mac_dl (NR MAC), radio (RadioMC, CellAssociation), traffic (Requests), proto (prototype levels,
+mac / mac_ul / mac_dl (NR MAC), radio (RadioMC, CellAssociation), traffic (Requests, TrafficModel), proto (prototype levels,
 L2-legacy NetSlot and its multi-cell NetSlotMC), levels (fitted surrogates TR / GE / QA / NN and the ORACLE /
 NOCOMM bounds), edge (EdgeLoop: edge compute and return path on top of any engine).
 """
@@ -16,10 +16,10 @@ from .levels import BOUND_LEVELS, SURROGATE_LEVELS
 from .nr_engine import NRNet
 from .phy import MCS_TABLES, PHY, lena_tables_path, segment, tbs_38214
 from .radio import CellAssociation, Radio, RadioMC
-from .traffic import Requests
+from .traffic import Requests, TrafficModel
 
 __all__ = ["NRConfig", "EdgeConfig", "EdgeLoop", "netslot_compat", "lena_like", "lena_match", "lena_validation", "srsran_like", "oai_like",
            "multicell", "make_engine", "NREngine", "NRNet", "LEVELS", "SIM_LEVELS", "SURROGATE_LEVELS",
            "BOUND_LEVELS", "BACKENDS", "FAST_BACKENDS", "PHY",
            "MCS_TABLES", "tbs_38214", "segment", "lena_tables_path", "RadioMC", "CellAssociation", "Radio",
-           "Requests"]
+           "Requests", "TrafficModel"]

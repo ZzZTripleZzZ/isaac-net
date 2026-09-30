@@ -27,7 +27,7 @@ isaaclab_net/
     mac_ul.py        # uplink hooks: SR/BSR, proactive grants, power split / whole-band PSD, PHR cap
     mac_dl.py        # downlink hooks: delayed quantized CQI, K1 HARQ feedback
     queues.py        # fixed-shape frame FIFOs on a per-robot byte stream, RLC in-order delivery, reset helpers
-    traffic.py       # Requests (message class per robot per step)
+    traffic.py       # Requests (message class per robot per step), TrafficModel / TrafficGen (generators in the L2 step)
     edge.py          # EdgeLoop: edge compute stage (FIFO / PS servers per env) and return path over any engine
     data/            # Sionna SYS 2.2.0 BLER tables and EESM betas (Apache-2.0)
     proto/           # the prototype engine, frozen: levels L0, L0DR, L05, L05Q, L1 and L2-legacy (NetSlot)

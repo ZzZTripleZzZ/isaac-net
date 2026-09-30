@@ -54,7 +54,7 @@ The configurable NR engine keeps one global slot clock internally, because its H
 
 ## Messages, delay and age of information
 
-A robot hands the network at most one message per control step, as a traffic class: `Requests.send[e, r] = c` enqueues one message of `NRConfig.msg_sizes[c - 1]` bytes, and `0` sends nothing. The message is stamped with the current capture step. `step` then reports, for every message that completed, its `delay` in control steps from capture to delivery.
+A robot hands the network at most one message per control step, as a traffic class: `Requests.send[e, r] = c` enqueues one message of `NRConfig.msg_sizes[c - 1]` bytes, and `0` sends nothing. The message is stamped with the current capture step. `step` then reports, for every message that completed, its `delay` in control steps from capture to delivery. On level `L2`, traffic models can also generate messages inside the step, several per control step if needed, and their delay counts from their arrival slot (see [Traffic models](configurability.md#traffic-models)).
 
 For a task, the most useful quantity is often the *age of information* (AoI): how old the freshest delivered information about a robot is. If `last[e, r]` is the newest capture step delivered so far, the AoI at the end of control step `t` is `t + 1 - last[e, r]` control steps. `step` returns `newest`, the newest capture step delivered in this step, so keeping `last` is one `torch.maximum` per step. The Isaac layer keeps it for you and returns `aoi_s` in seconds.
 

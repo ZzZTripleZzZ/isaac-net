@@ -201,6 +201,7 @@ python -m isaaclab_net.tools.extract_lena_tables ~/src/nr   # writes ~/.cache/is
 | Downlink | per-robot gNB queues, delayed and quantized CQI, K1 feedback | none |
 | Cells | 1 to 7 cells, a PF scheduler and HARQ per cell, same-slot UL and DL interference, fractional UL power control, A3 handover with interruption | 1 to 7 cells, same-slot UL interference, fractional power control, A3 handover |
 | Application | per-robot FIFO, in-order completion, timeout or PDCP discard | per-robot FIFO of frames, in-order completion, 2 s application timeout |
+| Traffic | policy messages plus periodic (sub-step periods), Markov on/off bursty, video I/P and event-triggered generators per robot, with arrival offsets in slots, tags, priority and deadline fields ([Traffic models](docs/configurability.md#traffic-models)) | policy messages, one per robot per step |
 | Edge loop (optional, every level) | edge servers per env (FIFO or processor sharing, deterministic or exponential service per message class, bounded queue, deadlines) and the return path to the robot: instant, delay from SINR, or a real DL message through this engine | the same edge stage; return path instant or delay from SINR |
 
 `NRConfig(edge=EdgeConfig(...))` closes the loop that a message starts: `make_engine` then wraps the engine in `EdgeLoop` (`isaaclab_net/core/edge.py`), which keeps the engine API and adds to the step dict what the edge did (`edge_done`, `edge_dropped`, `edge_queue_len`) and what each robot now holds: the capture step, age and latency of its newest action (`act_cap`, `act_age`, `act_latency`) split into uplink, edge and return delays. Without `edge` nothing changes. See [docs/configurability.md](docs/configurability.md#edge-computing-loop) and [`examples/edge_control.py`](isaaclab_net/examples/edge_control.py).
@@ -283,7 +284,7 @@ isaaclab-net/
 │   │   ├── nr_engine.py          #   configurable NR engine (L2): slot schedule, fading, UL/DL, partial reset
 │   │   ├── phy.py  queues.py     #   3GPP MCS/TBS/BLER/EESM; fixed-shape frame FIFOs on a byte stream
 │   │   ├── mac.py mac_ul.py mac_dl.py   # per-slot MAC: multi-HARQ, PF, link adaptation; UL and DL hooks
-│   │   ├── radio.py  traffic.py  #   per-link radio, cell association and handover; Requests
+│   │   ├── radio.py  traffic.py  #   per-link radio, cell association and handover; Requests, TrafficModel
 │   │   ├── edge.py               #   EdgeLoop: edge servers and the return path on top of any engine
 │   │   ├── data/                 #   Sionna BLER tables (Apache-2.0)
 │   │   ├── proto/                #   prototype levels L0 ... L1 and L2-legacy: reference, fast backends,
@@ -294,7 +295,8 @@ isaaclab-net/
 │   ├── bridges/                  # ns-3 co-simulation (lockstep, process pool, offline replay), validation only
 │   │   └── ns3/                  #   the C++ ns-3 programs and their build scripts
 │   ├── examples/                 # fleet_task.py (pure torch), edge_control.py (edge-offloaded control),
-│   │                             # isaac_fleet_env.py (Isaac Lab), mjx_fleet_env.py (MJX)
+│   │                             # isaac_fleet_env.py (Isaac Lab), mjx_fleet_env.py (MJX),
+│   │                             # traffic_models.py (traffic generators)
 │   └── tools/                    # PHY table export, local 5G-LENA table extraction, surrogate fits (fit_levels)
 ├── tests/                        # pytest suite; scripts/ (equivalence scripts), bridges/ (need ns-3)
 ├── benchmarks/                   # engine, NR, multi-cell, Isaac and ns-3 scaling benchmarks

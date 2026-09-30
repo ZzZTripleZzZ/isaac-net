@@ -27,6 +27,9 @@ Every engine returned here has the contract API of ARCHITECTURE.md:
                                       newest [E,R], det_env [E], queue_len / queue_bytes / sinr_db [E,R], t [E]
   clock [E]                           per-env episode clock; pass t=None to use it (recommended)
 plus the legacy calls add_frames(t, send, det, hid, snr_db) and step(t, snr_db, hid) -> (newest, det_env).
+
+Traffic models (NRConfig.traffic, traffic.TrafficModel) run inside NREngine.step on level "L2"; every other level
+raises if the config asks for them (see _check_traffic).
 """
 from __future__ import annotations
 
@@ -40,7 +43,8 @@ from .levels import BOUND_LEVELS, SURROGATE_LEVELS, make_level
 from .nr_engine import NRNet
 from .proto import netsim as _proto
 from .radio import RadioMC
-from .traffic import Requests
+from .queues import env_mask, onehot
+from .traffic import Requests, TrafficGen, generates
 
 PROTO_LEVELS = ("L0", "L0DR", "L05", "L05Q", "L1")
 SIM_LEVELS = PROTO_LEVELS + ("L2", "L2-legacy")
@@ -62,6 +66,15 @@ def _check_proto_config(level, cfg: NRConfig):
     if level in ("L1", "QA") and not cfg.is_legacy_cell():
         raise ValueError(f"level {level} has the fixed legacy radio (one gNB at the origin, -90 dBm noise floor); "
                          "use the default cell settings, or level 'L2' / 'L2-legacy'")
+
+
+def _check_traffic(level, cfg: NRConfig):
+    """Traffic models run inside the NR engine step. Every other level would silently drop them, so refuse."""
+    if generates(cfg.traffic):
+        names = ", ".join(f"{m.kind}()" for m in cfg.traffic if m.generates)
+        raise ValueError(f"level {level} ignores NRConfig.traffic ({names}): traffic models run inside the NR "
+                         "engine step. Use level 'L2', or generate the messages yourself and pass them to submit(). "
+                         "policy() alone is accepted by every level.")
 
 
 def _level_params(level, cfg: NRConfig, params):
@@ -122,6 +135,8 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     if strict and cfg.unused_fields(level):
         raise ValueError(f"level {level} ignores these config fields: {', '.join(cfg.unused_fields(level))} "
                          "(see NRConfig.unused_fields and docs/configurability.md)")
+    if level != "L2":
+        _check_traffic(level, cfg)
     params = _level_params(level, cfg, params)
     if level == "L2":
         if backend != "reference":
@@ -182,6 +197,16 @@ class NREngine:
         self._uniform_epoch = 0                 # host copy of the epoch while no partial reset happened
         self._last_snr = torch.zeros(E, R, device=self.dev)
         self._last_hid = torch.zeros(E, dtype=torch.long, device=self.dev)
+        # traffic models (NRConfig.traffic): own generator seeded from the engine seed, so neither the policy's
+        # sampling nor the network's draws shift the traffic, and the traffic does not shift the network
+        self.traffic = None
+        self._extras = False
+        self._gate = None
+        if generates(cfg.traffic):
+            tseed = (int(seed) * 6364136223846793005 + 1442695040888963407) % 2 ** 62
+            self.traffic = TrafficGen(cfg.traffic, E, R, self.dev, cfg.control_step_ms, cfg.slots_per_step,
+                                      seed=tseed)
+            self._enable_extras()
 
     # ------------------------------------------------------------------ passthroughs
     def __getattr__(self, name):          # ul, dl, stats, counters(), cap, ... of the wrapped NRNet
@@ -220,6 +245,145 @@ class NREngine:
         the engine's own inter-cell interference runs first and fn gets its result."""
         self.net.set_sinr_hook(fn, direction)
 
+    # ------------------------------------------------------------------ traffic models and message extras
+    def _enable_extras(self):
+        """Per-message arrival offset, tag, priority and deadline in the UL queue, and the hooks that gate the
+        stream by arrival slot. Only called when traffic models or submit extras are used, so an engine without
+        them runs exactly the ops it ran before. The hooks wrap four UlMac methods on this instance
+        (sr_step / slot: open the stream up to the arrivals of the current slot; end_step: open it fully and
+        snapshot the extras before compaction; handover: a flush spares messages that have not arrived yet);
+        mac.py and nr_engine.py are unchanged."""
+        if self._extras:
+            return
+        self._extras = True
+        ul = self.net.ul
+        ul.q.enable_extras()
+        sr0, slot0, end0 = ul.sr_step, ul.slot, ul.end_step
+
+        def sr_step(g):
+            self._open_gate(g)
+            return sr0(g)
+
+        def slot(g, *a, **k):
+            self._open_gate(g)
+            return slot0(g, *a, **k)
+
+        def end_step(t, timeout):
+            self._close_gate()
+            q = ul.q
+            self._snap = {"cap": q.cap.clone(), "fin": q.fin.clone(), "off": q.off.clone(), "tag": q.tag.clone(),
+                          "prio": q.prio.clone(), "dline": q.dline.clone(), "bytes": (q.end - q.start).clone()}
+            return end0(t, timeout)
+
+        ho0 = ul.handover
+
+        def handover(ho, flush=False):
+            # ho_rlc="flush" / RLC UM drop every queued frame not yet completed; a message that arrives in a
+            # later slot of this step is not queued yet at the handover, so it must survive it
+            if self._gate is None:
+                return ho0(ho, flush)
+            q = ul.q
+            pending = (q.cap >= 0) & (q.start >= q.enq[..., None]) & ~q.lost
+            r = ho0(ho, flush)
+            ul.ctr["lost_frames"] -= (pending & q.lost).sum()
+            q.lost = q.lost & ~pending
+            return r
+
+        ul.sr_step, ul.slot, ul.end_step, ul.handover = sr_step, slot, end_step, handover
+        self._snap = None
+        self.traffic_stats = {k: torch.zeros((), dtype=torch.long, device=self.dev)
+                              for k in ("generated", "generated_bytes", "accepted", "accepted_bytes", "refused")}
+
+    def _open_gate(self, g):
+        """Stream bytes of messages arriving at slot rel = g - g0 or earlier become visible to SR/BSR and the MAC."""
+        if self._gate is None:
+            return
+        ends, slots, base = self._gate
+        rel = g - self._g0
+        vis = torch.where(slots <= rel, ends, base[..., None]).max(-1).values
+        self.net.ul.q.enq = torch.maximum(base, vis)
+
+    def _close_gate(self):
+        if self._gate is not None:
+            self.net.ul.q.enq = self._full_enq
+            self._gate = None
+            self._gate_seen = True
+
+    def _enqueue(self, T, want, nbytes, slot, det, tag, prio, dline, snr):
+        """NRNet.add_frames for arbitrary byte sizes and the extras; returns (accepted [E,R], accepted bytes)."""
+        net, N = self.net, self.config.slots_per_step
+        q = net.ul.q
+        count = q.count()
+        adm = net._admit(net.ul, T, want)
+        if net.log_stats:
+            net.stats["overflow"] += int((adm & (count >= q.F)).sum())
+            net.stats["discarded"] += int((want & ~adm).sum())
+        size = net.air_bytes(nbytes.float())
+        nact = (q.cap >= 0).any(-1).sum(-1)
+        before = q.enq
+        acc, i, oh = q.add(T, adm, size)
+        if net.log_stats:
+            net.refused_env += (want & ~acc).sum(-1)
+        put = lambda name, v: setattr(q, name, torch.where(oh, v[..., None].to(getattr(q, name).dtype), getattr(q, name)))
+        put("cls", torch.zeros_like(slot))
+        put("det", det)
+        put("hid", self._last_hid[:, None].expand(-1, self.R))
+        put("f_nact", nact[:, None].expand(-1, self.R))
+        put("f_snr", snr)
+        put("f_own", i)
+        put("off", slot.double() / N)
+        put("tag", tag)
+        put("prio", prio)
+        put("dline", dline)
+        return acc, q.enq - before
+
+    def _inject(self, T, triggers):
+        """Generate this step's messages, enqueue them in arrival order and close the stream gate."""
+        arr = self.traffic.step(self.clock, triggers)
+        q = self.net.ul.q
+        base = q.enq
+        ends = []
+        n_acc = torch.zeros(self.E, self.R, dtype=torch.long, device=self.dev)
+        st = self.traffic_stats
+        for m in range(arr.valid.shape[-1]):
+            v = arr.valid[..., m]
+            acc, _ = self._enqueue(T, v, arr.nbytes[..., m], arr.slot[..., m], arr.det[..., m] & v,
+                                    arr.tag[..., m], arr.prio[..., m], arr.dline[..., m], self._last_snr)
+            ends.append(q.enq)
+            n_acc = n_acc + acc.long()
+            st["generated"] += v.sum()
+            st["generated_bytes"] += (arr.nbytes[..., m].round().long() * v).sum()
+            st["accepted"] += acc.sum()
+            st["accepted_bytes"] += (arr.nbytes[..., m].round().long() * acc).sum()
+            st["refused"] += (v & ~acc).sum()
+        self._full_enq = q.enq
+        if ends:
+            never = torch.full_like(arr.slot, self.config.slots_per_step)      # empty entries never open the gate
+            self._gate = (torch.stack(ends, -1), torch.where(arr.valid, arr.slot, never), base)
+            q.enq = base
+            self._g0 = T * self.config.slots_per_step
+        return arr, n_acc
+
+    def _outputs_extras(self, out, delivered, timed, dropped):
+        """Arrival-corrected delays and the per-message extras from the snapshot taken before compaction."""
+        sn, c = self._snap, self.config
+        valid = sn["cap"] >= 0
+        delay = (sn["fin"] - sn["cap"].double() - sn["off"]).float()
+        out["delay"] = torch.where(delivered, delay, torch.full_like(delay, float("nan")))
+        cap_rel = sn["cap"] - self.epoch.view(-1, 1, 1)
+        out["arrival"] = torch.where(valid, cap_rel.double() + sn["off"], torch.full_like(sn["off"], float("nan")))
+        out["arrival_slot"] = torch.where(valid, (sn["off"] * c.slots_per_step).round().long(),
+                                          torch.full_like(sn["cap"], -1))
+        out["tag"] = torch.where(valid, sn["tag"], torch.zeros_like(sn["tag"]))
+        out["priority"] = torch.where(valid, sn["prio"], torch.zeros_like(sn["prio"]))
+        out["bytes"] = torch.where(valid, sn["bytes"], torch.zeros_like(sn["bytes"]))
+        late = delivered & (delay.double() * c.control_step_ms > sn["dline"])
+        out["deadline_miss"] = late | ((timed | dropped) & torch.isfinite(sn["dline"]))
+        net = self.net
+        if net.log_stats and net.stats["delay"]:
+            dk = delivered & (sn["cap"] <= net.log_cap_max)
+            net.stats["delay"][-1] = delay[dk].cpu()
+
     # ------------------------------------------------------------------ time
     def _now(self, t):
         if t is None:
@@ -249,6 +413,9 @@ class NREngine:
     def reset(self, env_ids=None):
         """Re-initialize env_ids (None = all): queues, HARQ, SR/BSR, OLLA, PF, CSI, fading, radio and clock."""
         ids = _proto.env_index(env_ids, self.E, self.dev)
+        self._gate = None
+        if self.traffic is not None and (ids is None or ids.numel() > 0):
+            self.traffic.reset(None if ids is None else env_mask(self.E, ids, self.dev))
         if ids is None:
             self.net.reset(None)
             self.T = 0
@@ -269,15 +436,30 @@ class NREngine:
         if self.radio is not None:
             self.radio.reset(ids)
 
-    def submit(self, t, requests, snr_db=None):
+    def submit(self, t, requests, snr_db=None, *, tag=None, priority=None, deadline_ms=None):
         """Enqueue new messages at capture time t (None = engine clock). requests: Requests or send [E,R].
-        snr_db [E,R] is recorded as a frame feature (default: the SNR of the previous step). Returns accepted."""
+        snr_db [E,R] is recorded as a frame feature (default: the SNR of the previous step). Returns accepted.
+        tag / priority ([E,R] long or int) and deadline_ms ([E,R] float or float) are optional per-message extras
+        that the queue carries and step() reports (tag, priority, deadline_miss)."""
         T = self._now(t)
         req = requests if isinstance(requests, Requests) else Requests(send=requests)
         det = req.det if req.det is not None else torch.zeros_like(req.send, dtype=torch.bool)
         hid = req.hid if req.hid is not None else torch.zeros(self.E, dtype=torch.long, device=self.dev)
         self._last_hid = hid
-        return self.net.add_frames(T, req.send, det, hid, self._last_snr if snr_db is None else snr_db)
+        extras = tag is not None or priority is not None or deadline_ms is not None
+        if extras:
+            self._enable_extras()
+        q = self.net.ul.q
+        cnt = q.count() if extras else None
+        acc = self.net.add_frames(T, req.send, det, hid, self._last_snr if snr_db is None else snr_db)
+        if extras:
+            oh = onehot(cnt.clamp(max=q.F - 1), q.F) & acc[..., None]
+            for name, v in (("tag", tag), ("prio", priority), ("dline", deadline_ms)):
+                if v is not None:
+                    cur = getattr(q, name)
+                    v = torch.as_tensor(v, dtype=cur.dtype, device=self.dev).expand(self.E, self.R)
+                    setattr(q, name, torch.where(oh, v[..., None], cur))
+        return acc
 
     def add_frames(self, t, send, det, hid, snr_db):
         """Legacy wrapper (NetSlot API)."""
@@ -302,7 +484,8 @@ class NREngine:
             self.net.fading_rho_ms = rho_per_ms_from_speed(speed, self.config.carrier_ghz)
         return pg
 
-    def step(self, t, x=None, cur_hid=None, *, snr_db=None, dl_snr_db=None, pathgain_db=None, vel=None):
+    def step(self, t, x=None, cur_hid=None, *, snr_db=None, dl_snr_db=None, pathgain_db=None, vel=None,
+             triggers=None):
         """Advance [t, t+1). x: SNR [E,R] in dB, or poses [E,R,2|3] (through the engine's radio); snr_db=
         takes a per-subband SNR [E,R,S]. With several cells (config.n_cells > 1) x must be poses, or pass
         pathgain_db= [E,R,C] (large-scale gain of every robot-cell link, dB). vel [E,R,2|3] (m/s): robot velocities
@@ -314,10 +497,27 @@ class NREngine:
           serving_cell [E,R]     serving cell (0 with one cell)
           dl_newest, dl_queue_len [E,R]  when config.dl
         With several cells sinr_db is the serving-link SINR against the gNB's latest N+I estimate.
+        With traffic models (NRConfig.traffic) the step first generates this step's messages; triggers= feeds the
+        event models (a mask [E,R] / [E], or {name: mask}). With traffic models or submit extras it also returns,
+        per frame [E,R,F]: arrival (env clock incl. the in-step offset), arrival_slot, tag, priority, bytes (on the
+        air), deadline_miss; delay is then measured from the arrival slot. gen_accepted / gen_bytes [E,R] count
+        the generated messages accepted this step.
         """
         T = self._now(t)
         legacy = cur_hid is not None
         hid = cur_hid if legacy else self._last_hid
+        if self.net.C > 1 and pathgain_db is None and (x is None or x.dim() != 3):
+            raise ValueError("several cells: pass poses [E,R,2|3] or pathgain_db=[E,R,C]")
+        if self.net.C == 1 and pathgain_db is not None:
+            raise ValueError("pathgain_db= needs config.n_cells > 1; use x (poses or SNR) with one cell")
+        arr = None
+        if self.traffic is not None:
+            self._gate_seen = False
+            n0 = self.net.ul.q.enq
+            arr, gen_acc = self._inject(T, triggers)
+            gen_bytes = self._full_enq - n0
+            if arr.valid.shape[-1] == 0:
+                self._gate_seen = True
         if self.net.C > 1:
             if pathgain_db is None:
                 if x is None or x.dim() != 3:
@@ -340,6 +540,12 @@ class NREngine:
             out = self.net.step(T, snr_db, hid, dl_snr_db, full=True)
             snr = snr_db if snr_db.dim() == 2 else snr_db.mean(-1)
         self._last_snr = snr
+        if self.traffic is not None and not getattr(self, "_gate_seen", True):
+            raise RuntimeError("the traffic gate hooks on net.ul were not reached: NRNet no longer calls "
+                               "ul.sr_step / ul.slot / ul.end_step; traffic models need an update")
+        if self._extras and self._snap is not None:
+            self._outputs_extras(out, out["delivered"], out["timed_out"], out["dropped"])
+            self._snap = None
         newest = self._rel(out["newest"])
         self.T = T + 1
         if legacy:
@@ -352,4 +558,7 @@ class NREngine:
         if "serving_cell" not in out:
             out["serving_cell"] = torch.zeros(self.E, self.R, dtype=torch.long, device=self.dev)
         out["t"] = (T - self.epoch).clone()
+        if arr is not None:
+            out["gen_accepted"] = gen_acc
+            out["gen_bytes"] = gen_bytes
         return out

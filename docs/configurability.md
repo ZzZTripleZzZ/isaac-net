@@ -4,7 +4,7 @@ Users should be able to choose the network model they train against, not inherit
 
 ## How configuration works today
 
-One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module, and `make_engine(level, E, R, device, config, backend)` builds every fidelity level. The configurable NR engine (`L2`) reads almost all of it. The other levels read much less. The prototype levels (`L0` to `L1`, `L2-legacy`), the fitted surrogates and the bounds read only the application fields, and they refuse a config whose frame buffer, timeout or control step differs from their compiled constants. `L2-legacy` with more than one cell or thermal noise runs `NetSlotMC`, which reads the radio, cell, power-control and handover fields but none of the NR MAC fields. Until this branch, a field that a level does not read was ignored without notice. For example, `make_engine("L0", config=NRConfig(pathloss_exp=3.0))` runs with the fixed legacy radio, and `make_engine("L2-legacy", config=NRConfig(olla_up_db=0.1))` runs with the legacy OLLA steps. `NRConfig.unused_fields(level)` now lists such fields and `make_engine(..., strict=True)` refuses them (see the last section).
+One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module, and `make_engine(level, E, R, device, config, backend)` builds every fidelity level. The configurable NR engine (`L2`) reads almost all of it. The other levels read much less. The prototype levels (`L0` to `L1`, `L2-legacy`), the fitted surrogates and the bounds read only the application fields, and they refuse a config whose frame buffer, timeout or control step differs from their compiled constants. `L2-legacy` with more than one cell or thermal noise runs `NetSlotMC`, which reads the radio, cell, power-control and handover fields but none of the NR MAC fields. `L2` reads those cell fields too, plus `dl_interference`. Until this branch, a field that a level does not read was ignored without notice. For example, `make_engine("L0", config=NRConfig(pathloss_exp=3.0))` runs with the fixed legacy radio, and `make_engine("L2-legacy", config=NRConfig(olla_up_db=0.1))` runs with the legacy OLLA steps. `NRConfig.unused_fields(level)` now lists such fields and `make_engine(..., strict=True)` refuses them (see the last section).
 
 ## Inventory of hard-coded choices
 
@@ -18,9 +18,9 @@ One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module
 | Application timeout | `proto/netsim.py:30` (`TIMEOUT`) | 20 control steps (2 s) | `timeout_steps`, `L2` only | used in graph bodies as a Python constant |
 | Control step | `proto/netsim.py:23` (`UL_PER_STEP`), `engine.py` check | 100 ms, 40 UL slots | `control_step_ms`, `L2` only | constexpr (`K`) |
 | Message size classes | `config.py` `msg_sizes` | (4000, 30000) B | yes, every level | per-call tensor, safe |
-| Isaac-side message sizes | `isaac/netmodule.py:54` | (1500, 12000) B | no: separate `NetConfig` with a different default | n/a |
-| One message per robot per step | `traffic.py`, `Requests.send` | class index 0, 1, 2, ... | no | fixed shape `[E,R]` |
-| Per-message tag | `Requests.det` / `hid` | one bool per message, one id per env | no | safe |
+| Isaac-side message sizes | `isaac/netmodule.py:54` | (1500, 12000) B | yes since 9c642ce: the Isaac layer reads `NRConfig.msg_sizes` (4000, 30000) | n/a |
+| Policy messages per robot per step | `traffic.py`, `Requests.send` | at most one, class index 0, 1, 2, ... | no; generated traffic: `traffic` (see [Traffic models](#traffic-models)), `L2` only | fixed shape `[E,R]` |
+| Per-message tag | `Requests.det` / `hid`; `submit(..., tag=, priority=, deadline_ms=)` | one bool per message, one id per env; tag, priority and deadline per message on `L2` | no | safe |
 | Stack processing offset | `config.py` `proc_offset_ms` | 0 ms | yes, `L2` | n/a |
 | Stepping randomness | every engine; `seed` covers reset draws only | global torch RNG | no | graph backends draw from the device's default Philox generator |
 
@@ -28,15 +28,15 @@ One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module
 
 | Choice | Where | Value | In NRConfig | Fast backends |
 |:---|:---|:---|:---|:---|
-| Path loss model | `proto/netsim.py:170` (legacy), `radio.py:73` | log-distance, 40 + 35 log10(d) | `pl_const_db`, `pathloss_exp` for `L2` and `NetSlotMC`; the prototype `Radio` is fixed | radio runs outside the graph |
+| Path loss model | `proto/netsim.py:170` (legacy), `radio.py`, `channels/` | log-distance, 40 + 35 log10(d) | `channel` = `log_distance` (`pl_const_db`, `pathloss_exp`), `tr38901` (8 scenarios) or `radio_map`, for `L2` and `NetSlotMC` ([channels.md](channels.md)); the prototype `Radio` is fixed | radio runs outside the engine graph; its ops are fixed-shape and capture in a CUDA graph |
 | Minimum distance, 2-D distance | `radio.py:71-72`, `proto/netsim.py:169` | d ≥ 1 m, height ignored | no | safe |
-| Shadowing | `radio.py:39-48`, `proto/netsim.py:161` | 6 dB, 8 plane waves, wavelengths uniform in 20–60 m | `shadow_sigma_db`, `shadow_modes`; `shadow_dcorr_m` and `shadow_white_frac` exist but no engine reads them | safe |
+| Shadowing | `channels/fields.py`, `proto/netsim.py:161` | 6 dB, 8 plane waves, wavelengths uniform in 20–60 m | `shadow_sigma_db`, `shadow_modes`, `shadow_dcorr_m`, `shadow_acf` (legacy band or exponential ACF), `shadow_white_frac`, `shadow_white_dcorr_m` (`L2`, `NetSlotMC`); TR 38.901 sigma and correlation per scenario | safe |
 | gNB placement | `config.py` `cell_positions_m` | one gNB at the arena corner (0, 0) | yes (`cell_layout`, hex / grid / custom) for `L2` and `NetSlotMC`; `L1` and `QA` require the corner | safe |
 | Noise floor | `proto/netsim.py:27`, `config.py` | −90 dBm per 10-PRB subband, includes interference | `noise_model`, `ni_fixed_dbm`, `gnb_nf_db`, `ue_nf_db` for `L2` and `NetSlotMC` | legacy constant |
 | UE and gNB power | `proto/netsim.py:26`, `config.py` | 23 dBm, 43 dBm | `ue_tx_dbm`, `gnb_tx_dbm` (`L2`, `NetSlotMC`) | legacy constant |
-| Fast fading | `proto/netsim.py:35`, `config.py` | AR(1) Rayleigh per subband, 0.93 per 2.5 ms (3 m/s at 3.5 GHz) | `fading`, `fading_rho_per_ms` for `L2`; now also `ue_speed_mps`, `carrier_ghz`; legacy fixed | constexpr (`RHO`) |
+| Fast fading | `proto/netsim.py:35`, `config.py`, `channels/doppler.py` | AR(1) Rayleigh per subband, 0.93 per 2.5 ms (3 m/s at 3.5 GHz) | `fading`, `fading_rho_per_ms`, `ue_speed_mps`, `carrier_ghz`, and per-robot Doppler from each robot's speed (`fading_doppler="per_robot"`) for `L2`; legacy fixed | constexpr (`RHO`) |
 | DL SNR from UL SNR | `config.py` `dl_snr_offset_db` | UL + 10 dB when no DL SNR is given | yes, `L2` | n/a |
-| LOS blockage | `isaac/netmodule.py:84` | 20 dB when the ray is blocked | Isaac `ParamRanges` only | n/a |
+| LOS blockage | `isaac/netmodule.py:84`, `channels/blockage.py` | 20 dB when the ray is blocked | Isaac `ParamRanges`; robot bodies as spheres in `RadioMC` (`blockage`, `blockage_radius_m`, `blockage_loss_db`, off by default) | fixed-shape `[E,R,R,C]` test |
 
 ### PHY and link adaptation
 
@@ -61,7 +61,7 @@ One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module
 | SR to grant delay (legacy) | `proto/netsim.py:31` | 2 UL slots | NR: `sr_period_slots`, `sr_grant_delay_slots`; legacy fixed | constexpr |
 | HARQ RTT, max transmissions, RLC retry (legacy) | `proto/netsim.py:32-34` | 4 UL slots, 4 tx, +10 UL slots | NR: `ul_harq_rtt_slots`, `max_harq_tx`, `n_harq`, `harq_fail`, `rlc_retx_slots`; legacy fixed | constexpr |
 | Power-headroom cap | `proto/netsim.py:38` | 3 dB per subband | NR `phr_cap`, `phr_min_db`; legacy fixed | constexpr (`PHR`) |
-| UL power control | `proto/netsim_mc.py:222-224` | fractional, `NetSlotMC` only | `ul_pc*` (multi-cell legacy only) | reference only |
+| UL power control | `mac_ul.py` (`pc_backoff`), `proto/netsim_mc.py:222-224` | fractional, on by default with more than one cell | `ul_pc*` (`L2` and multi-cell legacy) | reference only |
 | Retransmission priority | `mac.py:160` | +1e9 on the PF metric | `retx_priority` on/off | n/a |
 | DL CQI | `mac_dl.py:16-20` | best MCS per subband, mapped back to its threshold, reported every 10 slots | `cqi_period_slots`; the quantization rule is fixed (not the 38.214 CQI table) | n/a |
 
@@ -82,34 +82,75 @@ One `NRConfig` dataclass (`isaaclab_net/core/config.py`) configures every module
 | Choice | Where | Value | Notes |
 |:---|:---|:---|:---|
 | Observation features | `isaac/net_module.py:191-198`, `isaac/netmodule.py:518-526` | AoI clamped at 50 steps, SNR / 40 (or / 30), queue / 16, delivered flag, blocked flag | two different normalizations in the two Isaac modules; no feature selection |
-| SNR sampling within a step | `isaac/netmodule.py:50` | `pose_chunks = 4` | Isaac `NetConfig` only |
+| SNR sampling within a step | `isaac/netmodule.py:50` | `pose_chunks = 4` | `IsaacNetCfg` |
 | Domain randomization | `isaac/netmodule.py:77-88`, `isaac/mdp/events.py` | per-env uniform ranges of p_tx, noise, path loss, shadowing, blockage, background load, L0 delay | only on the Isaac engine; `make_engine` levels have no per-env parameter tensors |
 | Background load | `isaac/netmodule.py:85` | fraction of subbands taken by other UEs | Isaac engine only |
 | Fleet task | `examples/fleet_task.py:3-19` | imports `F`, `TIMEOUT` and the prototype `Radio` whatever the engine | task constants are class attributes |
 
 ## Feature matrix
 
-The comparison uses the public documentation of ns-3 5G-LENA v5.1, Sionna SYS 2.x and Simu5G. Entries for the other tools are brief and should be checked against their manuals before a paper cites them. "Have" means a user can select it today through `NRConfig` or `make_engine`.
+The comparison was checked line by line against the official documentation of ns-3 5G-LENA `v5.1` (NR manual sources and `FEATURES.md` at that tag), NVIDIA Sionna SYS `v2.2.0` (API docs and tutorials) and Simu5G `v1.7.0` (simu5g.org user's guide and the repository at that tag), all accessed on 2026-09-29. [feature-matrix-sources.md](feature-matrix-sources.md) gives, for every (tool, feature) cell, the status, the feature name the tool's documentation uses, and the URL and section. The status words there are *supported*, *partial* and *not supported*. A cell confirmed only by source code, not by a manual, is marked as such there. "Have" means a user can select it today through `NRConfig` or `make_engine`. Sionna SYS is a set of system-level blocks on top of Sionna PHY and RT, so its cells name the companion package when the capability lives there.
 
 | Feature | isaaclab-net | 5G-LENA | Sionna SYS | Simu5G | Our status and reason |
 |:---|:---|:---|:---|:---|:---|
-| Numerology | μ = 0, 1, 2 (`L2`) | 0–4 (FR1, FR2) | via Sionna PHY | multiple numerologies | **partial**: FR2 (μ = 3) missing, cheap once tables allow |
-| Bandwidth / PRBs | any 38.101 FR1 value (`L2`) | any | any | any | **have** (`L2`); legacy fixed at 50 PRB |
-| TDD / FDD | any TDD string (`L2`) | TDD and FDD | slot abstraction | TDD and FDD | **partial**: FDD missing (an all-`U` pattern with a paired DL carrier) |
-| Schedulers | PF (subband or wideband) | PF, RR, MR in TDMA and OFDMA, QoS-aware | PF | Max C/I, PF, DRR | **partial**: RR and max-C/I are one line each in `mac.py` |
-| HARQ | multi-process, chase or IR, max tx | yes | abstraction with HARQ feedback to link adaptation | yes | **have** (`L2`) |
+| Numerology | μ = 0, 1, 2 (`L2`) | μ = 0–4 (FR1, FR2) | no numerology model; any subcarrier spacing via Sionna PHY `ResourceGrid` | μ = 0–4, one per component carrier | **partial**: FR2 (μ = 3) missing, cheap once tables allow |
+| Bandwidth / PRBs | any 38.101 FR1 value (`L2`) | any, up to 275 PRBs per BWP | any (`ResourceGrid`, scheduler `num_freq_res`) | any (`numBands` per carrier) | **have** (`L2`); legacy fixed at 50 PRB |
+| TDD / FDD | any TDD string (`L2`) | TDD and FDD | none; one direction (DL or UL) per run | TDD (fixed DL/UL symbol split) and FDD | **partial**: FDD missing (an all-`U` pattern with a paired DL carrier) |
+| Schedulers | PF (subband or wideband) | PF, RR, MR in TDMA and OFDMA, QoS-aware, random, RL-based | PF (SU-MIMO) | Max C/I (and variants), PF, DRR, QoS-aware PF | **partial**: RR and max-C/I are one line each in `mac.py` |
+| HARQ | multi-process, chase or IR, max tx | IR and CC, multi-process, max retx | ACK/NACK feedback to link adaptation, no retransmissions | yes (processes, max retx) | **have** (`L2`) |
 | RLC | AM retry or UM loss, PDCP discard | UM, AM, TM | none | UM, AM, TM | **partial**: no RLC segmentation timers or status reports |
-| Link adaptation | BLER target, OLLA, MCS caps | AMC, error-model based | inner and outer loop | CQI-based AMC | **have**; OLLA clamp and legacy steps fixed |
-| Power control | UL fractional (legacy multi-cell only) | UL and DL power control | UL open loop, DL fair power | yes | **partial**: not in the NR engine |
-| MIMO / beamforming | none (one layer) | MIMO and beamforming | through Sionna PHY | limited | **missing**: layers could scale TBS and SINR (moderate); beamforming is large |
-| Channel model | log-distance, plane-wave shadowing, AR(1) Rayleigh | 3GPP TR 38.901 (UMa, UMi, RMa, InH, InF, V2X) | TR 38.901 and ray-traced radio maps via Sionna RT | 3GPP path loss and fading | **partial**: no 38.901 scenarios, no LOS probability, no radio map |
-| Mobility | from the simulator's poses | ns-3 mobility models | user-supplied | INET mobility models | **have**: poses come from Isaac Lab, which is the point of the package |
-| Traffic | one message per robot per step, size classes; DL bytes | any ns-3 application | full-buffer or user queues | any INET application | **partial**: no periodic, bursty or video generators |
-| UL / DL / sidelink | UL, DL (`L2`) | UL, DL, NR sidelink | UL, DL | UL, DL, D2D | **partial**: sidelink out of scope for now |
-| QoS / slicing | none | QoS schedulers, BWP-based | none | limited | **missing** |
-| Multi-cell / handover | 1–7 cells, A3 handover (legacy); NR in progress | multi-cell, handover | multi-cell hex layouts, wraparound | multi-cell, X2 handover | **partial**: NR multi-cell on `feat/nr-multicell` |
-| Interference | same-slot UL (legacy MC); NR hook | full | full | full | **partial** |
-| Carrier aggregation / BWP | none | CA and BWPs | none | CA | **out of scope** for robot fleets on one carrier |
+| Link adaptation | BLER target, OLLA, MCS caps | AMC, error-model or Shannon based | inner and outer loop | CQI-based AMC | **have**; OLLA clamp and legacy steps fixed |
+| Power control | UL fractional (`L2` and legacy multi-cell) | UL open and closed loop; DL uniform power allocation only | UL open loop, DL fair power | none documented (fixed transmit powers) | **partial**: no DL power control |
+| MIMO / beamforming | none (one layer) | SU-MIMO up to rank 4, analog beamforming | SU-MIMO streams; precoding via Sionna PHY | none (incomplete MIMO removed in v1.4.3) | **missing**: layers could scale TBS and SINR (moderate); beamforming is large |
+| Channel model | log-distance with correlated and white shadowing; TR 38.901 RMa, UMa, UMi, InH, InF-SL/DL/SH/DH path loss with spatially consistent LOS state and O2I; precomputed radio maps (Sionna RT baking tool); robot-body blockage; AR(1) Rayleigh with per-robot Doppler | 3GPP TR 38.901 (RMa, UMa, UMi, InH, V2V, NTN), NYUSIM (incl. InF), FTR, Sionna RT | TR 38.901 via Sionna PHY (UMi, UMa, RMa, InH, InF); ray tracing via Sionna RT | 3GPP TR 36.814, 36.873, 38.901 path loss, shadowing, Rayleigh or Jakes fading | **have** large-scale models ([channels.md](channels.md)); **missing**: 38.901 fast fading (clusters, K-factor), online ray tracing |
+| Mobility | from the simulator's poses | ns-3 mobility models | random UT velocities in the topology generators; trajectories user-coded | INET mobility models, Veins | **have**: poses come from Isaac Lab, which is the point of the package |
+| Traffic | policy messages (one per robot per step, size classes), periodic / bursty / video / event generators (`L2`); DL bytes | NGMN, 3GPP XR, FTP Model 1, HTTP generators | none (scheduler takes rates only) | any INET application | **partial**: periodic, bursty, video and event generators on `L2` only; no downlink generators |
+| UL / DL / sidelink | UL, DL (`L2`) | UL, DL; sidelink only in a separate v3.1-based branch | UL, DL | UL, DL, network-assisted D2D (prototype) | **partial**: sidelink out of scope for now |
+| QoS / slicing | none | 5QI QoS schedulers, BWP-based slicing | none | 5QI QoS flows, SDAP, QoS-aware PF; no slicing | **missing** |
+| Multi-cell / handover | 1–7 cells, per-cell PF and HARQ, A3 handover with interruption (`L2` and legacy) | multi-cell, X2 handover, hex wraparound | multi-cell hex layouts, wraparound; no handover | multi-cell, X2 handover, background cells | **partial**: no wraparound, no X2 data forwarding model |
+| Interference | same-slot UL and DL per RBG (`L2`), UL (legacy) | all co-channel transmitters, incl. DL–UL cross-link | inter-cell, in the post-equalization SINR | inter-cell DL and UL (configurable), background cells | **partial** |
+| Carrier aggregation / BWP | none | CA and BWPs | none | CA; BWPs not documented | **out of scope** for robot fleets on one carrier |
+
+## Traffic models
+
+`NRConfig(traffic=...)` takes one `TrafficModel` or a list of them (`isaaclab_net.core.traffic`). They run inside the engine step of level `L2` and put messages into the uplink queues without the policy emitting them; the policy's `submit()` keeps working next to them.
+
+```python
+from isaaclab_net.core import NRConfig, make_engine
+from isaaclab_net.core.traffic import TrafficModel as TM
+
+cfg = NRConfig(traffic=[
+    TM.periodic(200, period_ms=10, jitter_ms=1).on(range(4)),                  # telemetry, 10 per 100 ms step
+    TM.video(fps=25, mean_frame_bytes=6_000, gop=(30_000, 4_000, 15)).on(4),   # I/P frame pattern
+    TM.bursty(1_400, rate_hz=40, burst_size=4, on_off=(0.5, 1.0)).on(5),      # Markov on/off
+    TM.event(4_000, trigger="alarm", det=True, deadline_ms=50),                # task-driven
+    TM.policy(),                                                               # submit(), always on
+])
+net = make_engine("L2", E, R, "cuda", cfg, seed=0)
+out = net.step(None, snr, triggers={"alarm": alarm_mask})                      # alarm_mask [E,R] or [E] bool
+```
+
+| Model | Arrivals | Notes |
+|:---|:---|:---|
+| `periodic(size_bytes, period_ms, jitter_ms=0, phase="random" \| "aligned")` | one message per period; the period may be shorter than the control step | `random`: each robot's first message uniform in `[0, period)` after a reset; jitter is a uniform `[0, jitter_ms)` delay around the nominal time, without drift |
+| `bursty(size_bytes, rate_hz, burst_size, on_off=(mean_on_s, mean_off_s))` | exponential ON and OFF periods, Poisson bursts at `rate_hz` while ON, `burst_size` messages per burst at the same slot | stationary start after a reset; `mean_off_s = 0` is an always-on Poisson source |
+| `video(fps, mean_frame_bytes, gop=(I_bytes, P_bytes, gop_len))` | one frame every `1000 / fps` ms, frame `k % gop_len == 0` is an I frame | with both `mean_frame_bytes` and `gop`, the I and P sizes are scaled to that mean |
+| `event(size_bytes, trigger)` | one message at the start of each step whose trigger is set | trigger: a name in `step(..., triggers={name: mask})`, or a callable `f(clock [E]) -> mask`; `det=True` marks it like `Requests.det` |
+| `policy()` | the policy's own `submit()` messages | always on; listing it documents the mix |
+
+Every constructor also takes `tag` (default: 1 + the model's position in the list; policy messages have tag 0), `priority`, `deadline_ms` and `max_msgs_per_step`. `.on(robots)` restricts a model to robot indices, so a robot class or one robot can have its own generator, and several models can feed the same robot.
+
+**Arrival offsets.** Each generated message has an arrival slot inside the control step. The engine enqueues all of a step's messages in arrival order and then opens the per-robot byte stream slot by slot: SR/BSR and the MAC see a message's bytes only from its arrival slot on. `step()` then reports `delay` from the arrival slot (not from the start of the step), and adds `arrival` (env clock including the offset), `arrival_slot`, `tag`, `priority`, `bytes` (on the air) and `deadline_miss` per frame, plus `gen_accepted` and `gen_bytes` per robot. A 10 ms periodic model at a 100 ms step gives every message the same delay that the policy's message gets when it submits one message every step at a 10 ms control step; `tests/test_traffic.py` checks this to 1e-4 ms. Arrivals are quantized to slot starts. Admission (frame-buffer room, PDCP discard) is decided when the step starts, and the application timeout still counts in whole control steps from the capture step.
+
+**Fixed shapes and graphs.** A model reserves `max_msgs_per_step` arrivals per robot per step (by default the most a periodic or video model can produce, and the Poisson mean + 4σ for bursty). The generator returns `[E, R, M]` tensors, uses no data-dependent shapes or host syncs, and updates its state in place, so `TrafficGen.step` can be captured in a CUDA graph (the GPU test checks graph == eager). Arrivals past the reserved width are deferred to the next step, never dropped, and counted in `net.traffic.deferred`. The NR engine itself has no graph backend yet.
+
+**Randomness and resets.** The engine owns the traffic generator and seeds it from its own `seed`. Step draws and reset draws use two generators, so policy sampling does not shift the traffic, the traffic does not shift the network's draws, and `reset(env_ids)` leaves every other env bit-for-bit unaffected (tested). A reset redraws the reset envs' phases, on/off states and GOP positions.
+
+**Levels.** Only `L2` runs traffic models. Every other level (`L0` to `L1`, `L2-legacy`, the surrogates and the bounds) raises a `ValueError` that names the models it would ignore, whether or not `strict` is set, and `NRConfig.unused_fields(level)` lists `traffic`. A config with only `policy()` works everywhere. Traffic models, `submit()` extras and the extra outputs cost nothing when unused: without them the engine runs exactly its earlier ops.
+
+**Limits.** Uplink only. `priority` is carried and reported, but the MAC serves each robot's queue in FIFO order. `deadline_ms` is reported as `deadline_miss` and does not drop messages. Traffic models work with one cell and with several NR cells (`n_cells > 1`). The engine gates arrivals through four hooks on its `UlMac` instance (`sr_step`, `slot`, `end_step`, and `handover`, so that a `ho_rlc="flush"` handover spares messages that arrive later in the step). If a future `NRNet` stops calling the first three, `step()` raises instead of silently mis-timing.
+
+Example: [`isaaclab_net/examples/traffic_models.py`](../isaaclab_net/examples/traffic_models.py).
 
 ## Proposed modes and switches
 
@@ -123,9 +164,9 @@ Every proposal keeps today's behavior as the default, so existing results and th
 | L1 goodput factor | `NRConfig(l1_eta=0.8)` | **done**; reference, graph, compile, triton |
 | Fading from speed | `NRConfig(ue_speed_mps=1.5, carrier_ghz=3.5)` | **done**; `L2` (legacy keeps its constexpr `RHO`) |
 | Ignored-field check | `cfg.unused_fields(level)`, `make_engine(..., strict=True)` | **done**; every level |
-| Scheduler metric | `NRConfig(scheduler="pf" \| "rr" \| "maxci")`: the metric in `mac.py:150` becomes `rate / avg`, `1 / (slots since served)` or `rate` | `L2`; deferred to avoid conflicts with the NR multi-cell merge, which edits `mac.py` |
+| Scheduler metric | `NRConfig(scheduler="pf" \| "rr" \| "maxci")`: the metric in `mac.py:150` becomes `rate / avg`, `1 / (slots since served)` or `rate` | `L2`; deferred until the NR multi-cell merge, which edits `mac.py` (now in) |
 | OLLA clamp, PF initial average | `NRConfig(olla_max_db=10.0, pf_avg_init=100.0)` | `L2`; same deferral |
-| Shadowing correlation distance | make `RadioMC` draw wavelengths from `shadow_dcorr_m` (today a fixed 20–60 m) | `L2`, `NetSlotMC`; needs a mapping that keeps the default field bitwise, so it waits for the `radio.py` owner |
+| Shadowing correlation distance | `NRConfig(shadow_dcorr_m=30.0, shadow_acf="exp", shadow_white_frac=0.5)` | **done** on `feat/channel` (`L2`, `NetSlotMC`); the default field is bitwise unchanged |
 | Legacy MAC constants | pass `SR_DELAY`, `HARQ_RTT`, `HARQ_MAX`, `RLC_EXTRA`, `RHO`, `PF_T`, `PHR_MIN_DB` from `NRConfig` into `NetSlot`, `NetFast` and the kernel, which already takes them as constexprs | `L2-legacy`; the eager reference and the graph bodies read module globals, so each needs instance attributes; small but touches the frozen engine |
 
 ### (b) Moderate (new code that fits the tensor design)
@@ -133,14 +174,14 @@ Every proposal keeps today's behavior as the default, so existing results and th
 | Switch | API | Interaction with levels and backends |
 |:---|:---|:---|
 | Engine-owned step RNG | `make_engine(..., seed=..., step_generator=True)` | the draws already sit at fixed positions per robot; they would come from `net.gen` instead of the global RNG, so a policy's own sampling no longer shifts the network's random stream. Graph capture needs a registered generator (`graph.register_generator_state`) |
-| Traffic generators | `traffic=TrafficModel.periodic(period_steps=5, cls=1, phase="random")`, `.poisson(rate)`, `.bursty(on, off)`, `.video(fps, gop)` returning `Requests` each step | pure torch outside the engine, so every level and backend works unchanged |
-| Several messages per robot per step | `Requests(send=[E,R,M])` | enqueue loops over M; fixed shape keeps graphs valid |
+| Traffic generators | **done** on `feat/traffic`: `NRConfig(traffic=[TrafficModel.periodic(...), .bursty(...), .video(...), .event(...), .policy()])`, see [Traffic models](#traffic-models) | `L2` only; they run inside the engine step because sub-step arrivals must gate the MAC, so the other levels refuse them |
+| Several messages per robot per step | **done** for generated traffic (fixed `max_msgs_per_step` per model, arrival offset in slots); policy `Requests` stay one per step | `L2`; a multi-message `Requests(send=[E,R,M])` for the policy is still open |
 | Configurable F, timeout and step for every level | `NRConfig(frame_buffer=32, timeout_steps=10)` accepted by `L0` to `L1` and the surrogates | the kernel takes `FB` and `K` as constexprs; the eager and graph bodies need instance fields; surrogate fits must record them |
-| 38.901 path loss and LOS probability | `NRConfig(channel="log_distance" \| "tr38901_inf_sh" \| "tr38901_umi" \| "tr38901_inh")` | a new `RadioMC` path-loss function per scenario; fast fading and MAC unchanged |
-| Radio-map input | `channel="radio_map"`, `radio_map=RadioMap(tensor [C, H, W], origin, resolution)` | bilinear lookup of a precomputed Sionna RT map in `RadioMC.rx_dbm`; the map is data outside the repository |
-| UL power control in the NR engine | `NRConfig(ul_pc=True)` for `L2` | port of the `NetSlotMC` rule into `UlMac._split` |
+| 38.901 path loss and LOS probability | `NRConfig(channel="tr38901_inf_sh")` (also `rma`, `uma`, `umi`, `inh`, `inf_sl`, `inf_dl`, `inf_dh`) | **done** on `feat/channel`: `RadioMC` model with LOS state, shadow fading and O2I; fast fading and MAC unchanged |
+| Radio-map input | `NRConfig(channel="radio_map", radio_map_path="map.npz")` or `RadioMC(..., radio_map=RadioMap(gain [C, H, W], bounds))` | **done** on `feat/channel`: bilinear lookup in `RadioMC`; `tools/bake_radio_map_sionna.py` bakes a map with Sionna RT |
+| Robot blockage and per-robot Doppler | `NRConfig(blockage=True, fading_doppler="per_robot")` | **done** on `feat/channel`; per-robot Doppler needs the NR engine (`L2`) and pose input |
 | MIMO layers | `NRConfig(n_layers=2)` | TBS already takes `layers`; SINR per layer needs a rank model |
-| Unified Isaac config | Isaac `NetConfig` folded into `NRConfig`; observation features chosen by name, `obs=("aoi", "sinr", "queue", "delivered")` | removes the two normalizations and the differing size defaults |
+| Unified Isaac config | **Done (9c642ce).** The Isaac layer takes the same `NRConfig` as `make_engine`, with Isaac-only settings in `IsaacNetCfg` (`isaac/config.py`); observation features are chosen by name through `obs_features`, with one normalization and `obs_dim()`; domain-randomization ranges live in `IsaacNetCfg.dr_ranges` and `dr_support()` reports which levels honor them. `NetConfig` remains only as a deprecated alias with no defaults of its own. | closed |
 | Per-env domain randomization for `make_engine` levels | `NRConfig` field ranges resolved per env at reset | needs per-env parameter tensors in the radio and MAC |
 
 ### (c) Large (needs design)
