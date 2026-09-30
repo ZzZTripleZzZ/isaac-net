@@ -1,0 +1,89 @@
+# Isaac Lab integration
+
+The engine was run inside NVIDIA Isaac Lab 3.0 on Isaac Sim 6.1, installed natively on Windows 11 on the lab box, with the uplink stepped in lockstep with PhysX. This page gives the install recipe with exact versions, the workaround that lets CUDA jobs run while nobody is logged in at the console, the demo environment, the scale results up to 1,048,576 robots, and the bugs fixed in the original Isaac adapter. The work was done on 2026-09-29. `main` holds a snapshot of it (`ed20a25`), and the Isaac layer is being rebuilt on `make_engine` and `NRConfig` on the branch [`feat/isaac`](https://github.com/ZzZTripleZzZ/isaaclab-net/tree/feat/isaac) (see [STATUS.md](STATUS.md)).
+
+## Versions
+
+| Component | Version |
+|:---|:---|
+| OS | Windows 11, NVIDIA driver 617.14 (≥ 580.88 is required for the cu130 PyTorch build, 581.42 is recommended) |
+| Isaac Sim | 6.1.0.0, installed with pip |
+| Isaac Lab | 3.0, branch `release/3.0.0` at `30f8e69` (package `isaaclab` 25.0.0) |
+| Python | 3.12.14 in a uv venv |
+| PyTorch | 2.12.0+cu130, torchvision 0.27.0 |
+| Isaac Lab extras | physx 7.3.0, newton 9.1.0 and 1.6.0 (two packages, as listed by the installer), rsl-rl-lib 5.5.1, skrl 2.1.0, warp-lang 1.17.0 |
+| Triton | `triton-windows` 3.8.0.post29 (community build, bundles TinyCC, no MSVC needed) |
+| Tools | uv 0.12.20 (standalone zip), MinGit 2.56.0 (portable) |
+
+Isaac Lab 3.0 needs Isaac Sim 6.1 (5.1 and older are not supported). The whole installation lives under `C:\isaac5g` and takes 39.6 GB. The only system-wide change is `LongPathsEnabled = 1`, which the Isaac Lab Windows page requires.
+
+## Install recipe
+
+The scripts are in `scripts/windows/` and follow the official Isaac Lab 3.0 page "Python environment with Isaac Sim" for Windows with uv. They were run from an administrator PowerShell over ssh, copied to the box and invoked with `-File`, because piping multi-line blocks into `-Command -` silently drops them. They still assume the `C:\isaac5g` paths.
+
+| Step | Script | What it does | Time |
+|:---|:---|:---|:---|
+| 0 | `env.ps1`, dot-sourced by every other script | puts uv, MinGit and the venv on `PATH`, keeps the uv, Python and pip caches under `C:\isaac5g`, sets `OMNI_KIT_ACCEPT_EULA=YES` for these processes only, and redirects `USERPROFILE`, `HOME`, `LOCALAPPDATA`, `APPDATA` and `TEMP` to `C:\isaac5g\home` so the Kit, Omniverse, Triton and uv caches stay inside the install | |
+| 1 | `01_bootstrap.ps1` | sets `LongPathsEnabled=1`, unpacks uv and MinGit into `C:\isaac5g\tools` | 1 min |
+| 2 | `02_install_isaacsim.ps1` (detached through `launch.ps1`) | `uv venv --python 3.12 --seed`; `uv pip install "isaacsim[all,extscache]==6.1.0.0" --extra-index-url https://pypi.nvidia.com --index-strategy unsafe-best-match --prerelease=allow`; `uv pip install -U torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytorch.org/whl/cu130`; clones Isaac Lab `release/3.0.0` with the git-lfs filter disabled | 8 min |
+| 3 | `03_install_isaaclab.ps1` | `isaaclab.bat -i` with all extras | 3 min |
+| 4 | `04_triton_windows.ps1` (optional) | `uv pip install triton-windows`, needed for the engine's `triton` backend | 1 min |
+| 5 | `05_verify_cartpole.ps1`, **run as SYSTEM** through `systask.ps1` | official headless cartpole training | 3 min |
+
+The verification ran `isaaclab train --rl_library rsl_rl --task Isaac-Cartpole-Direct physics=isaacsim_physx` with 4,096 envs for 30 iterations at 18,421 steps/s on the shared GPU. Headless is the default in Isaac Lab 3.0. The first Isaac launch takes about 45 s and later launches about 10 s. The NVIDIA Omniverse EULA was accepted on the PI's instruction, only inside the install and run processes.
+
+Four problems cost time. Detached `Start-Process` children die with the ssh session because they belong to its job object, so `launch.ps1` uses `Win32_Process.Create` through CIM instead, which is fine for installs that do not need the GPU. The Isaac Lab clone failed on git-lfs, which MinGit lacks, and cloning with the LFS filter disabled fixes it (the LFS files are docs media and test images, and assets come from the cloud). The rsl_rl configuration must pass through `handle_deprecated_rsl_rl_cfg(cfg, check_rsl_rl_version())` as in the official train script, or rsl-rl-lib 5.5.1 rejects `stochastic`. Triton is not available on Windows by default, and `triton-windows` 3.8 works with torch 2.12 cu130 and compiles the fused 40-slot kernel.
+
+## Running CUDA jobs with nobody logged in
+
+**CUDA is unavailable from the ssh session.** `torch.cuda.is_available()` returns False with `cudaErrorNotSupported`, and `nvidia-smi.exe` reports "Access is denied". Both the OpenSSH token (network logon) and an S4U scheduled task (batch logon) fail, and an Interactive-logon task cannot run because nobody is logged in at the console after a reboot. **Running as SYSTEM works.** Every GPU run is therefore a one-shot SYSTEM scheduled task: `scripts/windows/systask.ps1 -Script <ps1> -Log <log> -Name <task>` registers it, and `wait.ps1 -Log <log> -Name <task> -Max 570` waits for it on the box and removes the task when it finishes. All such tasks were removed after the runs.
+
+Three side effects follow. The first bare SYSTEM CUDA probe wrote an NVIDIA compute cache under `C:\Windows\System32\config\systemprofile\AppData\Roaming\NVIDIA`, which is why `env.ps1` redirects the profile directories. WSL cannot run as SYSTEM (`WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`), so in-process GPU sampling uses `C:\Windows\System32\nvidia-smi.exe`. **Once someone logs in at the console, runs can use `-LogonType Interactive` tasks instead of SYSTEM, and nothing else changes.** This is open item 6 in [STATUS.md](STATUS.md).
+
+## The demo environment
+
+`isaaclab_net/examples/isaac_fleet_env.py` defines `NetFleetEnv`, a `DirectRLEnv` with E envs of R velocity-driven rigid spheres in a 150 m × 150 m arena, which runs the example fleet task of `fleet_task.py` (goals, hazards and detection frames sent over the uplink) inside Isaac Lab. Physics is PhysX through Isaac Sim with dt = 1/50 s and decimation 5, so one control step is 0.1 s and 40 UL slots. The robots are spheres of radius 0.3 m floating at z = 0.5 with gravity disabled, their velocity is written every substep through `write_body_link_velocity_to_sim_index`, and robot-robot contacts are on. Each robot's action is a velocity (vx, vy) up to 3 m/s plus a send channel bucketed into none, a small 4 KB frame or a large 30 KB frame. Each robot observes 12 values, including its queued frames, the age of information of its reports and its SNR, and the centralized observation and action are `[E, 12R]` and `[E, 3R]`.
+
+Frames are captured at the pose at the start of the step, and the network step runs in `_get_dones` before `_reset_idx`. The network is wired through `isaaclab_net/isaac/net_module.py` (a `NetModule` with `reset(env_ids)`, `submit(t, req)` and `step(t, poses, cur_tag) -> dict`) and the `NetEnvMixin` in `mixins.py`, whose four hooks are `net_setup`, `net_step`, `net_reset` and `net_obs`. The legacy slot-level engine runs through its fast backends, and partial resets write rows in place into the persistent buffers so the captured CUDA graphs stay valid. Its clock is global, and because every comparison inside it is relative, neutral reset rows make the partial reset exact, and outputs are converted to each env's episode clock. The radio uses log-distance path loss plus a per-env shadowing field redrawn on reset, with SNR averaged over 4 poses interpolated across the control step. A per-message tag carries an application label, and `step` returns whether a tagged message was delivered. `mdp/events.py` provides a network domain-randomization event term.
+
+The fast engine driven through `NetModule` on the eager backend matches the registry reference engine bitwise, including a partial reset of every third env, and on the `graph` and `triton` backends a partial reset leaves other envs bit-identical, with delivered frames per step of 0.1274 (eager), 0.1274 (`graph`) and 0.1275 (`triton`) on the same workload. These checks ran on both WSL and Windows, and they are now `tests/test_isaac_layer.py`. An end-to-end PPO run through the rsl_rl wrapper of Isaac Lab 3.0, with the `triton` network in the loop at 1,024 × 16, trained without errors for 30 iterations in 241 s (3.3k env-steps/s, 53k robot-steps/s under contention). It is a pipeline check only.
+
+## Scale results
+
+**Conditions.** Actions are random, and each robot sends on about two thirds of steps, half of them large frames, so the uplink is saturated from R = 16 on. This is the worst case for the network's cost. The timed loop is 100 steps after warm-up (150 in the smaller grid), stopped early after 45 s, one process per run. "Network-only" is 20 isolated `submit` + `step` calls at the end of the run.
+
+**Contention.** Device-wide GPU utilization was 96–99% before and during every run because of other WSL compute jobs (13 processes at the start of the session, 3 at the end), which also held 2–15 GB of device memory that varied from run to run. The network-off step alone took 150–450 ms at every E, control steps per second were nearly flat in E, and repeated identical configurations varied by about ±40% over the evening (network off at 1024 × 16 gave 3.6 steps/s in one grid and 5.3 in another). **Ratios within a row group and the network-only times are meaningful, and absolute throughput is a lower bound.** The engine used is the slot-level model now exposed as `L2-legacy`. Benchmarks were taken on its code before the PF-average floor (one extra clamp, otherwise the same operations), and the equivalence tests were rerun on the floored code.
+
+| E × R | Robots | Off (control steps/s) | `triton` (steps/s) | `triton` / off | `graph` (steps/s) | Network-only, `triton` (ms) | Robot-steps/s, `triton` |
+|:---|---:|---:|---:|---:|---:|---:|---:|
+| 2048 × 32 | 65,536 | 3.37 | 1.91 | 0.57 | 1.20 | 36 | 125,311 |
+| 1024 × 64 | 65,536 | 2.24 | 5.43 | 2.42 | 3.43 | 16 | 355,970 |
+| 4096 × 32 | 131,072 | 3.29 | 2.68 | 0.81 | 1.34 | 38 | 350,770 |
+| 2048 × 64 | 131,072 | 6.34 | 5.08 | 0.80 | 2.46 | 20 | 666,095 |
+| 1024 × 128 | 131,072 | 6.21 | 5.55 | 0.89 | 2.52 | 19 | 727,441 |
+| 8192 × 32 | 262,144 | 2.60 | 2.34 | 0.90 | 0.65 | 45 | 614,338 |
+| 4096 × 64 | 262,144 | 4.41 | 3.89 | 0.88 | 1.46 | 29 | 1,018,940 |
+| 2048 × 128 | 262,144 | 4.38 | 3.96 | 0.90 | 1.78 | 31 | 1,038,148 |
+| 4096 × 128 | 524,288 | 2.90 | 2.58 | 0.89 | 1.23 | 52 | 1,352,325 |
+| 8192 × 128 | 1,048,576 | 1.40 | 1.27 | 0.91 | not run | 75 | 1,333,414 |
+
+The largest configuration, 1,048,576 robots, runs at 1.27 control steps per second with the network in the loop (1.33 M robot-steps/s) against 1.40 with the network off, within a device peak of 16.4 GB of which 2.5 GB belonged to other jobs. From 131k robots up, the `triton` network costs 9–20% of the step in every row. The two 65k rows are contention outliers in opposite directions (0.57 and 2.42), which shows how noisy single runs are under time-slicing, while their network-only times match the rest. The `triton` network costs 16–75 ms per step from 65k to 1M robots and grows only slowly with E · R, because it is one fused kernel per step plus a few radio kernels. The `graph` backend replays about 6,000 kernels per step and grows to 0.2–1 s under time-slicing, so **`triton` is the backend for scale and `graph` is for bitwise-reference runs**. The eager reference is not viable inside Isaac: at 64 × 16 and 1,024 × 16 it spent 0.9–1.6 s of network time per step.
+
+**What limits scale.** Scene startup grows linearly at about 1.1 ms per robot: 110 s at 131k, 585 s at 524k and 1,131 s at 1M robots, from the PhysX clone and a `RigidObjectCollection` of R distinct objects. Our process used about 4–6 GB of device memory at 131–262k robots and about 8.5 GB at 524k, of which the fast engine's share was 0.7, 1.4 and 1.7 GB at 131k, 262k and 524k robots. At 1M robots the engine alone used 3.4 GB. With the other jobs holding up to 15 GB earlier in the evening, the 1M-robot run would not have fit then. Taking 2 control steps per second as the bar for interactive use (a 24-step PPO rollout in at most 12 s under this contention), every configuration up to 524k robots meets it with the network on, and 1M robots runs but falls below it.
+
+## Adapter bugs fixed
+
+The original adapter in `isaac/netmodule.py` and `isaac/isaac_env_skeleton.py` had the following problems, all fixed in the snapshot on `main`:
+
+1. **The first delivered capture of every episode was dropped.** The message history started `seen_cap` at 0 and tested strictly (`newest_cap > seen_cap`), so capture 0 never reached the receiver. It now starts at −1 in `__init__` and `reset`.
+2. **A host sync every control step in `_enqueue`** from `nonzero` plus fancy-index scatter. It is replaced by a sync-free one-hot write into FIFO slot `count`, and the slot-level engine stays bitwise equal to the reference.
+3. **A capture-time off-by-one in the skeleton.** It pushed the post-physics pose under capture step t, which made age of information and delay optimistic by one control step. Frames are now captured in `_pre_physics_step`, as in the demo.
+4. **Episodes ended one step early**, because the skeleton's timeout used `>= max_episode_length - 1` where Isaac Lab 3.0 cartpole uses `>=`. Minor.
+5. **No per-message label.** An application tag with `delivered_tag` / `tag_delivered` outputs was added, which the example task needs.
+6. The fast engine then had only a full `reset()`, so `reset(env_ids)` lived in the Isaac `NetModule`. The engine API work on `main` has since added partial resets to every level and backend.
+
+The port of the slot-level engine itself was correct and bitwise equal to the reference. A naive CUDA-graph capture of the reference engine's slot loop, tried first, was **not** bitwise equal because its RNG stream diverged, and it was dropped in favor of the fast engine.
+
+## Next steps
+
+The work in progress on `feat/isaac` rebuilds `NetModule` on `make_engine`, so the NR engine and multi-cell configurations become available in Isaac. Beyond that, the open items are an uncontended rerun of the 4096 × 32/64/128 rows (`benchmarks/isaac/run_scale.ps1` as SYSTEM, about 1 h), shorter startup (`clone_in_fabric=True`, one multi-instance asset per env, a Newton backend or a pure-tensor pose integrator for the planar robots), a per-robot parameter-shared policy wrapper that reshapes observations and actions to `[E·R, 12]` and `[E·R, 3]` because a centralized MLP does not scale to R = 128, a downlink `NetModule` that gates commands in `_pre_physics_step`, and a benchmark of the line-of-sight blockage path (`segment_sphere_blocked`, cost O(E · R · G · (R + M)) per pose chunk, with the Warp mesh kernel suggested for R ≥ 64).
