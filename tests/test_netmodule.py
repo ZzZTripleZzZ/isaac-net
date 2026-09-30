@@ -1,11 +1,11 @@
-"""Smoke test of the backend-agnostic NetModule skeleton (prototype/isaac/netmodule.py) on CPU:
+"""Smoke test of the backend-agnostic NetModule skeleton (isaaclab_net/isaac/netmodule.py) on CPU:
 every rung steps, and a partial reset re-initializes exactly the chosen envs."""
 import pytest
 import torch
 
 
 def _mod():
-    from isaac import netmodule
+    from isaaclab_net.isaac import netmodule
     return netmodule
 
 

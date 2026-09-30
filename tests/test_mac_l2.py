@@ -3,7 +3,7 @@ import math
 
 import torch
 
-import netsim as ns
+from isaaclab_net.core.proto import netsim as ns
 from engine_api import (S, UL_PER_STEP, InjectNoise, Workload, advance, make_fast, make_ref, queued, run,
                         slot_probe, submit)
 
@@ -136,7 +136,7 @@ def test_power_headroom_caps_subbands_reference(seeded):
 
 
 def test_power_headroom_caps_subbands_fast_eager(seeded):
-    import netsim_fast
+    from isaaclab_net.core.proto import netsim_fast
     E, R = 4, 2
     net = make_fast(E, R, "cpu", backend="eager")
     wl = Workload(E, R, "cpu", seed=33, period=10, snr_lo=0.0, snr_hi=12.0, p=[0.9], big=[1.0])

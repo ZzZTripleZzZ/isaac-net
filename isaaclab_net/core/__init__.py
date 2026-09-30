@@ -1,0 +1,21 @@
+"""Backend-agnostic network engines (pure PyTorch / Triton, no simulator imports).
+
+    from isaaclab_net.core import make_engine, NRConfig, Requests
+    net = make_engine("L2", E, R, "cuda", NRConfig())          # or any level in LEVELS, see engine.py
+
+Modules: config (NRConfig and presets), engine (make_engine, NREngine), nr_engine (NRNet), phy, queues,
+mac / mac_ul / mac_dl (NR MAC), radio (RadioMC, CellAssociation), traffic (Requests), proto (prototype levels,
+L2-legacy NetSlot and its multi-cell NetSlotMC).
+"""
+from .config import (NRConfig, lena_like, lena_match, lena_validation, multicell, netslot_compat, oai_like,
+                     srsran_like)
+from .engine import BACKENDS, FAST_BACKENDS, LEVELS, NREngine, make_engine
+from .nr_engine import NRNet
+from .phy import MCS_TABLES, PHY, lena_tables_path, segment, tbs_38214
+from .radio import CellAssociation, Radio, RadioMC
+from .traffic import Requests
+
+__all__ = ["NRConfig", "netslot_compat", "lena_like", "lena_match", "lena_validation", "srsran_like", "oai_like",
+           "multicell", "make_engine", "NREngine", "NRNet", "LEVELS", "BACKENDS", "FAST_BACKENDS", "PHY",
+           "MCS_TABLES", "tbs_38214", "segment", "lena_tables_path", "RadioMC", "CellAssociation", "Radio",
+           "Requests"]

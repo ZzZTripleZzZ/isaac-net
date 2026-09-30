@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 import torch
 
-import netsim as ns
+from isaaclab_net.core.proto import netsim as ns
 
 SIZES = (4000.0, 30000.0)
 F, TIMEOUT, S, UL_PER_STEP = ns.F, ns.TIMEOUT, ns.S, ns.UL_PER_STEP
@@ -66,7 +66,7 @@ def make_ref(level, E, R, device, sizes=SIZES, params=None):
 
 def make_fast(E, R, device, backend, sizes=SIZES, inject=False):
     """Fast L2 engine (backend in eager / graph / compile / triton)."""
-    from netsim_fast import NetSlotFast
+    from isaaclab_net.core.proto.netsim_fast import NetSlotFast
     return NetSlotFast(E, R, device, sizes, backend=backend, inject=inject)
 
 
@@ -117,7 +117,7 @@ def state(net, names=FIFO_FIELDS + MAC_FIELDS):
 class Workload:
     """Regime-switching synthetic traffic: idle, medium, burst (all large), medium-small.
 
-    Same generator as prototype/fast/test_equiv.py. `snr_lo/snr_hi` bound the per-robot SNR walk.
+    Same generator as tests/scripts/test_equiv.py. `snr_lo/snr_hi` bound the per-robot SNR walk.
     """
 
     def __init__(self, E, R, device, seed=0, period=25, snr_lo=-10.0, snr_hi=40.0, p=None, big=None):
@@ -258,7 +258,7 @@ class StepProbe:
 def fast_finish_fields(net, fin, t):
     """netsim_fast.finish_body on a reference engine's FIFO state at global step t; returns the
     9 compacted FIFO fields in FIFO_FIELDS order."""
-    from netsim_fast import finish_body
+    from isaaclab_net.core.proto.netsim_fast import finish_body
     E = net.E
     tv = torch.full((E,), int(t), dtype=torch.long)
     fields, _ = finish_body(net.cap, net.cls, net.det, net.hid, net.rem, net.dlv, net.f_nact, net.f_snr,

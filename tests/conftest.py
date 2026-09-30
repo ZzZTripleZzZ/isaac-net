@@ -1,7 +1,9 @@
 """Shared pytest setup.
 
-* Puts prototype/ and prototype/fast/ on sys.path (the package restructure is a later milestone).
+* Makes `engine_api` (tests/) importable; the package itself comes from `pip install -e .` or, in a plain
+  checkout, from the repo root that pyproject.toml puts on the path.
 * Registers the `gpu` and `slow` markers and skips `gpu` tests when CUDA is unavailable.
+* tests/scripts/ (command-line equivalence scripts) and tests/bridges/ (need an ns-3 build) are not collected.
 """
 import os
 import sys
@@ -9,10 +11,13 @@ import sys
 import pytest
 import torch
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for p in (os.path.join(ROOT, "prototype"), os.path.join(ROOT, "prototype", "fast"), os.path.dirname(__file__)):
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+for p in (ROOT, HERE):
     if p not in sys.path:
         sys.path.insert(0, p)
+
+collect_ignore = ["scripts", "bridges"]
 
 
 def pytest_configure(config):

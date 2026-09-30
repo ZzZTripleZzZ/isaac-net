@@ -8,7 +8,7 @@ fit computes from the frame's logged features with the same `lookup_key`.
 import pytest
 import torch
 
-import netsim as ns
+from isaaclab_net.core.proto import netsim as ns
 from engine_api import Workload, collect, enable_stats, lookup_params, lookup_shape, make_ref, run
 
 
