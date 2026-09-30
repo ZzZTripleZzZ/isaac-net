@@ -71,7 +71,7 @@ Two boundary crossings give two handovers in 94% of envs, and the extra ones com
 
 ## Cost
 
-With the PyTorch profiler, whose counts do not depend on GPU contention, the legacy multi-cell engine launches about 20% more kernels than the single-cell engine and uses 20–27% more GPU time, independent of whether there are 3 or 7 cells and nearly independent of E × R. C = 1 costs almost nothing extra. The NR engine with several cells launches about 19% more kernels than with one (32k against 27k per control step at 64 × 16, uplink only), again independent of 3 or 7 cells, and the downlink multiplies the work by about 4.5. Wall-clock times, measured with the GPU 98% busy, and the full table are in [performance.md](performance.md). The multi-cell engines run on the `reference` backend only, but the slot loop is sync-free, so the `graph` and `triton` backends should carry the same relative overhead.
+With the PyTorch profiler, whose counts do not depend on GPU contention, the legacy multi-cell engine launches about 20% more kernels than the single-cell engine and uses 20–27% more GPU time, independent of whether there are 3 or 7 cells and nearly independent of E × R. C = 1 costs almost nothing extra. The NR engine with several cells launches about 19% more kernels than with one (32k against 27k per control step at 64 × 16, uplink only), again independent of 3 or 7 cells, and the downlink multiplies the work by about 4.5. Wall-clock times, measured with the GPU 98% busy, and the full table are in [performance.md](performance.md). The multi-cell NR engine also runs on the `graph` backend, bitwise equal to its reference; the `triton` backend is single-cell for now, and NetSlotMC has only the `reference` backend.
 
 ## Open items
 

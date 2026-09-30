@@ -20,7 +20,7 @@ The fast rewrite replaces every mask write with `torch.where` or a one-hot selec
 - **`triton`** runs all 40 slots of a control step in one hand-written Triton kernel, one program per env, with the robot × subband and robot × frame-slot state held in registers and Philox RNG inside the kernel. It matches the reference to rounding and is meant for scale.
 - **`compile`** compiles the slot body with `torch.compile` (Inductor, fullgraph, static shapes) and captures the step in a CUDA graph. It is not suitable for training runs, for the reason below.
 
-PF over subbands has no closed form, because the greedy choice for a subband depends on the remaining need and the power-headroom count after earlier subbands, so every backend keeps a sequential 5-step loop. The NR engine (`L2`, one or several cells) and the legacy multi-cell engine have only the `reference` backend so far.
+PF over subbands has no closed form, because the greedy choice for a subband depends on the remaining need and the power-headroom count after earlier subbands, so every backend keeps a sequential 5-step loop. The NR engine (`L2`) has its own `graph` and `triton` backends, described in the NR section below. The legacy multi-cell engine has only the `reference` backend.
 
 ## Equivalence methodology
 

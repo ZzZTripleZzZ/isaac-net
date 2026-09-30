@@ -113,25 +113,13 @@ def _lse_rows(lw):
 
 
 @triton.jit
-def _eff_all(est, lw, lnw, beta_m, sidx, S_: tl.constexpr, MODE: tl.constexpr):
-    """phy.eff_sinr_all: effective SINR (dB) of every MCS over the subbands with lw > -inf. est [RB,SB], lw [RB,SB]
-    (log PRBs or -inf), lnw [RB], beta_m [MB] -> [RB, MB]."""
+def _eff_m(lin, est, lw, lnw, beta, MODE: tl.constexpr):
+    """phy.eff_sinr_all for one MCS (scalar beta): effective SINR (dB) over the subbands with lw > -inf [RB]."""
     if MODE == 1:          # mean_db: PRB-weighted mean of the dB values
         wgt = tl.where(lw == float("-inf"), 0.0, libdevice.exp(lw - lnw[:, None]))
         v = tl.sum(tl.where(wgt != 0.0, est * wgt, 0.0), axis=1)
-        v = tl.where(lnw == float("-inf"), 0.0, v)
-        return v[:, None] + 0.0 * beta_m[None, :]
-    lin = libdevice.exp10(tl.minimum(tl.maximum(est, -30.0), 60.0) / 10.0)
-    mx = tl.full([est.shape[0], beta_m.shape[0]], float("-inf"), tl.float32)
-    for s in tl.static_range(S_):
-        xs = -_col(lin, sidx, s)[:, None] / beta_m[None, :] + _col(lw, sidx, s)[:, None]
-        mx = tl.maximum(mx, xs)
-    acc = tl.zeros([est.shape[0], beta_m.shape[0]], tl.float32)
-    for s in tl.static_range(S_):
-        xs = -_col(lin, sidx, s)[:, None] / beta_m[None, :] + _col(lw, sidx, s)[:, None]
-        acc += tl.where(xs == float("-inf"), 0.0, libdevice.exp(xs - mx))
-    lse = tl.where(mx == float("-inf"), float("-inf"), mx + libdevice.log(acc))
-    return _db(-beta_m[None, :] * (lse - lnw[:, None]))
+        return tl.where(lnw == float("-inf"), 0.0, v)
+    return _db(-beta * (_lse_rows(-lin / beta + lw) - lnw))
 
 
 @triton.jit
@@ -270,7 +258,7 @@ def _mac_slot(
     new_el = (tl.max(free.to(tl.int32), axis=1) > 0) & (need > 0) & (~has_rx) & rm
     has_rx = has_rx & rm
     pending = tl.max((h_st == 1).to(tl.int32), axis=1) > 0
-    rx_nsb = _gather_p(h_nsb, pidx, rx_p)
+    rx_nsb = _gather_p(h_nsb, pidx, rx_p).to(tl.int64)
     # ---- scheduler estimate ----
     if DIR == 0:
         if WHOLE_BAND:
@@ -302,11 +290,11 @@ def _mac_slot(
     if WIDEBAND:
         lw_full = tl.where(sm[None, :] & rm[:, None], lw_all[None, :], float("-inf"))
         lnw_full = _lse_rows(lw_full)
-        beta_m = tl.load(beta_ptr + midx, mask=midx < M, other=1.0)
-        wb = _eff_all(est_o, lw_full, lnw_full, beta_m, sidx, S_, MODE)
-        thr_m = tl.load(thr_ptr + midx, mask=midx < M, other=1e30)
-        okw = (wb >= thr_m[None, :]) & (midx[None, :] < M)
-        mw = tl.maximum(tl.max(tl.where(okw, midx[None, :] + 1, 0), axis=1), 1) - 1
+        lin_o = libdevice.exp10(tl.minimum(tl.maximum(est_o, -30.0), 60.0) / 10.0)
+        mw = tl.zeros(sent.shape, tl.int32)
+        for m in range(M):
+            wbm = _eff_m(lin_o, est_o, lw_full, lnw_full, tl.load(beta_ptr + m), MODE)
+            mw = tl.where(wbm >= tl.load(thr_ptr + m), m, mw)
         rate = (tl.load(se_ptr + mw) * re_prb / 8.0)[:, None] * w[None, :]
     else:
         mi = tl.zeros(est_o.shape, tl.int32)
@@ -364,23 +352,25 @@ def _mac_slot(
         est_tx = ref - split[:, None] + csi
     else:
         est_tx = est
-    beta_m = tl.load(beta_ptr + midx, mask=midx < M, other=1.0)
-    eff = _eff_all(est_tx, lw, lnw, beta_m, sidx, S_, MODE)
-    if OLLA:
-        eff = eff + olla[:, None]
-    nprb_i = n_prb.to(tl.int32)
-    toff = (nsi * (NPRB + 1) + nprb_i)[:, None] * MB + midx[None, :]
-    tmask = tx_new[:, None] & (midx[None, :] < M)
-    tbs_t = tl.load(tbs_ptr + toff, mask=tmask, other=0)
-    ci0 = tl.load(ci0_ptr + toff, mask=tmask, other=0)
-    cwi = tl.load(cwi_ptr + toff, mask=tmask, other=0.0)
-    cbg = tl.load(bg_ptr + toff, mask=tmask, other=0)
-    ncb = tl.load(ncb_ptr + toff, mask=tmask, other=1.0)
-    b_all = _bler(tab_ptr, midx[None, :] + 0 * ci0, eff, ci0, cwi, cbg, M, C, G, S0, DS, STEP, tmask)
-    tbler = 1.0 - libdevice.pow(1.0 - b_all, ncb)
-    okm = (tbler <= TARGET) & (tbs_t > 0) & (midx[None, :] <= MCS_MAX) & (midx[None, :] < M)
-    mcs_new = tl.maximum(tl.max(tl.where(okm, midx[None, :] + 1, 0), axis=1), 1) - 1
-    tbs_new = tl.sum(tl.where(midx[None, :] == mcs_new[:, None], tbs_t, 0), axis=1).to(tl.int64)
+    # highest MCS whose TB error probability at the (OLLA-offset) effective SINR meets the target, one MCS at a time
+    lin_tx = libdevice.exp10(tl.minimum(tl.maximum(est_tx, -30.0), 60.0) / 10.0)
+    toff0 = (nsi * (NPRB + 1) + n_prb.to(tl.int32)) * MB
+    mcs_new = tl.zeros(sent.shape, tl.int32)
+    tbs_new = tl.load(tbs_ptr + toff0, mask=tx_new, other=0)
+    for m in range(MCS_MAX + 1):           # MCS_MAX <= M - 1 (phy.mcs_max)
+        effm = _eff_m(lin_tx, est_tx, lw, lnw, tl.load(beta_ptr + m), MODE)
+        if OLLA:
+            effm = effm + olla
+        o = toff0 + m
+        tb = tl.load(tbs_ptr + o, mask=tx_new, other=0)
+        bm = _bler(tab_ptr, m, effm, tl.load(ci0_ptr + o, mask=tx_new, other=0),
+                   tl.load(cwi_ptr + o, mask=tx_new, other=0.0), tl.load(bg_ptr + o, mask=tx_new, other=0),
+                   M, C, G, S0, DS, STEP, tx_new)
+        tbler = 1.0 - libdevice.pow(1.0 - bm, tl.load(ncb_ptr + o, mask=tx_new, other=1.0))
+        okm = (tbler <= TARGET) & (tb > 0)
+        mcs_new = tl.where(okm, m, mcs_new)
+        tbs_new = tl.where(okm, tb, tbs_new)
+    tbs_new = tbs_new.to(tl.int64)
     cap_b = tl.maximum(tbs_new // 8 - TB_OH, 1)
     byt_new = tl.minimum(cap_b, unsent)
     # ---- bind TBs to processes ----
@@ -389,7 +379,7 @@ def _mac_slot(
     ohn = ohp & tx_new[:, None]
     h_lo = tl.where(ohn, sent[:, None], h_lo)
     h_hi = tl.where(ohn, (sent + byt_new)[:, None], h_hi)
-    h_mcs = tl.where(ohn, mcs_new.to(tl.int64)[:, None], h_mcs)
+    h_mcs = tl.where(ohn, mcs_new[:, None], h_mcs)
     h_tbs = tl.where(ohn, tbs_new[:, None], h_tbs)
     h_nsb = tl.where(ohn, n_sb[:, None], h_nsb)
     h_ntx = tl.where(ohn, 0, h_ntx)
@@ -399,7 +389,7 @@ def _mac_slot(
     h_st = tl.where(ohn, 1, h_st)
     sent = sent + byt_new * tx_new.to(tl.int64)
     mcs = _gather_p(h_mcs, pidx, p_tx)
-    tbs = _gather_p(h_tbs, pidx, p_tx)
+    tbs = _gather_p(h_tbs, pidx, p_tx).to(tl.int64)
     ntx = _gather_p(h_ntx, pidx, p_tx) + 1
     # ---- decoding on the actual channel ----
     if DIR == 0:
@@ -503,7 +493,8 @@ def _mac_slot(
     done = (cap >= 0) & (qend <= ack[:, None]) & (lost == 0) & (fin == float("inf"))
     fin = tl.where(done, fin_val, fin)
     return (sent, olla, avg, bsr, sr_t, last_tx, csi,
-            h_st, h_lo, h_hi, h_rdy, h_ntx, h_mcs, h_tbs, h_nsb, h_comb, h_lexp, h_nrb,
+            h_st.to(tl.int32), h_lo, h_hi, h_rdy, h_ntx.to(tl.int32), h_mcs.to(tl.int32), h_tbs.to(tl.int32),
+            h_nsb.to(tl.int32), h_comb, h_lexp, h_nrb,
             lost, fin, cnt_acc, hist_ok, hist_tx, hist_fail)
 
 
@@ -523,13 +514,15 @@ def _ld_link(e, R, sent_p, floor_p, olla_p, avg_p, bsr_p, srt_p, ltx_p, enq_p, c
             tl.load(bsr_p + er, mask=rm, other=0), tl.load(srt_p + er, mask=rm, other=-1),
             tl.load(ltx_p + er, mask=rm, other=-1), tl.load(enq_p + er, mask=rm, other=0),
             tl.load(csi_p + o_rs, mask=m_rs, other=0.0),
-            tl.load(hst_p + o_rp, mask=m_rp, other=3), tl.load(hlo_p + o_rp, mask=m_rp, other=0),
+            tl.load(hst_p + o_rp, mask=m_rp, other=3).to(tl.int32), tl.load(hlo_p + o_rp, mask=m_rp, other=0),
             tl.load(hhi_p + o_rp, mask=m_rp, other=0), tl.load(hrdy_p + o_rp, mask=m_rp, other=0),
-            tl.load(hntx_p + o_rp, mask=m_rp, other=0), tl.load(hmcs_p + o_rp, mask=m_rp, other=0),
-            tl.load(htbs_p + o_rp, mask=m_rp, other=0), tl.load(hnsb_p + o_rp, mask=m_rp, other=0),
+            tl.load(hntx_p + o_rp, mask=m_rp, other=0).to(tl.int32),
+            tl.load(hmcs_p + o_rp, mask=m_rp, other=0).to(tl.int32),
+            tl.load(htbs_p + o_rp, mask=m_rp, other=0).to(tl.int32),
+            tl.load(hnsb_p + o_rp, mask=m_rp, other=0).to(tl.int32),
             tl.load(hcomb_p + o_rp, mask=m_rp, other=0.0), tl.load(hlexp_p + o_rp, mask=m_rp, other=float("-inf")),
             tl.load(hnrb_p + o_rp, mask=m_rp, other=0.0),
-            tl.load(cap_p + o_rf, mask=m_rf, other=-1), tl.load(qs_p + o_rf, mask=m_rf, other=0),
+            tl.load(cap_p + o_rf, mask=m_rf, other=-1).to(tl.int32), tl.load(qs_p + o_rf, mask=m_rf, other=0),
             tl.load(qe_p + o_rf, mask=m_rf, other=0), tl.load(lost_p + o_rf, mask=m_rf, other=0).to(tl.int1),
             tl.load(fin_p + o_rf, mask=m_rf, other=float("inf")))
 
@@ -801,7 +794,7 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
     D = dl if dl is not None else U
     tu, td = tb["ul"], tb["dl"] if dl is not None else tb["ul"]
     dummy = uref
-    nr_step_kernel[(E,)](
+    eng._kernel = nr_step_kernel[(E,)](
         *_link_args(U), *_link_args(D),
         net.h, uref if uref is not None else dref, dref if dref is not None else dummy,
         pc if pc is not None else dummy, eng._tdev, net.rng.episode, net.rng.ctr, net.rng.s0, eng._chs,

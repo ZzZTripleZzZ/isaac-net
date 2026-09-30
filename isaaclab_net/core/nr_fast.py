@@ -434,7 +434,7 @@ class NRTritonEngine(NRGraphEngine):
             GNB_PROC=cfg.gnb_proc_slots, REF_PRBS=float(cfg.snr_ref_prbs), PHR_MIN=float(cfg.phr_min_db),
             WB_DB=wb_db, W0=w[0], OLLA_UP=float(cfg.olla_up_db), OLLA_DN=float(net.ul.olla_dn),
             PF_A=1 - 1 / cfg.pf_window, PF_B=1 / cfg.pf_window)
-        self._num_warps = 8 if RB >= 128 else (4 if RB >= 32 else 2)
+        self._num_warps = 16 if RB >= 128 else (8 if RB >= 64 else 4)
 
     def _sched_table(self, g0, sched, dt0):
         cfg = self.config

@@ -108,7 +108,7 @@ All levels come from `make_engine` and expose the same API, so a task can switch
 | Module | Status | Tests |
 |:---|:---|:---|
 | `core/proto` (L0 ... L1, L2-legacy, fast backends) | frozen; bitwise-verified | `test_equivalence_cpu`, `test_gpu`, `tests/scripts/test_equiv.py`, `test_reset.py`, `test_regress.py` |
-| `core/nr_engine`, `mac*`, `phy`, `queues` (L2) | merged; multi-cell (UL + DL interference, power control, handover); reference backend only | `test_nr_phy`, `test_nr_harq`, `test_nr_compat`, `test_engine_api`, `test_nr_multicell` |
+| `core/nr_engine`, `mac*`, `phy`, `queues` (L2) | merged; multi-cell (UL + DL interference, power control, handover); `reference`, `graph` (bitwise) and `triton` (one cell) backends in `nr_fast.py` / `nr_triton.py` | `test_nr_phy`, `test_nr_harq`, `test_nr_compat`, `test_engine_api`, `test_nr_multicell` |
 | `core/engine` (`make_engine`, `NREngine`) | new | `test_engine_api`, `test_package` |
 | `core/levels` (TR, GE, QA, NN, ORACLE, NOCOMM) | new; reference and graph backends, graph bitwise equal to reference | `test_levels` |
 | `core/config` (`NRConfig`, presets) | merged (nrconfig + multicell cells block) | `test_nr_phy`, `test_multicell` |
@@ -125,8 +125,8 @@ All levels come from `make_engine` and expose the same API, so a task can switch
 | `tools/` | merged; `fit_levels` new | `test_nr_phy` (LENA path checks), `test_levels` (smoke fit) |
 
 ## Follow-ups
-1. `graph` / `triton` backends for the NR engine (its step has no host syncs and fixed shapes, so CUDA-graph capture of a control step is the first option). This covers the multi-cell step too: its handover, association and interference code is also free of host syncs (the per-TB SINR log `log_sinr` excepted).
+1. NR engine fast backends: `triton` for several cells (per-cell schedulers and same-slot interference in the fused kernel), and a tiled kernel for R above about 128 (the kernel keeps one env's robots in one program).
 2. Isaac: uncontended rerun of the scale sweep (`benchmarks/isaac/run_scale.ps1`); faster scene startup (`clone_in_fabric`, one multi-instance asset per env instead of R rigid objects); a per-robot parameter-shared policy wrapper (`[E·R, obs]`) for R = 128; a downlink NetModule gating commands; the Warp mesh LOS kernel for R ≥ 64.
 3. Surrogate fits from the NR engine with a non-default frame buffer or timeout: the surrogate levels share the prototype constants (F = 16, 20-step timeout, 100 ms step), so the fit tool refuses such configurations for now.
-4. Isaac layer on the NR engine's fast backends once they exist (the NR engine is launch-bound on the reference backend).
+4. Isaac scale runs with the NR engine's `graph` / `triton` backends (`NetModule("L2", ..., backend=...)` works; not yet measured inside Isaac Sim).
 5. MJX: a masked reset in the core (`reset_mask(mask [E])`, draws for all envs) to remove the one host sync per step; one CUDA graph for the whole NetModule step (the MJX step with the network is bound by NetModule's host-side launches, 5–17 ms, while MJX alone takes 2.5–10 ms); a neutral home for `NetModule` / `IsaacRadio` / `MessageHistory` (e.g. `isaaclab_net.module`, re-exported by `isaac/`). The `mjx` extra and pytest marker are in `pyproject.toml`.

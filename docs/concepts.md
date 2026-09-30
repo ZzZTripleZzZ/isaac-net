@@ -74,7 +74,7 @@ Each level has one readable implementation, the `reference` backend, written as 
 
 "Bitwise equal" is checked by driving both backends from the same state with the same random draws. The fast backends can take their per-slot random numbers from an injected source (`make_engine(..., inject=True)`), so the test feeds identical noise to both and compares every output and every state tensor after every step. The rule for contributors follows from this: a change to a prototype level goes into the eager reference first, and the `graph` backend must stay bitwise equal to it.
 
-Use `graph` for runs whose numbers must be reproducible against the reference, and `triton` for scale. The NR engine `L2` has only the `reference` backend so far, and its fast backends are the first open item in [Status](STATUS.md). [Performance](performance.md) has the measured costs.
+Use `graph` for runs whose numbers must be reproducible against the reference, and `triton` for scale. The NR engine `L2` has `graph` (bitwise equal to its reference, one or several cells) and `triton` (one cell). [Performance](performance.md) has the measured costs.
 
 ## Fidelity levels
 
