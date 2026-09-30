@@ -70,6 +70,7 @@ nav:
       - Multi-cell networks: multicell.md
       - Differentiable network models: differentiable.md
       - Background users, energy and sharding: background-energy-sharding.md
+      - Adaptive and mixed fidelity: adaptive-fidelity.md
       - Channel models: channels.md
       - "Wi-Fi (802.11 DCF / EDCA)": wifi.md
       - Radio maps from USD scenes: scene-radio-map.md

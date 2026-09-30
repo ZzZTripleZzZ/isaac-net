@@ -80,6 +80,7 @@ FIELD_GROUPS = {
     "traffic": ("traffic",),
     "wrappers": ("background", "energy"),      # make_engine wrappers (core/background.py, core/energy.py)
     "wifi": ("wifi",),                         # level WIFI (core/wifi), which also reads app, proto (rng) and radio
+    "fidelity": ("fidelity",),     # read by core/adaptive.py (make_adaptive), not by make_engine's levels
 }
 
 CHANNELS = ("log_distance", "tr38901", "radio_map")
@@ -338,6 +339,7 @@ class NRConfig:
     background: object = None            # core.background.BackgroundConfig: non-robot UEs sharing each cell
     energy: object = None                # core.energy.EnergyConfig: per-robot radio energy and battery
     wifi: object | None = None           # WifiConfig (core/wifi/config.py) for level "WIFI"; None = WifiConfig()
+    fidelity: object = None              # adaptive / mixed fidelity: a core.adaptive.FidelityConfig for make_adaptive
 
     # ---------------- derived ----------------
     def __post_init__(self):
