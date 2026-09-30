@@ -34,6 +34,8 @@ HDR = struct.Struct(">4sBBHIIHHIQ")
 MAGIC = b"ILNP"
 VERSION = 1
 TX_COLS = ["flow", "seq", "frame_id", "frag", "n_frag", "frame_bytes", "pkt_bytes", "t_tx_ns"]
+# Python does not export SO_TIMESTAMPNS on Linux; 35 is its value there (and the SCM type of the ancillary data)
+SO_TIMESTAMPNS = getattr(socket, "SO_TIMESTAMPNS", 35 if sys.platform.startswith("linux") else None)
 RX_COLS = ["src", "flow", "seq", "frame_id", "frag", "n_frag", "frame_bytes", "pkt_bytes", "t_tx_ns", "t_rx_ns"]
 
 
@@ -131,10 +133,10 @@ def recv(args):
     s = socket.socket(fam, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 << 20)
     s.bind((args.bind, args.port))
-    kts = hasattr(socket, "SO_TIMESTAMPNS")
+    kts = SO_TIMESTAMPNS is not None
     if kts:
         try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_TIMESTAMPNS, 1)
+            s.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)
         except OSError:
             kts = False
     s.settimeout(0.5)
@@ -157,7 +159,7 @@ def _recv_loop(s, w, out, kts, t_end):
                 buf, anc, _, addr = s.recvmsg(65535, 64)
                 t_rx = time.time_ns()
                 for lvl, typ, data in anc:
-                    if lvl == socket.SOL_SOCKET and typ == socket.SO_TIMESTAMPNS and len(data) >= 16:
+                    if lvl == socket.SOL_SOCKET and typ == SO_TIMESTAMPNS and len(data) >= 16:
                         sec, nsec = struct.unpack("qq", data[:16])
                         t_rx = sec * 1_000_000_000 + nsec
             else:
