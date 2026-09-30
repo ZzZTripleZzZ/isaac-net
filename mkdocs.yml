@@ -48,6 +48,7 @@ nav:
       - "03 Configuring NR": tutorials/03_configuring_nr.ipynb
       - "04 Isaac Lab integration": tutorials/04_isaac_lab_integration.ipynb
       - "05 Validating against ns-3": tutorials/05_validating_against_ns3.ipynb
+  - Benchmark suite: benchmark-suite.md
   - API reference:
       - reference/index.md
       - Engine: reference/engine.md
