@@ -1,6 +1,6 @@
 # Documentation
 
-These pages are for collaborators joining the project. The top-level [README](../README.md) shows how to install the package and put a network into an environment, and [ARCHITECTURE.md](../ARCHITECTURE.md) defines the package layout and the interface contract every engine honors. The pages below record what exists beyond that: how each part was validated, how fast it runs, and what is still open. They describe the state of `main` at `971fc12` (2026-09-29) and the three work-in-progress branches listed in the status page.
+These pages are for collaborators joining the project. The top-level [README](../README.md) shows how to install the package and put a network into an environment, and [ARCHITECTURE.md](../ARCHITECTURE.md) defines the package layout and the interface contract every engine honors. The pages below record what exists beyond that: how each part was validated, how fast it runs, and what is still open. They describe the state of `main` at `2400ed9` (2026-09-30, version 0.1.0) and the two items in flight listed in the status page.
 
 | Page | What it covers |
 |:---|:---|
@@ -8,7 +8,7 @@ These pages are for collaborators joining the project. The top-level [README](..
 | [tutorials/](tutorials/index.md) | Five tutorials as executed notebooks (scripts in [`tutorials/`](../tutorials/)): first network, choosing fidelity, configuring NR, Isaac Lab integration, validating against ns-3 |
 | [reference/](reference/index.md) | API reference: engine contract and outputs, `NRConfig` with every field, traffic, fidelity levels, Isaac Lab layer, ns-3 bridges |
 | [licensing.md](licensing.md) | What ships under which license, the locally generated 5G-LENA tables, GPL-bound bridge binaries, Isaac Sim and the Omniverse EULA, public datasets |
-| [STATUS.md](STATUS.md) | What is done (with commits), what is in progress on which branch, the prioritized open items, and suggested starter tasks |
+| [STATUS.md](STATUS.md) | What is merged (with commits), what is in flight, the prioritized open items, and suggested starter tasks |
 | [validation-5g-lena.md](validation-5g-lena.md) | The ns-3.48 + 5G-LENA v5.1 reference, the 186-run sweep, the model mismatch table and which side was changed, and the NR engine's replay of the sweep |
 | [fidelity-vs-lena.md](fidelity-vs-lena.md) | The formal NR-engine vs 5G-LENA comparison: per-run and sweep-level KS / W1 / quantile / drop / goodput / HARQ / PRB errors, the SR-delay fit and hold-out split, ablations, the legacy engine and fading arm, and speed |
 | [calibration-public-data.md](calibration-public-data.md) | Public datasets and their licenses, the data problems found, fitted parameters, the `lena_match` / `srsran_like` / `oai_like` presets, and what public data cannot validate |
@@ -20,6 +20,15 @@ These pages are for collaborators joining the project. The top-level [README](..
 | [bridges.md](bridges.md) | The ns-3 co-simulation bridges (lockstep, process pool, offline replay, real time), their correctness checks, costs and known limits |
 | [channels.md](channels.md) | The selectable channel models (log-distance, TR 38.901, radio map), blockage and per-robot Doppler, their sources, simplifications and cost, and how to bake a Sionna RT radio map |
 | [configurability.md](configurability.md) | Every hard-coded choice in the engines, a feature matrix against 5G-LENA, Sionna SYS and Simu5G, the proposed modes and switches, and the config fields added so far |
+| [benchmark-suite.md](benchmark-suite.md) | The benchmark suite: task API, the four tasks and their variants, metrics, baselines, result format, load calibration, how to add a task or submit a baseline |
+| [scene-radio-map.md](scene-radio-map.md) | Radio maps from USD scenes: export with ITU-R materials, the Sionna RT bake, the Isaac hook and its cache, validation on synthetic scenes |
+| [wifi.md](wifi.md) | Level `WIFI`: the mean-field 802.11 DCF / EDCA model, what it leaves out, its validity range, and its validation against Bianchi, an event simulator and ns-3 |
+| [background-energy-sharding.md](background-energy-sharding.md) | Background users per cell, the radio energy and battery model, and multi-GPU sharding with its invariance guarantee |
+| [adaptive-fidelity.md](adaptive-fidelity.md) | `AdaptiveEngine`: static mixes, load-triggered switching with queue handoff, curricula, accuracy against cost |
+| [differentiable.md](differentiable.md) | The differentiable fluid models `L1D` and `QAD`, the neural-proxy recipe, their checks and limits |
+| [fidelity-load-gap.md](fidelity-load-gap.md) | Why the NR engine is optimistic under load against 5G-LENA, mechanism by mechanism, and the prototype that closes the gap |
+| [bridges-oai.md](bridges-oai.md) | The OAI 5G rfsim bridge: deployment, virtual clock, measured access, HARQ and contention, and the comparison with the engine's presets |
+| [measurement-protocol.md](measurement-protocol.md) | The runbook for measurements on a lab gNB and POWDER, with the parsers, probe and calibration tools (`isaaclab-net-measure`) |
 
 **A note on every timing in these pages.** All GPU numbers were measured on one RTX 4090 in a shared lab box while other jobs kept it 95–99% busy, and all ns-3 numbers on a 32-core box with load averages between 10 and 68. Absolute times are therefore pessimistic, and only ratios measured in the same run are meaningful. An uncontended re-benchmark is the second item on the open list in [STATUS.md](STATUS.md).
 

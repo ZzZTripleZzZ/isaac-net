@@ -2,42 +2,63 @@
 
 <h1>isaaclab-net</h1>
 
-<p><b>GPU-batched 5G network simulation for massively parallel robot learning: thousands of Isaac Lab environments, tens to hundreds of robots per cell, one GPU, network state stepped in lockstep with physics.</b></p>
+<p><b>GPU-batched 5G and Wi-Fi network simulation for massively parallel robot learning: thousands of Isaac Lab environments, tens to hundreds of robots per cell, one GPU, network state stepped in lockstep with physics.</b></p>
 
 <p>
-  <a href="https://www.python.org/"><img alt="Python" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white"></a>
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-4B5563?style=flat-square">
+  <a href="https://www.python.org/"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-3776AB?style=flat-square&logo=python&logoColor=white"></a>
   <a href="https://pytorch.org/"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-CUDA-EE4C2C?style=flat-square&logo=pytorch&logoColor=white"></a>
   <a href="https://triton-lang.org/"><img alt="Triton" src="https://img.shields.io/badge/kernels-Triton-2F5C9E?style=flat-square"></a>
   <a href="https://isaac-sim.github.io/IsaacLab/"><img alt="Isaac Lab" src="https://img.shields.io/badge/Isaac%20Lab-3.0-76B900?style=flat-square&logo=nvidia&logoColor=white"></a>
+  <a href="https://github.com/google-deepmind/mujoco_playground"><img alt="MuJoCo Playground" src="https://img.shields.io/badge/MuJoCo%20Playground-MJX-1F6FEB?style=flat-square"></a>
   <a href="https://github.com/ZzZTripleZzZ/isaaclab-net/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ZzZTripleZzZ/isaaclab-net/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-BSD--3--Clause-yellow?style=flat-square&logo=opensourceinitiative&logoColor=white"></a>
-  <img alt="Status" src="https://img.shields.io/badge/status-prototype-B7791F?style=flat-square">
+  <img alt="Status" src="https://img.shields.io/badge/status-research%20prototype-B7791F?style=flat-square">
 </p>
 
 </div>
 
 ```mermaid
 flowchart LR
-    subgraph SIM["Isaac Lab (E parallel envs)"]
+    subgraph SIM["Isaac Lab or MuJoCo Playground / MJX (E parallel envs)"]
+        SCN["USD scene"]
         P["physics step<br/>robot poses [E, R, 3]"]
         POL["policy<br/>actions + messages to send"]
     end
-    subgraph NET["isaaclab-net NetEngine (one GPU, all envs at once)"]
-        RAD["radio<br/>path loss, shadowing, fading"]
-        PHY["PHY abstraction<br/>MCS, BLER"]
-        MAC["MAC per UL slot<br/>SR/BSR, PF scheduler, HARQ, OLLA"]
-        Q["message queues<br/>FIFO, timeouts"]
+    subgraph NET["isaaclab-net engine (all envs at once, one GPU or sharded over several)"]
+        CH["channel<br/>log-distance, TR 38.901, radio map,<br/>blockage, per-robot Doppler"]
+        TRF["traffic<br/>policy messages, periodic, bursty,<br/>video, event-triggered"]
+        BG["background users<br/>per cell"]
+        LVL["fidelity level<br/>L2 NR MAC/PHY, L2-legacy, WIFI,<br/>L0 to L1, surrogates, bounds"]
+        AD["adaptive fidelity<br/>cheap or expensive level per env"]
+        Q["message queues<br/>FIFO, timeouts, deadlines"]
+        EDGE["edge loop<br/>edge servers, return path"]
+        EN["radio energy<br/>and battery"]
     end
-    P -- poses --> RAD
-    POL -- messages --> Q
-    RAD --> PHY --> MAC --> Q
-    Q -- "delivered, delay, AoI, SINR" --> OBS["observations<br/>and rewards"]
+    subgraph VAL["validation only"]
+        NS3["ns-3 5G-LENA bridges"]
+        OAI["OAI 5G rfsim bridge"]
+    end
+    SCN -- "bake with Sionna RT" --> CH
+    P -- poses --> CH
+    POL -- messages --> TRF
+    TRF --> Q
+    CH --> LVL
+    BG --> LVL
+    Q --> LVL
+    AD -.-> LVL
+    LVL --> EDGE
+    LVL --> EN
+    EDGE -- "delivered, delay, AoI, SINR, action age" --> OBS["observations<br/>and rewards"]
+    EN -- "state of charge" --> OBS
     OBS --> POL
+    NS3 -. "stands in for the level" .-> LVL
+    OAI -. "stands in for the level" .-> LVL
 ```
 
 Parallel robot learning runs thousands of environments on one GPU, but the network between robots and the edge is usually reduced to a fixed or random delay, if it is modeled at all. Packet-level simulators such as ns-3 capture scheduling, retransmissions and contention, but they run one scenario at a time on a CPU, far from the throughput an RL loop needs. `isaaclab-net` closes that gap. Every piece of network state, from each robot's channel and HARQ process to its queued messages, is a fixed-shape tensor with leading dimensions `[envs, robots]`. The engine advances all environments' uplinks slot by slot on the GPU, in lockstep with the physics. A policy therefore trains against queues that build up when the team transmits together, links that degrade as robots move, and retransmissions that stretch delay tails.
 
-**Status.** Early prototype, now packaged as `isaaclab_net`. The prototype levels and their fast backends are tested for bitwise equivalence, the configurable NR engine (3GPP MCS/TBS and BLER tables, multiple HARQ processes, downlink, multiple cells) and the legacy multi-cell uplink are merged behind one engine factory, the Isaac Lab layer runs every level through the same factory, and the ns-3 bridges are in the package. The Isaac Lab fleet demo trains end to end with the network in the loop; its uncontended scaling benchmarks are still to be run. [ARCHITECTURE.md](ARCHITECTURE.md) lists the status of every module.
+**Status.** Research prototype, version 0.1.0, packaged as `isaaclab_net`. One factory builds every fidelity level behind one API: the configurable NR engine with multiple cells, the frozen legacy slot model, a Wi-Fi level, cheaper fluid and delay levels, fitted surrogates and two bounds. Around them sit selectable channel models and radio maps baked from USD scenes, traffic generators, an edge-computing loop, background users, a radio energy model, adaptive fidelity per env and multi-GPU sharding. The Isaac Lab layer and a MuJoCo Playground / MJX backend run all of it, the benchmark suite defines four network-aware multi-robot tasks, and ns-3 5G-LENA and OAI 5G bridges check the engine against a packet-level simulator and a real protocol stack. Two pieces of work are still in flight: an uncontended re-run of the speed and scale benchmarks, and the load-gap fixes that fold 5G-LENA's scheduler sharing and grant pipeline into the NR engine as switches. [docs/STATUS.md](docs/STATUS.md) has the details and the open items, and [CHANGELOG.md](CHANGELOG.md) lists what 0.1.0 contains.
 
 ## Install
 
@@ -45,10 +66,24 @@ Parallel robot learning runs thousands of environments on one GPU, but the netwo
 git clone git@github.com:ZzZTripleZzZ/isaaclab-net.git && cd isaaclab-net
 uv venv --python 3.11 && source .venv/bin/activate
 uv pip install torch                                # CUDA build of PyTorch; Triton ships with it on Linux
-uv pip install -e ".[dev]"                          # the isaaclab_net package, plus pytest and ruff
+uv pip install -e ".[dev]"                          # the isaaclab_net package, plus pytest, ruff and build
 ```
 
-Linux with an NVIDIA GPU. The reference engines also run on a CPU. Scripts in `prototype/` still work: they are thin shims over the package.
+Linux with an NVIDIA GPU is the main target, and Python 3.10 to 3.12 is supported. Every reference engine also runs on a CPU (`pip install torch --index-url https://download.pytorch.org/whl/cpu`), which is enough for the CPU test suite. The package is not on PyPI while the repository is private. A release wheel installs the same way: `pip install "isaaclab_net-0.1.0-py3-none-any.whl[dev]"`. Scripts in `prototype/` still work, as thin shims over the package.
+
+| Extra | Adds | For |
+|:---|:---|:---|
+| `dev` | pytest, ruff, build | tests, lint, building the wheel |
+| `docs` | mkdocs-material, mkdocstrings, mkdocs-jupyter | the docs site (`mkdocs build --strict`) |
+| `mjx` | JAX 0.9.2 (CUDA 12), MuJoCo Playground 0.2.0, Brax 0.14.2 | the MuJoCo Playground / MJX backend ([docs/backends-mjx.md](docs/backends-mjx.md)) |
+| `isaac` | nothing from pip | the Isaac Lab layer. Install Isaac Sim and Isaac Lab separately, on [Windows](docs/isaac-lab.md) or [Linux / HPC](docs/isaac-lab-linux.md) |
+| `ns3` | pybind11 | the ns-3 bridges ([docs/bridges.md](docs/bridges.md)). ns-3.48 and 5G-LENA v5.1 are built locally |
+| `oai` | pyarrow | the OAI 5G rfsim bridge and measurement tools ([docs/bridges-oai.md](docs/bridges-oai.md)). OAI runs from its Docker images |
+| `sionna` | Sionna RT, Sionna 2.2.0, usd-core | radio maps from USD scenes and the PHY table export ([docs/scene-radio-map.md](docs/scene-radio-map.md)) |
+| `wifi` | nothing | level `WIFI` needs only the core dependencies |
+| `all` | every extra above except `isaac` | everything pip can install on Linux without Isaac |
+
+Three console scripts come with the package: `isaaclab-net-bench` (the benchmark suite), `isaaclab-net-bake` (bake a radio map from a USD scene) and `isaaclab-net-measure` (probe, ingest and calibrate for gNB measurement campaigns).
 
 ## Put a network in your environment
 
@@ -150,6 +185,7 @@ class MyFleetEnv(NetEnvMixin, DirectRLEnv):
 
 **Scale.** These numbers come from the fleet env with random actions, which saturate the uplink from 16 robots per env, measured on an idle RTX 4090 (0% utilization before every run, median of 3 windows; conditions in [docs/performance.md](docs/performance.md#isaac-lab-scale)):
 
+<!-- speed tables updated by the benchmark campaign -->
 | Envs × robots | Robots | Network off (control steps/s) | L2-legacy `triton` | NR `L2` `triton` (uplink) | Network per step, isolated (legacy / NR) |
 |---:|---:|---:|---:|---:|---:|
 | 2,048 × 128 | 262,144 | 5.19 | 4.08 | 4.15 | 11 / 37 ms |
@@ -189,21 +225,32 @@ python -m isaaclab_net.tools.extract_lena_tables ~/src/nr   # writes ~/.cache/is
 
 ## What the engine models
 
-| Layer | Configurable NR engine (`L2`) | Legacy slot-level model (`L2-legacy`) |
-|:---|:---|:---|
-| Radio | selectable channel ([docs/channels.md](docs/channels.md)): log-distance with correlated and white shadowing, TR 38.901 RMa / UMa / UMi / InH / InF path loss with a spatially consistent LOS state and O2I, or a precomputed radio map (e.g. Sionna RT); optional robot-body blockage; correlated Rayleigh fading per subband and link, with per-robot Doppler | the same large-scale models (legacy fading), one cell at the arena corner by default |
-| Frame structure | numerology 0 to 2, any bandwidth (38.101 N_RB), any TDD pattern and special slot, RBGs per 38.214 | TDD `DDDSU` at 30 kHz SCS, 40 uplink slots per 100 ms, 5 subbands of 10 PRBs |
-| Access | periodic SR, grant delay, BSR, optional proactive grants | scheduling request, grant delay, buffer status reports |
-| Scheduling | proportional fair per RBG (subband or wideband metric), retransmissions first | proportional fair over subbands, power split with a headroom cap |
-| Link | 3GPP MCS tables and exact TBS, EESM, BLER-target link adaptation, OLLA, MCS caps | OLLA, one transport block per robot per slot, logistic BLER on effective SINR |
-| Retransmission | multiple HARQ processes, chase or IR combining, RLC AM retry or UM loss | HARQ with a chase-combining gain and a retransmission limit |
-| Downlink | per-robot gNB queues, delayed and quantized CQI, K1 feedback | none |
-| Cells | 1 to 7 cells, a PF scheduler and HARQ per cell, same-slot UL and DL interference, fractional UL power control, A3 handover with interruption | 1 to 7 cells, same-slot UL interference, fractional power control, A3 handover |
-| Application | per-robot FIFO, in-order completion, timeout or PDCP discard | per-robot FIFO of frames, in-order completion, 2 s application timeout |
-| Traffic | policy messages plus periodic (sub-step periods), Markov on/off bursty, video I/P and event-triggered generators per robot, with arrival offsets in slots, tags, priority and deadline fields ([Traffic models](docs/configurability.md#traffic-models)) | policy messages, one per robot per step |
-| Edge loop (optional, every level) | edge servers per env (FIFO or processor sharing, deterministic or exponential service per message class, bounded queue, deadlines) and the return path to the robot: instant, delay from SINR, or a real DL message through this engine | the same edge stage; return path instant or delay from SINR |
+The three simulating levels share the radio, the traffic and the application layer, and differ in how they model access to the channel:
 
-`NRConfig(edge=EdgeConfig(...))` closes the loop that a message starts: `make_engine` then wraps the engine in `EdgeLoop` (`isaaclab_net/core/edge.py`), which keeps the engine API and adds to the step dict what the edge did (`edge_done`, `edge_dropped`, `edge_queue_len`) and what each robot now holds: the capture step, age and latency of its newest action (`act_cap`, `act_age`, `act_latency`) split into uplink, edge and return delays. Without `edge` nothing changes. See [docs/configurability.md](docs/configurability.md#edge-computing-loop) and [`examples/edge_control.py`](isaaclab_net/examples/edge_control.py).
+| Layer | Configurable NR engine (`L2`) | Legacy slot-level model (`L2-legacy`) | Wi-Fi (`WIFI`) |
+|:---|:---|:---|:---|
+| Radio | selectable channel ([docs/channels.md](docs/channels.md)): log-distance with correlated and white shadowing, TR 38.901 RMa / UMa / UMi / InH / InF path loss with a spatially consistent LOS state and O2I, or a precomputed radio map, for example baked from a USD scene ([docs/scene-radio-map.md](docs/scene-radio-map.md)); optional robot-body blockage; correlated Rayleigh fading per subband and link, with per-robot Doppler | the same large-scale models (legacy fading), one cell at the arena corner by default | the same large-scale models between robots and access points, RSSI association with hysteresis and roaming interruption, a pairwise sensing matrix for hidden nodes |
+| Frame structure | numerology 0 to 2, any bandwidth (38.101 N_RB), any TDD pattern and special slot, RBGs per 38.214 | TDD `DDDSU` at 30 kHz SCS, 40 uplink slots per 100 ms, 5 subbands of 10 PRBs | 802.11ax / ac / a PPDUs at 20 to 160 MHz, 1 to 4 spatial streams, the contention model re-solved every sub-step (1 ms by default) |
+| Access | periodic SR, grant delay, BSR, optional proactive grants | scheduling request, grant delay, buffer status reports | DCF or EDCA contention (AIFS, CW per access class) as a Bianchi-style mean-field fixed point per sub-step, optional RTS/CTS |
+| Scheduling | proportional fair per RBG (subband or wideband metric), max C/I or round robin, retransmissions first | proportional fair over subbands, power split with a headroom cap | random service order among the stations that win the channel |
+| Link | 3GPP MCS tables and exact TBS, EESM, BLER-target link adaptation, OLLA, MCS caps | OLLA, one transport block per robot per slot, logistic BLER on effective SINR | SNR-threshold rate adaptation, A-MPDU aggregation up to the Block Ack window and the PPDU time limit |
+| Retransmission | multiple HARQ processes, chase or IR combining, RLC AM retry or UM loss | HARQ with a chase-combining gain and a retransmission limit | collisions and a retry limit |
+| Downlink | per-robot gNB queues, delayed and quantized CQI, K1 feedback | none | none |
+| Cells | 1 to 7 cells, a PF scheduler and HARQ per cell, same-slot UL and DL interference, fractional UL power control, A3 handover with interruption | 1 to 7 cells, same-slot UL interference, fractional power control, A3 handover | several APs on shared or separate channels, co-channel contention domains |
+| Application | per-robot FIFO, in-order completion, timeout or PDCP discard | per-robot FIFO of frames, in-order completion, 2 s application timeout | per-robot FIFO, in-order completion, application timeout |
+| Traffic | policy messages plus periodic (sub-step periods), Markov on/off bursty, video I/P and event-triggered generators per robot, with arrival offsets in slots, tags, priority and deadline fields ([Traffic models](docs/configurability.md#traffic-models)) | policy messages, one per robot per step | policy messages, one per robot per step |
+
+Stages on top of the levels are set through `NRConfig` as well, keep the engine API, and add their own keys to the step dict:
+
+| Stage | What it adds | Levels | Configure |
+|:---|:---|:---|:---|
+| Edge loop | edge servers per env (FIFO or processor sharing, deterministic or exponential service per message class, bounded queue, deadlines) and the return path to the robot: instant, delay from SINR, or a real NR downlink message. Outputs the capture step, age and latency of each robot's newest action, split into uplink, edge and return delays | every level | `NRConfig(edge=EdgeConfig(...))`, [configurability.md](docs/configurability.md#edge-computing-loop) |
+| Background users | UEs the policy does not control, with their own placement, mobility and traffic. In the NR engine they are extra rows that compete in PF, hold HARQ, interfere and hand over. On `L1` and `L2-legacy` they reduce the capacity through their offered load | `L2`, `L2-legacy`, `L1` | `NRConfig(background=BackgroundConfig(...))`, [background-energy-sharding.md](docs/background-energy-sharding.md) |
+| Radio energy | joules per robot from transmit power, circuit, receive and idle power, and a battery with a low-battery flag. Exact per slot on `L2`, an airtime estimate elsewhere | every level | `NRConfig(energy=EnergyConfig(...))` |
+| Adaptive fidelity | a cheap and an expensive level side by side, chosen per env: a static mix, switching on a load indicator with queue handoff, or a curriculum over training iterations | cheap `L0` to `L1`, expensive `L1`, `L2-legacy` or `L2` | `make_adaptive(E, R, dev, FidelityConfig(...))`, [adaptive-fidelity.md](docs/adaptive-fidelity.md) |
+| Sharding | the envs split over several GPUs behind the API of one engine; two shards are bitwise equal to one engine on the prototype levels and `L2-legacy` | every level (`L2` is not shard-invariant) | `ShardedEngine(level, E, R, devices, config, backend)` |
+
+Without these fields nothing changes. [`examples/edge_control.py`](isaaclab_net/examples/edge_control.py) is edge-offloaded tracking with a hold or zero rule for stale actions, and [`examples/traffic_models.py`](isaaclab_net/examples/traffic_models.py) shows the traffic generators. Level `WIFI` takes its settings from `NRConfig(wifi=WifiConfig(...))` and is described, with its validation and what it leaves out, in [docs/wifi.md](docs/wifi.md).
 
 ## Fidelity levels
 
@@ -215,14 +262,17 @@ Every level exposes the same API, so a task switches fidelity by changing one ar
 | `L0DR` | `L0` with per-episode randomized delay and loss | domain randomization |
 | `L05`, `L05Q` | lookup tables fitted offline from `L2` rollouts | cheap state-conditioned delay |
 | `L1` | fluid slot model with equal PRB shares and FIFO queues | contention without MAC detail |
-| `L2` | configurable NR MAC and PHY (table above) | the fidelity model |
+| `L2` | configurable NR MAC and PHY, 1 to 7 cells (table above) | the fidelity model |
 | `L2-legacy` | the prototype slot-level MAC and PHY, frozen; multi-cell capable | reproducing the earlier prototype experiments, and speed at scale |
+| `WIFI` | mean-field 802.11 DCF / EDCA uplink with 802.11ax / ac / a rates, several APs | fleets on Wi-Fi instead of private 5G |
 | `TR` | trace replay: each env replays one recorded `L2` env-episode, open loop | the replayed-trace baseline |
 | `GE` | 3-state Markov-modulated delay and loss, one chain per env | the Gilbert–Elliott-style baseline |
 | `QA` | analytic processor-sharing queue per control step, FIFO service, SR delay | contention without slot simulation |
 | `NN` | learned stateful surrogate: MLP drop probability and delay quantiles from send-time features | the learned-surrogate baseline |
 | `ORACLE` | every message delivered at capture, delay 0, never lost | upper bound on what any network gives a task |
 | `NOCOMM` | no message ever delivered | lower bound: the task without communication |
+| `L1D`, `QAD` | differentiable relaxations of `L1` and `QA` in `core/diff` (`DiffFluid`), exact at temperature 0; not built by `make_engine` | gradients of delay, delivery, AoI and energy with respect to send probability, message size, transmit power and position ([docs/differentiable.md](docs/differentiable.md)) |
+| neural proxy | an MLP fitted to per-robot KPIs of `L2-legacy` rollouts (`core/diff/proxy.py`), a recipe | differentiable stand-in for `L2-legacy` |
 
 `TR`, `GE`, `QA` and `NN` are fitted from `L2` or `L2-legacy` rollouts of the example fleet task. The fit writes one parameter file outside the repository, and every engine loads it:
 
@@ -236,12 +286,15 @@ net = make_engine("NN", E, R, dev, params="~/.cache/isaaclab_net/levels/L2-legac
 
 `ORACLE` and `NOCOMM` are value-of-information bounds for task design. Run a task under both first: a task in which network fidelity can matter must show a large gap between its `ORACLE` and `NOCOMM` returns. If the gap is small, the policy gains little from what the network delivers, and the task cannot tell fidelity levels apart.
 
+`AdaptiveEngine` (`core/adaptive.py`) mixes two of these levels per env behind the same API, for example `L1` for most envs and `L2-legacy` for the envs whose cell is congested. With the switching threshold at 0 or infinity it is bitwise equal to the expensive or the cheap level alone.
+
 ## Backends and speed
 
 Every prototype level (`L0` to `L1`, `L2-legacy`) has a readable eager reference in `isaaclab_net/core/proto/netsim.py` and graph-safe fast versions in `isaaclab_net/core/proto/netsim_fast.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference at every level (per-message outputs, every queue and MAC state, with random partial resets). `triton` (`L1`, `L2-legacy`) runs all 40 slots of a control step in one fused kernel and matches the reference to rounding: from an identical state every finish time agrees, and over long runs aggregate delivery and delay agree to three or four significant digits. `compile` (torch.compile + CUDA graph) also agrees to rounding. The NR engine (`L2`) has `graph` (one or several cells, bitwise identical to its reference, including with random partial resets) and `triton` (one cell, one fused kernel per control step, equal to rounding); both need its engine RNG (`rng="engine"`, the default). The legacy multi-cell engine has only the `reference` backend. The surrogate and bound levels (`TR` to `NOCOMM`) are written once with graph-safe ops, so their `reference` backend runs the same operations as `graph`, which is bitwise identical to it. On an idle GPU the NR uplink costs about 3.5 times the legacy reference per step and 4–6 times the legacy `triton` kernel.
 
 Network step time (`submit` + `step`, dict outputs) in ms on an idle RTX 4090, median of 3 processes ([docs/performance.md](docs/performance.md) has every level, backend and size, the memory and the spreads):
 
+<!-- speed tables updated by the benchmark campaign -->
 | level | 256 × 16 reference | graph | triton | 4,096 × 100 reference | graph | triton |
 |:---|---:|---:|---:|---:|---:|---:|
 | `L0`, `L0DR` | 1.2–1.4 | 0.36 | | 4.7 | 10.6 | |
@@ -253,26 +306,59 @@ Network step time (`submit` + `step`, dict outputs) in ms on an idle RTX 4090, m
 
 At 4,096 × 100 the fixed-shape graph versions of the delay levels are memory-bound and slower than the eager reference, which only touches the new and finished frames, and the NR `graph` backend costs as much as its reference. `triton` is the scale path. `tests/scripts/test_equiv.py`, `test_reset.py` and `benchmarks/bench.py` reproduce these results, and `pytest -m gpu` runs the equivalence checks as tests.
 
-## Validation against ns-3
+## Validation
 
-The reference simulator is ns-3.48 with 5G-LENA NR v5.1, used unmodified except for a documented crash guard that does not change behavior. A 186-run sweep over 1 to 64 UEs, two frame sizes and 13–160% offered load is complete. Replaying 153 of its runs in the NR engine with the same per-UE link budgets (`lena_validation()`, `python -m isaaclab_net.bridges.ns3_offline.lena_replay`) matches the drop rate to a mean absolute difference of 0.029. The remaining light-load delay offset of about 20 ms is closed by an SR-to-grant delay of 40 slots, which is inferred from the replay and not yet measured in 5G-LENA. The comparison of delay distributions, throughput, HARQ statistics and PRB use will be added here. Co-simulation bridges to ns-3 (lockstep, process pool and offline replay) are in `isaaclab_net/bridges/`, with their C++ ns-3 programs in `isaaclab_net/bridges/ns3/`. They are for validation only and are never needed for training. They need a local ns-3 + 5G-LENA build, which is not part of this package.
+The engine is checked in four independent ways. Each check is a tool in the package or in `benchmarks/`, and each page lists its setup, its numbers and where the model still differs.
+
+- **Backend equivalence.** Every fast backend is tested against the readable reference of its level: `graph` bitwise (per-message outputs, every queue and MAC state, through random partial resets), `triton` and `compile` to rounding. The same holds for the NR engine, the surrogates, the Wi-Fi level, the edge stage, adaptive fidelity and sharding, and the Isaac Lab and MJX layers replay bitwise against a direct engine run. `pytest -m gpu` runs these tests ([docs/performance.md](docs/performance.md), [tests/README.md](tests/README.md)).
+- **ns-3 5G-LENA.** ns-3.48 with 5G-LENA v5.1 is the packet-level reference. A 186-run sweep over 1 to 64 UEs, two frame sizes and 13–160% offered load is replayed in the NR engine with the same per-UE link budgets and offered traffic (`lena_validation()`, `python -m isaaclab_net.bridges.ns3_offline.lena_replay`). The formal comparison reports delay quantiles, KS and Wasserstein distances, drops, goodput, HARQ and PRB use per run, with a fit and hold-out split for the one fitted parameter. Over the 153 runs of the no-fading arm the median p95-delay error is −7.8% and the median drop-rate difference −0.63 pp, and the engine is optimistic in loaded cells. A follow-up traced that gap to 5G-LENA's scheduler sharing, grant pipeline and RLC timing, and these mechanisms are being folded into the engine ([docs/validation-5g-lena.md](docs/validation-5g-lena.md), [docs/fidelity-vs-lena.md](docs/fidelity-vs-lena.md), [docs/fidelity-load-gap.md](docs/fidelity-load-gap.md)). Co-simulation bridges (lockstep, process pool, offline replay) run a task against ns-3 directly ([docs/bridges.md](docs/bridges.md)).
+- **OAI 5G rfsim.** OpenAirInterface's gNB, nr-UE and core network, connected through the RF simulator, run behind a lockstep bridge with 1 to 10 UEs. The measured uplink access, HARQ and contention are compared with the engine's presets, and the fitted `oai_rfsim` preset matches the stock stack's single-UE small-frame delays to a median Wasserstein-1 distance of 2.5 ms ([docs/bridges-oai.md](docs/bridges-oai.md)).
+- **Public data and real cells.** Uplink latency fits to srsRAN and OAI measurements, a contention check on ColO-RAN and channel fits on POWDER drive tests produced the `srsran_like` and `oai_like` presets ([docs/calibration-public-data.md](docs/calibration-public-data.md)). The measurement protocol and its tools (`isaaclab-net-measure`) are ready for a lab gNB and POWDER, for the layers public data cannot reach ([docs/measurement-protocol.md](docs/measurement-protocol.md)).
+
+The Wi-Fi level is validated separately against Bianchi's model, an exact slot-level CSMA/CA simulator and ns-3's 802.11ax model ([docs/wifi.md](docs/wifi.md#validation)). All bridges and measurement tools are for validation only and are never needed for training. The ns-3 bridges need a local ns-3 + 5G-LENA build, which is not part of this package, and binaries built from them are GPL-covered ([docs/licensing.md](docs/licensing.md)).
+
+## Benchmark suite
+
+`isaaclab_net.bench` gives network-aware multi-robot learning a common set of tasks, metrics and baselines. Four tasks run E envs of R robots on one GPU and talk to the network only through the `NetModule` of the Isaac Lab layer: `fleet_alert` (detection frames warn the fleet of hazards), `coop_map` (map patches keep an edge map fresh), `coverage_nav` (navigation under a remote supervisor that stops robots it has not heard from) and `edge_control` (tracking with an edge-offloaded controller). Every task has `default`, `light` and `background` variants and runs on any level and backend, and every run writes one versioned JSON result file.
+
+```bash
+isaaclab-net-bench list                                         # tasks, variants, levels, presets, baselines
+isaaclab-net-bench run --task coop_map --level L2-legacy --backend triton \
+    --baselines random,heuristic,ppo_mlp --seeds 0,1,2 --out results/
+isaaclab-net-bench report results/                              # mean ± 95% CI over seeds, as a Markdown table
+isaaclab-net-bench calibrate --task all --level L2-legacy --backend triton   # offered vs delivered load
+```
+
+`python -m isaaclab_net.bench` is the same command. The suite ships random, heuristic and PPO (MLP and GRU) baselines and sanity numbers that show the pipeline works, not tuned results. The task API, the metrics, the result format and how to add a task or submit a baseline are in [docs/benchmark-suite.md](docs/benchmark-suite.md).
 
 ## Roadmap
 
 - [x] Slot-level uplink engine and lower fidelity levels
 - [x] `graph` backend, bitwise equal to the reference, and `triton` backend for scale
-- [x] Package layout `isaaclab_net/` (core, isaac, bridges, examples) per [ARCHITECTURE.md](ARCHITECTURE.md)
+- [x] Package layout `isaaclab_net/` (core, isaac, mjx, bridges, bench, examples, tools) per [ARCHITECTURE.md](ARCHITECTURE.md)
 - [x] Partial resets per env, per-env clocks and the `submit` / `step` dict API, at every level and backend
-- [x] Configurable NR: numerology, TDD patterns, 3GPP MCS/TBS and BLER tables, multiple HARQ processes, downlink
-- [x] `graph` / `triton` backends for the NR engine
-- [x] Multi-cell interference and handover (legacy L2)
-- [x] Multi-cell MAC in the NR engine (per-cell schedulers and HARQ, uplink and downlink interference, power control, handover)
-- [x] Isaac Lab 3.0 integration on the engine API: DirectRLEnv mixin, network domain randomization, fleet demo env, PPO
-- [x] Second backend: MuJoCo Playground / MJX (JAX) through a zero-copy `buffer_callback`, fleet env, Brax PPO
-- [ ] Uncontended Isaac Lab scaling benchmarks and more demo tasks
-- [ ] Validation against ns-3 5G-LENA and public measurement traces
-- [x] Test suite (CPU tests, GPU equivalence tests) and CI
+- [x] Engine-owned random streams at every level
+- [x] Configurable NR: numerology, TDD patterns, 3GPP MCS/TBS and BLER tables, multiple HARQ processes, downlink, schedulers
+- [x] `graph` backend for the NR engine (one or several cells) and `triton` for one cell
+- [x] Multi-cell interference and handover, in the NR engine and the legacy engine
+- [x] Selectable channel models (TR 38.901, radio maps, blockage, per-robot Doppler) and radio maps baked from USD scenes
+- [x] Traffic models, edge-computing loop, background users, radio energy model
+- [x] Wi-Fi level (802.11 DCF / EDCA)
+- [x] Uncontended Isaac Lab scaling benchmarks on an idle GPU (see docs/performance.md)
+- [x] Validation against ns-3 5G-LENA (formal study) and public measurement traces; OAI rfsim as a real-stack check
 - [x] Fitted surrogate levels (trace replay, Markov-modulated, analytic queue, learned) and ORACLE / NOCOMM bounds
+- [x] Adaptive and mixed fidelity per env, differentiable fluid models, multi-GPU sharding
+- [x] Isaac Lab 3.0 integration on the engine API: DirectRLEnv mixin, network domain randomization, fleet and warehouse demo envs, PPO; Windows install and Linux / HPC recipe
+- [x] Second backend: MuJoCo Playground / MJX (JAX) through a zero-copy `buffer_callback`, fleet env, Brax PPO
+- [x] Benchmark suite: four tasks, metrics, baselines, result format
+- [x] Validation against ns-3 5G-LENA, OAI 5G rfsim and public measurement data
+- [x] Test suite (CPU tests, GPU equivalence tests), CI, docs site, 0.1.0 packaging
+- [ ] Uncontended speed and scale benchmarks (in flight)
+- [ ] Load-gap mechanisms of 5G-LENA as NR engine switches (in flight)
+- [ ] `triton` for the multi-cell NR engine and a tiled kernel for large R
+- [ ] Lab gNB and POWDER measurement campaign; multi-cell calibration against a reference
+- [ ] Isaac Sim (Kit) on Linux clusters once a final Isaac Lab 3.0 container exists
+- [ ] Public release and PyPI
 
 ## Repository layout
 
@@ -282,39 +368,55 @@ isaaclab-net/
 │   ├── core/                     # backend-agnostic engines, no simulator imports
 │   │   ├── config.py             #   NRConfig, the one config dataclass, and its presets
 │   │   ├── engine.py             #   make_engine(level, ...) and NREngine, the contract API of every level
-│   │   ├── nr_engine.py          #   configurable NR engine (L2): slot schedule, fading, UL/DL, partial reset
+│   │   ├── nr_engine.py          #   configurable NR engine (L2): slot schedule, fading, UL/DL, cells, partial reset
+│   │   ├── nr_fast.py nr_triton.py nr_rng.py   # NR graph and triton backends, engine-owned NR random streams
 │   │   ├── phy.py  queues.py     #   3GPP MCS/TBS/BLER/EESM; fixed-shape frame FIFOs on a byte stream
-│   │   ├── mac.py mac_ul.py mac_dl.py   # per-slot MAC: multi-HARQ, PF, link adaptation; UL and DL hooks
+│   │   ├── mac.py mac_ul.py mac_dl.py   # per-slot MAC: multi-HARQ, schedulers, link adaptation; UL and DL hooks
 │   │   ├── radio.py  traffic.py  #   per-link radio, cell association and handover; Requests, TrafficModel
+│   │   ├── channels/             #   log-distance fields, TR 38.901, radio maps, blockage, per-robot Doppler
 │   │   ├── edge.py               #   EdgeLoop: edge servers and the return path on top of any engine
-│   │   ├── data/                 #   Sionna BLER tables (Apache-2.0)
+│   │   ├── background.py energy.py slot_tap.py  # background users; radio energy and battery; read-only slot tap
+│   │   ├── adaptive.py           #   AdaptiveEngine: cheap and expensive level per env, curriculum
+│   │   ├── sharded.py            #   ShardedEngine: envs split over several GPUs
+│   │   ├── nr_loadfix.py         #   prototype of the 5G-LENA load-gap mechanisms (NR engine subclasses)
+│   │   ├── wifi/                 #   level WIFI: 802.11 rates, mean-field DCF / EDCA, engine, event simulator
+│   │   ├── diff/                 #   differentiable L1D / QAD, reference rollouts, neural-proxy recipe
+│   │   ├── levels/               #   fitted surrogates TR, GE, QA, NN and the ORACLE / NOCOMM bounds
 │   │   ├── proto/                #   prototype levels L0 ... L1 and L2-legacy: reference, fast backends,
-│   │   │                         #   Triton kernels, and the multi-cell NetSlotMC
-│   │   └── levels/               #   fitted surrogates TR, GE, QA, NN and the ORACLE / NOCOMM bounds
-│   ├── isaac/                    # Isaac Lab layer: NetModule on make_engine, radio, DirectRLEnv mixin, mdp terms
-│   ├── mjx/                      # MuJoCo Playground / MJX layer: NetModuleMJX (JAX buffer_callback), replay
-│   ├── bridges/                  # ns-3 co-simulation (lockstep, process pool, offline replay), validation only
-│   │   └── ns3/                  #   the C++ ns-3 programs and their build scripts
-│   ├── examples/                 # fleet_task.py (pure torch), edge_control.py (edge-offloaded control),
-│   │                             # isaac_fleet_env.py (Isaac Lab), mjx_fleet_env.py (MJX),
-│   │                             # traffic_models.py (traffic generators)
-│   └── tools/                    # PHY table export, local 5G-LENA table extraction, surrogate fits (fit_levels)
-├── tests/                        # pytest suite; scripts/ (equivalence scripts), bridges/ (need ns-3)
-├── benchmarks/                   # engine, NR, multi-cell, Isaac and ns-3 scaling benchmarks
+│   │   │                         #   Triton kernels, counter RNG, and the multi-cell NetSlotMC
+│   │   └── data/                 #   Sionna BLER tables (Apache-2.0), synthetic radio map
+│   ├── isaac/                    # Isaac Lab layer: NetModule, IsaacNetCfg, DirectRLEnv mixin, mdp terms, scene maps
+│   ├── mjx/                      # MuJoCo Playground / MJX layer: NetModuleMJX (JAX buffer_callback)
+│   ├── bench/                    # benchmark suite: task API, four tasks, metrics, baselines, runner, CLI
+│   ├── bridges/                  # validation only
+│   │   ├── ns3_lockstep/ ns3_pool/ ns3_offline/   # ns-3 co-simulation and offline replay
+│   │   ├── ns3/                  #   the C++ ns-3 programs and their build scripts
+│   │   └── oai/                  #   OAI 5G rfsim bridge: stack, agents, virtual clock, deploy/
+│   ├── examples/                 # fleet_task.py (pure torch), edge_control.py, traffic_models.py,
+│   │                             # isaac_fleet_env.py, isaac_warehouse_env.py (Isaac Lab), mjx_fleet_env.py (MJX)
+│   └── tools/                    # PHY table export, local 5G-LENA table extraction, surrogate fits (fit_levels),
+│       ├── scene/                #   USD export, Sionna RT bake (isaaclab-net-bake), synthetic scenes
+│       └── measure/              #   gNB log parsers, UDP probe, calibration (isaaclab-net-measure)
+├── tests/                        # pytest suite; scripts/ (equivalence scripts), mjx/, bridges/ (need ns-3 or OAI)
+├── benchmarks/                   # engine, NR, multi-cell, sharding, adaptive, differentiable, fidelity, Isaac,
+│                                 # MJX, ns-3 and OAI benchmarks and campaigns, with their small result CSVs
+├── tutorials/                    # tutorial scripts behind the notebooks of the docs site
+├── docs/                         # docs site sources (mkdocs.yml): concepts, tutorials, API reference, project notes
 ├── prototype/                    # compatibility shims for the old module paths
-├── scripts/                      # GPU test runner; windows/: Isaac Sim + Isaac Lab install and SYSTEM-task helpers
+├── scripts/                      # GPU test runner; windows/: Isaac install and SYSTEM-task helpers; hazel/: Slurm templates
 ├── ARCHITECTURE.md               # package layout, interface contract and module status
+├── CHANGELOG.md  RELEASE.md      # release notes; how to cut a release
 ├── CONTRIBUTING.md
 └── LICENSE
 ```
 
 ## Documentation
 
-Collaborator documentation lives in [`docs/`](docs/README.md): the [project status](docs/STATUS.md) with open items and starter tasks, the [5G-LENA validation](docs/validation-5g-lena.md), the [public-data calibration](docs/calibration-public-data.md), the [real-network measurement protocol](docs/measurement-protocol.md) with its parsers and calibration hooks in `isaaclab_net/tools/measure/`, [performance](docs/performance.md) with the backend equivalence methodology, the [Isaac Lab integration](docs/isaac-lab.md) and its [Linux / HPC recipe](docs/isaac-lab-linux.md), the [MuJoCo Playground / MJX backend](docs/backends-mjx.md), [multi-cell networks](docs/multicell.md) and the [ns-3 bridges](docs/bridges.md).
+Collaborator documentation lives in [`docs/`](docs/README.md) and builds into a site with `mkdocs build --strict` (extra `docs`): [concepts](docs/concepts.md), five [tutorials](docs/tutorials/index.md), the [API reference](docs/reference/index.md), the [benchmark suite](docs/benchmark-suite.md) and [licensing](docs/licensing.md). The project notes cover the [project status](docs/STATUS.md) with open items and starter tasks, [configurability](docs/configurability.md) with the feature matrix against 5G-LENA, Sionna SYS and Simu5G, [channel models](docs/channels.md), [radio maps from USD scenes](docs/scene-radio-map.md), [multi-cell networks](docs/multicell.md), [Wi-Fi](docs/wifi.md), [background users, energy and sharding](docs/background-energy-sharding.md), [adaptive fidelity](docs/adaptive-fidelity.md), [differentiable models](docs/differentiable.md), [performance](docs/performance.md) with the backend equivalence methodology, the [Isaac Lab integration](docs/isaac-lab.md) and its [Linux / HPC recipe](docs/isaac-lab-linux.md), the [MuJoCo Playground / MJX backend](docs/backends-mjx.md), the [5G-LENA validation](docs/validation-5g-lena.md) with the [formal comparison](docs/fidelity-vs-lena.md) and the [load-gap study](docs/fidelity-load-gap.md), the [ns-3 bridges](docs/bridges.md), the [OAI rfsim bridge](docs/bridges-oai.md), the [public-data calibration](docs/calibration-public-data.md) and the [real-network measurement protocol](docs/measurement-protocol.md).
 
 ## Contributing
 
-The repository is private while the first paper is in preparation. Collaborators should start from [CONTRIBUTING.md](CONTRIBUTING.md) and the open roadmap items. Changes to the prototype levels go into the eager reference first, and the `graph` backend must stay bitwise equal to it. New MAC and PHY modelling goes into the NR engine.
+The repository is private while the first paper is in preparation. Collaborators should start from [CONTRIBUTING.md](CONTRIBUTING.md), the open roadmap items and the starter tasks in [docs/STATUS.md](docs/STATUS.md). Changes to the prototype levels go into the eager reference first, and the `graph` backend must stay bitwise equal to it. New MAC and PHY modelling goes into the NR engine. [RELEASE.md](RELEASE.md) describes how a release is cut.
 
 ## Citation
 
@@ -322,4 +424,4 @@ A paper describing the engine is in preparation. A citation and an arXiv link wi
 
 ## License
 
-BSD-3-Clause, see [LICENSE](LICENSE). The shipped Sionna tables are Apache-2.0 (`isaaclab_net/core/data/LICENSE-sionna-Apache-2.0`). No ns-3 or 5G-LENA code or data is included. [docs/licensing.md](docs/licensing.md) covers the locally generated 5G-LENA tables, the GPL status of binaries built from the ns-3 bridge programs, Isaac Sim and the Omniverse EULA, and the licenses of the public datasets used for calibration.
+BSD-3-Clause, see [LICENSE](LICENSE). The shipped Sionna tables are Apache-2.0 (`isaaclab_net/core/data/LICENSE-sionna-Apache-2.0`). No ns-3 or 5G-LENA code or data and no OAI configuration files are included. [docs/licensing.md](docs/licensing.md) covers the locally generated 5G-LENA tables, the GPL status of binaries built from the ns-3 bridge programs, Isaac Sim and the Omniverse EULA, and the licenses of the public datasets used for calibration.
