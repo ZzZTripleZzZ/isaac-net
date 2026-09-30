@@ -361,3 +361,22 @@ def test_m5_cross_check_netslotmc(load):
     assert abs(nr["gap_p50"] - mc["gap_p50"]) < 4.0, (nr, mc)
     assert 0.75 < nr["goodput"] / mc["goodput"] < 1.33, (nr, mc)
     assert abs(nr["delivered"] - mc["delivered"]) < 0.1, (nr, mc)
+
+
+def test_m3_isaac_netmodule_runs_multicell_nr():
+    """The Isaac layer's NetModule on L2 with three cells (engine radio): the serving cells come through, through a
+    partial reset."""
+    from isaaclab_net.isaac import NetModule, TrafficRequest
+    E, R = 3, 4
+    m = NetModule("L2", E, R, "cpu", multicell(3), radio="engine", seed=2)
+    with pytest.raises(ValueError):
+        NetModule("L2", E, R, "cpu", multicell(3), radio="isaac")
+    wl = Walk(E, R, 3, speed=3.0)
+    for t in range(12):
+        send, pos = wl.step()
+        m.submit(None, TrafficRequest(send))
+        out = m.step(None, torch.cat([pos, torch.zeros_like(pos[..., :1])], -1))
+        if t == 6:
+            m.reset(torch.tensor([1]))
+    assert out["serving"].shape == (E, R) and len(set(out["serving"].flatten().tolist())) > 1
+    assert torch.equal(out["serving"], m.eng.net.assoc.serv) and bool(out["delivered"].any())
