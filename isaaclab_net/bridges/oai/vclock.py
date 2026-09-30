@@ -192,6 +192,8 @@ class TTraceClock(VClock):
         for line in self.proc.stdout:
             m = _TL.match(line)
             if not m:
+                if self.log:
+                    self.log.write(line)                 # textlog's "turning ON <event>" header lines
                 continue
             ev = m.group(6)
             if ev != "GNB_PHY_UL_TICK":

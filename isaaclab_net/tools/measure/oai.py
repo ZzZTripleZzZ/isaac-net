@@ -121,20 +121,38 @@ def _args(s):
     return {toks[i]: toks[i + 1] for i in range(0, len(toks) - 1, 2)}
 
 
-def parse_ttracer(path, mu, run_id="", rnti_map=None, day_epoch=None):
+def parse_ttracer(path, mu, run_id="", rnti_map=None, day_epoch=None, infer_crc=False):
     """T-tracer textlog output -> sched rows.
 
     GNB_MAC_UL -> event "sched" (mcs, tbs); GNB_MAC_PUSCH_POWER_CONTROL -> event "pc" (mcs, tbs, PRBs, SNR);
     GNB_MAC_UL_PDU_WITH_DATA -> event "rx" (decoded PDU: harq_pid, size, crc = 1); GNB_MAC_DL -> DL "sched".
     t_s = day_epoch + time of day (textlog prints local time of day only; pass the local midnight of the run
-    as day_epoch, or use -raw-time, whose epoch seconds are used when present)."""
+    as day_epoch, or use -raw-time, whose epoch seconds are used when present).
+
+    GNB_MAC_LCID_UL (rnti, frame, slot, lcid, data_size in bits: one line per SDU of a decoded PDU), when traced,
+    fills data_bytes of the rx rows (0 for PDUs without SDUs, i.e. grants the UE had no data for).
+
+    infer_crc: OAI traces no failed-CRC event, but _nr_rx_sdu emits GNB_MAC_PUSCH_POWER_CONTROL for every detected
+    PUSCH (rssi > 0) and GNB_MAC_UL_PDU_WITH_DATA only for those with CRC OK (openairinterface5g 2026.w39,
+    gNB_scheduler_ulsch.c). A pc row without an rx row in the same slot is therefore a failed CRC; it becomes an rx
+    row with crc = 0 whose HARQ process is taken from the next decoded PDU of that UE with the same TB size within
+    100 slots (the retransmission), -1 if there is none (a TB lost after the last round). Rx rows also get the MCS,
+    PRBs and SNR of their pc row. The HARQ matching is unambiguous only when a UE has one TB of a given size in
+    flight, i.e. at low offered load; use it for HARQ timing and BLER runs, not for saturating traffic."""
     rows, stamp = [], []
+    lcid, has_lcid = {}, False
     with open(path, errors="replace") as f:
         for line in f:
             m = _TLINE.match(line.strip())
             if not m:
                 continue
             hh, mm, ss, frac, raw, ev, rest = m.groups()
+            if ev == "GNB_MAC_LCID_UL":
+                has_lcid = True
+                a = _args(rest)
+                k = (int(a.get("rnti", -1)), int(a.get("frame", -1)), int(a.get("slot", -1)))
+                lcid[k] = lcid.get(k, 0) + int(a.get("data_size", 0)) // 8
+                continue
             tod = int(hh) * 3600 + int(mm) * 60 + int(ss) + float("0." + frac)
             if raw is not None:
                 t = int(raw) + float("0." + frac)
@@ -168,4 +186,27 @@ def parse_ttracer(path, mu, run_id="", rnti_map=None, day_epoch=None):
     sabs = unwrap_slots([s[:2] for s in stamp], mu, [s[2] for s in stamp] if stamp else None)
     for r, sa in zip(rows, sabs):
         r["slot_abs"] = sa
+    key = lambda r: (r["rnti"], r["slot_abs"])
+    rx = {key(r): r for r in rows if r["event"] == "rx"}
+    if has_lcid:
+        for r in rx.values():
+            r["data_bytes"] = lcid.get((r["rnti"], r["sfn"], r["slot"]), 0)
+    if infer_crc:
+        pcs = sorted((r for r in rows if r["event"] == "pc"), key=key)
+        ok_by_ue = {}
+        for r in sorted(rx.values(), key=key):
+            ok_by_ue.setdefault(r["rnti"], []).append(r)
+        extra = []
+        for p in pcs:
+            got = rx.get(key(p))
+            if got is not None:
+                got["mcs"], got["n_prb"], got["sinr_db"] = p["mcs"], p["n_prb"], p["sinr_db"]
+                continue
+            h = -1
+            for q in ok_by_ue.get(p["rnti"], []):
+                if p["slot_abs"] < q["slot_abs"] <= p["slot_abs"] + 100 and q["tbs_bytes"] == p["tbs_bytes"]:
+                    h = q["harq_id"]
+                    break
+            extra.append(dict(p, event="rx", crc=0, harq_id=h))
+        rows += extra
     return rows

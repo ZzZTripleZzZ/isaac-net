@@ -76,7 +76,8 @@ def ingest_run(run_dir, write=True):
     if "oai_pcap" in files:
         tabs["sched"] += srsran.parse_mac_pcap(p("oai_pcap"), mu, rid, rmap, "oai")
     if "oai_ttrace" in files:
-        tabs["sched"] += oai.parse_ttracer(p("oai_ttrace"), mu, rid, rmap, m.get("ttrace_day_epoch"))
+        tabs["sched"] += oai.parse_ttracer(p("oai_ttrace"), mu, rid, rmap, m.get("ttrace_day_epoch"),
+                                           infer_crc=bool(m.get("ttrace_infer_crc", False)))
     off = float(m.get("clock", {}).get("offset_ms", 0.0))
     summaries = {}
     for ue, spec in (files.get("probes") or {}).items():
