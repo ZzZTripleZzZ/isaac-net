@@ -44,6 +44,9 @@ def state_owners(eng):
         own["assoc"] = net.assoc
     if net.rng is not None:
         own["rng"] = net.rng
+    tap = eng.__dict__.get("_slot_tap")      # core.slot_tap: per-slot counters its SINR hooks add to in place
+    if tap is not None:
+        own["tap"] = tap
     return own
 
 
@@ -308,6 +311,7 @@ class NRGraphEngine(NREngine):
     def _capture(self, key, T, kind, ins):
         """Warm up and capture the step for this key. State is snapshotted and restored, so capturing has no side
         effect on the simulation."""
+        self._extend_registry()        # state added since the last capture (e.g. a slot_tap installed by a wrapper)
         snap = [b.clone() for *_, b in self._reg]
         host = self._host_state()
         stash = {k: v.clone() for k, v in self._stash.items()}

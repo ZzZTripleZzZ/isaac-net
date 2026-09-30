@@ -82,21 +82,131 @@ At 4096 × 100 (409,600 robots) `triton` needs 60 ms per 100 ms simulated step, 
 
 The `triton` kernel pads robots to a power of two (at least 16), so R above about 256 would need a tiled PF reduction. Its int32 RNG offsets limit it to about E × R ≈ 4.9M robots, and at R = 100 it is limited by register pressure. Each fast instance captures its graphs for its own (E, R), in about 1–3 s for `graph` and `triton` and 5–120 s of Inductor compilation for `compile`, so a different E needs a new instance, and state attributes must never be reassigned because the graphs hold their addresses.
 
-## NR engine and multi-cell engine
+## NR engine (`L2`): reference, `graph` and `triton`
 
-The NR engine (`L2`) runs on the `reference` backend only. The table compares it with the legacy reference in ms per control step at R = 16 (eager PyTorch). **Contention: 98% utilization and 10–16 GB of other jobs' memory, so absolute numbers are inflated by about 20× and only the ratios within a column are meaningful.** The first attempt hit CUDA OOM from other tenants.
+The NR engine has three backends, all behind `make_engine("L2", ..., backend=...)` and the Isaac `NetModule`:
 
-| Engine | E = 16 | 64 | 128 | 256 |
+- **`reference`** (also `eager`) is the readable engine in `nr_engine.py` and `mac*.py`, run eagerly.
+- **`graph`** (`nr_fast.NRGraphEngine`) captures the reference step itself in CUDA graphs, so it runs the same operations in the same order.
+  - The control step enters as a device scalar, and slot times, HARQ timers and completion times (float64, as the reference computes them) are derived from it on the device.
+  - Host decisions depend on time only through the TDD / SR / CQI schedule key and the fading step of the first slot. One graph per (key, first step, input kind) therefore serves every control step: 2–4 graphs in practice.
+  - Every state tensor is a persistent buffer. The reference code reassigns its attributes, so after each captured step and each eager call (`submit`, `reset`, traffic injection) the new tensors are copied into the buffers and the attributes pointed back at them. Partial resets are exact and nothing is reallocated.
+  - PHY constants are cached device tables, so there are no host-to-device copies or host syncs inside the step.
+  - Statistics (`log_stats`) are exported by the graph and appended on the host after the replay.
+  - Traffic models with sub-step arrivals, per-robot Doppler, several cells, handover and both directions are all covered.
+- **`triton`** (`nr_fast.NRTritonEngine`, `nr_triton.nr_step_kernel`) runs every scheduled slot of a control step in one fused kernel, one program per env, with the robot × {HARQ process, frame, RBG} state in registers.
+  - What the kernel covers:
+    - fading
+    - SR/BSR and grants
+    - retransmission admission
+    - PF / max C/I / round-robin RBG allocation with the power-headroom cap
+    - EESM link adaptation over the MCS table
+    - exact TBS and code-block tables, precomputed from `phy.py` for every (symbols, PRBs, MCS)
+    - bilinear BLER lookup
+    - HARQ chase / IR combining
+    - OLLA
+    - RLC-AM retransmission or RLC-UM loss
+    - in-order delivery
+    - DL CQI
+    - the traffic arrival gate
+    - per-robot Doppler
+  - With a downlink the step runs as two kernels, DL then UL. Both replay the same fading trajectory from the same start state and keyed draws, so each carries only one link's state.
+  - Prologue and epilogue (input SINR, power control, deadlines, compaction, outputs) are the reference's torch code, and the whole step is captured in CUDA graphs.
+  - Single cell for now.
+
+**Engine RNG.** Both fast backends need `NRConfig.rng = "engine"`, the default. Every draw of the NR engine is then a pure function of (seed, env, episode, control step of the env since its reset, slot, draw site, element), from the counter hash of `proto/rng.py`, keyed as `nr_rng.py` documents. The draws are:
+
+- the fading innovations
+- the TB decodes in both directions
+- the initial fading at reset
+
+A policy's use of the global torch RNG never changes the network. A partial reset re-seeds only its envs, and an env's draws do not depend on E. The reference and `graph` draw identical numbers. The kernel inlines the same hash: uniforms are bitwise equal and normals equal to float rounding. `rng="global"` restores the earlier stream (global torch RNG for stepping), and the frozen-engine regression test runs with it.
+
+### Equivalence
+
+The harness is `tests/nr_equiv.py`; `pytest -m gpu tests/test_nr_fast.py` runs short versions. The reference and the fast engine are built with the same config and seed and driven in lockstep:
+
+- The workload cycles idle / medium / burst / medium-small traffic phases, with detection flags.
+- SNR drifts in [−10, 40] dB. The input kind alternates every step (SNR, per-subband SNR with a DL SNR, poses through the engine radio, SNR with a per-subband DL SNR); with several cells, robots random-walk through the cells.
+- Random partial resets hit about 5% of envs on 10% of steps, as index tensors or bool masks.
+
+Compared at every step with exact equality: every output of `step()` and every state tensor of the engine (MAC, HARQ, queues, fading, association, interference estimates, counters, RNG counters, clocks). At the end, `collect()` statistics and `counters()` are compared.
+
+Results. Every run is 300 control steps (30 s of simulated time), 25–42 partial resets, `log_stats` on, seed 7. Configs:
+
+- `ul` is `NRConfig()`.
+- `ul_dl` adds the downlink.
+- `cells3` is `multicell(3, dl=True)`: three cells with UL and DL interference and handover.
+- `ul_lena` is 16 HARQ processes with RLC UM, PDCP discard, wideband PF, 5G-LENA IR combining, no OLLA and no PHR cap.
+- `ul_doppler` adds per-robot Doppler and round robin.
+- `traffic` is periodic 600 B every 10 ms with 2 ms jitter, bursty 1.4 kB traffic on robot 0 and the policy, with the downlink.
+- `traffic_c3` is the same traffic on three cells.
+
+| Backend | Config | E × R | Mode | Result |
+|:---|:---|:---|:---|:---|
+| graph | `ul` | 64 × 16 | free-running | **bitwise identical** at every step, every output and state tensor; 59,720 frames delivered, statistics and counters identical |
+| graph | `ul` | 256 × 32 | free-running | **bitwise identical**; 300,811 frames |
+| graph | `ul_dl` | 64 × 16 | free-running | **bitwise identical**; 60,553 UL frames, 960,324 DL TBs |
+| graph | `ul_dl` | 256 × 32 | free-running | **bitwise identical**; 307,728 UL frames, 9.87 M DL TBs |
+| graph | `cells3` | 64 × 16 | free-running | **bitwise identical**; 77,095 frames |
+| graph | `cells3` | 256 × 32 | free-running | **bitwise identical**; 373,995 frames |
+| graph | `ul_lena` | 64 × 16 | free-running | **bitwise identical**; 11,566 frames |
+| graph | `ul_doppler` | 64 × 16 | free-running | **bitwise identical**; 36,041 frames |
+| graph | `traffic` | 64 × 16 | free-running | **bitwise identical**; 1,586,982 messages |
+| graph | `traffic_c3` | 64 × 16 | free-running | **bitwise identical**; 1,873,046 messages |
+| triton | `ul` | 64 × 16 | teacher-forced | 3 of 218,442 active robot-steps differ (1.4e-5); delivered 59,721 vs 59,720 |
+| triton | `ul_dl` | 64 × 16 | teacher-forced | 3 of 217,861 (1.4e-5); TB decodes identical in count (3,205,361 UL, 960,324 DL) |
+| triton | `ul` | 256 × 32 | teacher-forced | 35 of 1,910,974 (1.8e-5); delivered 300,815 vs 300,811 |
+| triton | `traffic` | 64 × 16 | teacher-forced | 13 of 307,200 (4.2e-5); 1,586,977 vs 1,586,982 messages |
+| triton | `ul` | 64 × 16 | free-running | delivered 59,710 vs 59,720, mean delay 7.6145 vs 7.6147 steps, decoded TBs 3,245,288 vs 3,246,344 (−0.03%) |
+| triton | `ul_dl` | 64 × 16 | free-running | delivered 60,553 vs 60,553, mean delay 7.5502 vs 7.5512 steps, decoded UL TBs +0.003% |
+
+These runs used two earlier states of the branch: the first eight graph rows before its rebase on the traffic and prototype-RNG merges, the traffic and triton rows after it. `pytest -m gpu tests/test_nr_fast.py` reran the short versions on the final code, including the energy wrapper's per-slot tap on `graph`.
+
+**Why `triton` is equal only to rounding.** The kernel's reductions (EESM log-sum-exp, the PRB-weighted means) and its fused multiply-adds round differently from ATen. The fading state and effective SINRs therefore differ in the last bits. A discrete decision flips when a value sits on a threshold: an MCS boundary, a TB decode draw, or a PF tie. In free running a flip changes that robot's future, so trajectories decorrelate while the aggregates agree. From an identical state 1–4 in 100,000 active robot-steps differ. That is about 5–10× the legacy kernel's rate, because the NR step has more thresholds: 29 MCS, the EESM of every candidate MCS, and the HARQ combining. In free running, delivered frames, mean delay and decoded TBs agree to 0.03% or better over 300 steps.
+
+### Cost
+
+Milliseconds per control step (100 ms of simulated time: 200 slots at μ = 1, 40 of them UL data slots, 160 DL data slots with a downlink), `submit` + `step` with dict outputs, synchronized. Config `ul` is `NRConfig()` (20 MHz, 13 RBGs, 16 HARQ processes, EESM); `ul_dl` adds the downlink; `c3` is `multicell(3)` (three cells, interference, handover). Reference rows are the mean of 3 steps, fast rows of 20 (fewer at the largest graph sizes). Peak memory is `max_memory_allocated` above the baseline, CUDA-graph pools included. Raw rows with per-row utilization are in `benchmarks/nr/results/bench_nr_fast.csv`; `bench_nr_fast_triton_one_kernel.csv` has the earlier single-kernel UL+DL triton rows.
+
+**Contention: RTX 4090 shared with other jobs throughout. nvidia-smi reported 90–100% utilization before almost every reference and graph row and 19–24 GB of the 24.5 GB held by other processes. The triton rows ran in a later window at 30–100% (mostly above 85%). Absolute times are pessimistic, especially for the launch-bound reference and graph rows at small E; ratios within a row are the meaningful numbers.**
+
+| E × R | `ul` ref | graph | triton | `ul_dl` ref | graph | triton | peak MiB `ul` ref / graph / triton |
+|:---|---:|---:|---:|---:|---:|---:|:---|
+| 256 × 16 | 577 | 97.8 | 7.11 | 5,493 | 423 | 11.4 | 40.6 / 65.6 / 41.8 |
+| 256 × 64 | 559 | 182 | 10.8 | 5,360 | 742 | 21.1 | 147 / 247 / 150 |
+| 256 × 100 | 585 | 248 | 9.02 | 4,421 | 1,118 | 33.2 | 230 / 389 / 234 |
+| 1024 × 16 | 540 | 173 | 6.92 | 5,534 | 758 | 27.3 | 147 / 247 / 150 |
+| 1024 × 64 | 582 | 692 | 18.3 | 6,483 | 2,811 | 75.7 | 582 / 982 / 597 |
+| 1024 × 100 | 981 | 1,101 | 31.4 | 8,101 | 4,754 | 131 | 904 / 1,532 / 933 |
+| 4096 × 16 | 1,256 | 650 | 24.5 | 5,405 | 3,160 | 89.9 | 583 / 983 / 600 |
+| 4096 × 64 | 3,865 | 3,484 | 72.1 | 17,763 | 15,682 | 304 | 2,316 / 3,916 / 2,385 |
+| 4096 × 100 | 6,211 | 5,085 | 120 | 27,452 | 25,035 | 503 | 3,610 / 6,116 / 3,732 |
+
+| E × R | `c3` ref | graph | `c3` + DL ref | graph |
 |:---|---:|---:|---:|---:|
-| legacy reference | 1004 | 894 | 844 | 866 |
-| NR `netslot_compat` (1 HARQ process, 5 subbands) | 2812 | 2611 | 2717 | 2502 |
-| NR `lena_like` (16 HARQ, EESM, wideband PF, UL) | 2488 | 2592 | 2544 | 2614 |
-| NR default μ = 1, 20 MHz (13 RBGs, EESM) | 3137 | 3188 | 3348 | 3375 |
-| NR `lena_like` with downlink | 11751 | 12063 | 11714 | 11309 |
+| 256 × 16 | 817 | 85.7 | 3,846 | 298 |
+| 256 × 64 | 816 | 126 | 3,827 | 505 |
+| 256 × 100 | 901 | 161 | 3,650 | 670 |
+| 1024 × 16 | 864 | 132 | 2,496 | 501 |
+| 1024 × 64 | 1,004 | 390 | 3,091 | 1,659 |
+| 1024 × 100 | 1,189 | 667 | 4,091 | 2,833 |
+| 4096 × 16 | 941 | 358 | 3,453 | 1,681 |
+| 4096 × 64 | 2,755 | 2,192 | 10,614 | 9,618 |
+| 4096 × 100 | 4,157 | 3,453 | 16,472 | 17,680 |
 
-The uplink-only NR engine costs about 2.6–3.9× the legacy reference and is flat in E up to 256, so it is launch-bound. 13 RBGs instead of 5 cost about 25% more, and the downlink adds about 4.5× from its 160 D and S slots per step. The step has no host syncs and fixed shapes, so capturing a control step in a CUDA graph is the natural next step (open item 1).
+Reading the tables:
+- **`triton` is the scale path.** At 4096 × 100 (409,600 robots) the uplink takes about 120 ms per 100 ms step, about 50× the reference and 40× `graph`; with the downlink it takes about 500 ms (55× the reference). At 256 × 16 it takes 7–11 ms.
+- **`graph` removes the launch overhead but not the work.** At small E it is 6–13× faster than the reference (256 × 16: 98 against 577 ms uplink, 423 against 5,490 ms with the downlink). At E × R above about 50,000 robots both are bound by memory traffic: the reference step is tens of thousands of small kernels per control step (about 27,000 at 64 × 16 in the profiler count of the NR multi-cell work), each reading and writing whole [E, R, P], [E, R, F] or [E, R, S] tensors. The two then cost about the same, and `graph` needs about 1.7× the memory for its pool. The same happened with the legacy engine's `graph` backend. Use `graph` for bitwise-reproducible runs at moderate scale and `triton` for training at scale.
+- The downlink multiplies the reference and graph cost by 4–10×, from its 160 DL data slots per step against 40 UL slots. In the kernel the downlink costs 1.6–4.2× the uplink alone.
+- Three cells run on `graph` only: the fused kernel is single-cell for now.
+- **Kernel limits.**
+  - One program per env, with robots padded to a power of two, so R above about 128 would need a tiled PF reduction.
+  - At R = 64–100 the kernel still spills registers, especially with the downlink (Triton reports 8–344 spilled values per thread after the rewrite that runs link adaptation one MCS at a time; before it, 184–1,372).
+  - Per-slot work grows with RBGs × MCS (EESM for every MCS of every new TB).
+- The earlier eager comparison with the legacy engine (R = 16, 98% utilization) found the NR uplink at 2.6–3.9× the legacy reference and the downlink at about 4.5× the uplink. The reference rows above agree with it.
 
-The legacy multi-cell engine was timed with the PyTorch profiler, whose kernel counts and GPU time do not depend on contention. Wall-clock time under 98% GPU utilization and CPU load averages of 10–31 was 660–830 ms per step for the single-cell engine and 740–1080 ms for the multi-cell variants.
+The legacy multi-cell engine (NetSlotMC, `L2-legacy` with several cells) was timed with the PyTorch profiler, whose kernel counts and GPU time do not depend on contention. Wall-clock time under 98% GPU utilization and CPU load averages of 10–31 was 660–830 ms per step for the single-cell engine and 740–1080 ms for the multi-cell variants.
 
 | E × R | Single cell, kernels / GPU ms | Multi-cell C = 1 | C = 3 | C = 7 |
 |:---|:---|:---|:---|:---|
