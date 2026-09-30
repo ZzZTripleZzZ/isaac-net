@@ -69,6 +69,7 @@ nav:
       - Differentiable network models: differentiable.md
       - Background users, energy and sharding: background-energy-sharding.md
       - Channel models: channels.md
+      - "Wi-Fi (802.11 DCF / EDCA)": wifi.md
       - ns-3 bridges in depth: bridges.md
       - Configurability: configurability.md
       - Feature matrix sources: feature-matrix-sources.md

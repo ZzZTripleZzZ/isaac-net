@@ -79,6 +79,7 @@ FIELD_GROUPS = {
     "nr_multicell": ("dl_interference",),      # read by the NR engine only (NetSlotMC has no downlink)
     "traffic": ("traffic",),
     "wrappers": ("background", "energy"),      # make_engine wrappers (core/background.py, core/energy.py)
+    "wifi": ("wifi",),                         # level WIFI (core/wifi), which also reads app, proto (rng) and radio
 }
 
 CHANNELS = ("log_distance", "tr38901", "radio_map")
@@ -331,6 +332,7 @@ class NRConfig:
     edge: EdgeConfig | None = None
     background: object = None            # core.background.BackgroundConfig: non-robot UEs sharing each cell
     energy: object = None                # core.energy.EnergyConfig: per-robot radio energy and battery
+    wifi: object | None = None           # WifiConfig (core/wifi/config.py) for level "WIFI"; None = WifiConfig()
 
     # ---------------- derived ----------------
     def __post_init__(self):

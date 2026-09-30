@@ -49,6 +49,7 @@ from .traffic import Requests, TrafficGen, generates
 PROTO_LEVELS = ("L0", "L0DR", "L05", "L05Q", "L1")
 SIM_LEVELS = PROTO_LEVELS + ("L2", "L2-legacy")
 LEVELS = SIM_LEVELS + SURROGATE_LEVELS + BOUND_LEVELS
+WIFI_LEVELS = ("WIFI",)                  # 802.11 uplink (core/wifi, docs/wifi.md)
 FAST_BACKENDS = ("eager", "graph", "compile", "triton")
 BACKENDS = ("reference",) + FAST_BACKENDS
 
@@ -167,8 +168,8 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     L0, L0DR and L1 without params take them from the config (l0_*, dr_*, l1_eta; defaults = earlier behavior).
     config.edge (an EdgeConfig) wraps the engine in core.edge.EdgeLoop: same API, plus the edge-loop step keys.
     """
-    if level not in LEVELS:
-        raise ValueError(f"unknown level {level!r}; one of {LEVELS}")
+    if level not in LEVELS + WIFI_LEVELS:
+        raise ValueError(f"unknown level {level!r}; one of {LEVELS + WIFI_LEVELS}")
     if backend in ("orig", "ref"):
         backend = "reference"
     if backend not in BACKENDS:
@@ -177,6 +178,9 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     if sizes is not None:
         cfg = cfg.with_(msg_sizes=tuple(float(s) for s in sizes))
     sizes = tuple(cfg.msg_sizes)
+    if level in WIFI_LEVELS:
+        from .wifi.engine import make_wifi_level
+        return make_wifi_level(E, R, device, cfg, backend, seed=seed, inject=inject, strict=strict)
     if strict and cfg.unused_fields(level):
         raise ValueError(f"level {level} ignores these config fields: {', '.join(cfg.unused_fields(level))} "
                          "(see NRConfig.unused_fields and docs/configurability.md)")
