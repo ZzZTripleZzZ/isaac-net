@@ -1,0 +1,118 @@
+site_name: isaaclab-net
+site_description: GPU-batched 5G network simulation for massively parallel robot learning in Isaac Lab
+repo_url: https://github.com/ZzZTripleZzZ/isaaclab-net
+repo_name: isaaclab-net
+edit_uri: edit/main/docs/
+copyright: BSD-3-Clause. See the Licensing page for third-party data and software.
+
+docs_dir: docs
+# docs/README.md is the GitHub landing page of the folder; the site's home page is docs/index.md.
+exclude_docs: |
+  README.md
+  hooks/
+
+hooks:
+  - docs/hooks/nrconfig_fields.py
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Concepts: concepts.md
+  - Tutorials:
+      - tutorials/index.md
+      - "01 Your first network": tutorials/01_first_network.ipynb
+      - "02 Choosing fidelity": tutorials/02_choosing_fidelity.ipynb
+      - "03 Configuring NR": tutorials/03_configuring_nr.ipynb
+      - "04 Isaac Lab integration": tutorials/04_isaac_lab_integration.ipynb
+      - "05 Validating against ns-3": tutorials/05_validating_against_ns3.ipynb
+  - API reference:
+      - reference/index.md
+      - Engine: reference/engine.md
+      - Configuration: reference/config.md
+      - Traffic: reference/traffic.md
+      - Fidelity levels: reference/levels.md
+      - Isaac Lab layer: reference/isaac.md
+      - ns-3 bridges: reference/bridges.md
+  - Project notes:
+      - Status: STATUS.md
+      - 5G-LENA validation: validation-5g-lena.md
+      - Public-data calibration: calibration-public-data.md
+      - Performance: performance.md
+      - Isaac Lab on Windows: isaac-lab.md
+      - Multi-cell networks: multicell.md
+      - ns-3 bridges in depth: bridges.md
+      - Configurability: configurability.md
+  - Licensing: licensing.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+  - mkdocs-jupyter:
+      include: ["tutorials/*.ipynb"]
+      execute: false
+      include_source: true
+      ignore_h1_titles: false
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: null
+            extensions:
+              - docs/hooks/griffe_plaintext.py:PlainTextDocstrings
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_signature_annotations: true
+            separate_signature: true
+            merge_init_into_class: true
+            members_order: source
+            filters: ["!^_"]
+            heading_level: 3
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn

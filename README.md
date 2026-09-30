@@ -310,4 +310,4 @@ A paper describing the engine is in preparation. A citation and an arXiv link wi
 
 ## License
 
-BSD-3-Clause, see [LICENSE](LICENSE). The shipped Sionna tables are Apache-2.0 (`isaaclab_net/core/data/LICENSE-sionna-Apache-2.0`). No ns-3 or 5G-LENA code or data is included.
+BSD-3-Clause, see [LICENSE](LICENSE). The shipped Sionna tables are Apache-2.0 (`isaaclab_net/core/data/LICENSE-sionna-Apache-2.0`). No ns-3 or 5G-LENA code or data is included. [docs/licensing.md](docs/licensing.md) covers the locally generated 5G-LENA tables, the GPL status of binaries built from the ns-3 bridge programs, Isaac Sim and the Omniverse EULA, and the licenses of the public datasets used for calibration.

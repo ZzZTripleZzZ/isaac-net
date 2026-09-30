@@ -15,6 +15,8 @@ dependencies = ["torch>=2.4", "numpy>=1.23"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4", "ruff>=0.5"]
+# The docs site (mkdocs.yml): `mkdocs build --strict`. Reads the sources statically; torch is not needed.
+docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.26", "mkdocs-jupyter>=0.25"]
 
 [tool.setuptools.packages.find]
 include = ["isaaclab_net*"]
