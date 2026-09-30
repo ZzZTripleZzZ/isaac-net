@@ -24,3 +24,6 @@ obj/
 # docs site build output, and the requirements file the CI docs job writes
 site/
 docs-requirements.txt
+build/
+dist/
+*.egg-info/
