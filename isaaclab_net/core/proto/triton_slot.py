@@ -159,7 +159,7 @@ def launch(net, inject):
 @triton.jit
 def fluid_loop_kernel(rem_ptr, snr_ptr, fin_ptr, t_ptr, R,
                       RB: tl.constexpr, FB: tl.constexpr, K: tl.constexpr, S_: tl.constexpr,
-                      BYTES: tl.constexpr, SE_MAX: tl.constexpr):
+                      BYTES: tl.constexpr, SE_MAX: tl.constexpr, ETA: tl.constexpr):
     """L1 fluid model (netsim.NetFluid._transmit): equal subband share among backlogged robots."""
     e = tl.program_id(0).to(tl.int64)
     r = tl.arange(0, RB)
@@ -179,7 +179,7 @@ def fluid_loop_kernel(rem_ptr, snr_ptr, fin_ptr, t_ptr, R,
         share = S_ / nb
         split = tl.maximum(share, 1.0)
         snr_sb = snr - 10.0 * libdevice.log10(split)
-        se = tl.minimum(0.75 * libdevice.log2(1.0 + libdevice.pow(10.0, snr_sb / 10.0)), SE_MAX) * 0.9
+        se = tl.minimum(0.75 * libdevice.log2(1.0 + libdevice.pow(10.0, snr_sb / 10.0)), SE_MAX) * ETA
         b = share * se * BYTES * back.to(tl.float32)
         cum = tl.cumsum(rem, axis=1)
         newcum = tl.maximum(cum - b[:, None], 0.0)
@@ -200,4 +200,4 @@ def launch_fluid(net):
     nw = 8 if RB >= 128 else (4 if RB >= 64 else 2)
     fluid_loop_kernel[(net.E,)](net.rem, net._snr, net._fin, net._t, net.R,
                                 RB=RB, FB=ns.F, K=ns.UL_PER_STEP, S_=ns.S, BYTES=ns.BYTES_PER_SE,
-                                SE_MAX=ns.SE_MAX, num_warps=nw)
+                                SE_MAX=ns.SE_MAX, ETA=net._eta, num_warps=nw)

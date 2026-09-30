@@ -110,15 +110,15 @@ def slot_body(rem, bsr, sr_t, avg, olla, wait, hcnt, h, fin_t, snr_db, g, finv, 
     return rem, bsr, sr_t, avg, olla, wait, hcnt, h, fin_t
 
 
-def fluid_body(rem, fin_t, snr_db, finv):
-    """One L1 UL slot (same ops as netsim.NetFluid._transmit)."""
+def fluid_body(rem, fin_t, snr_db, finv, eta=_ns.L1_ETA):
+    """One L1 UL slot (same ops as netsim.NetFluid._transmit); eta = goodput factor."""
     q = rem.sum(-1)
     back = q > 0
     nb = back.sum(-1, keepdim=True).clamp(min=1).float()
     share = S / nb
     split = share.clamp(min=1.0)
     snr_sb = snr_db - 10 * torch.log10(split)
-    se = (0.75 * torch.log2(1 + 10 ** (snr_sb / 10))).clamp(max=SE_MAX) * 0.9
+    se = (0.75 * torch.log2(1 + 10 ** (snr_sb / 10))).clamp(max=SE_MAX) * eta
     b = share * se * BYTES_PER_SE * back
     rem, fin = serve_fifo(rem, b)
     fin_t = torch.where(fin, finv, fin_t)
@@ -237,6 +237,7 @@ class NetFast:
         self._last_snr = z((E, R), torch.float32, 0.0)
         self._last_hid = z((E,), torch.long, 0)
         self._lvl = {}
+        self._eta = float((params or {}).get("eta", _ns.L1_ETA)) if rung == "L1" else _ns.L1_ETA
         if rung == "L2":
             self.bsr = z((E, R), torch.float32, 0.0)
             self.sr_t = z((E, R), torch.long, -1)
@@ -248,6 +249,7 @@ class NetFast:
         elif rung == "L0":
             self._lvl = {k: float(params[k]) for k in ("mu", "sig", "p")}
         elif rung == "L0DR":
+            self._dr = _ns.l0dr_ranges(params)
             self.mu = z((E,), torch.float32, 0.0)
             self.sig = z((E,), torch.float32, 0.0)
             self.p = z((E,), torch.float32, 0.0)
@@ -319,9 +321,10 @@ class NetFast:
                 fill_rows(getattr(self, name), ids, v)
             fill_rows(self.h, ids, torch.randn(n, self.R, S, 2, **kw) / math.sqrt(2))
         elif self.rung == "L0DR":
-            fill_rows(self.mu, ids, math.log(0.05) + (math.log(10.0) - math.log(0.05)) * torch.rand(n, **kw))
-            fill_rows(self.sig, ids, 0.2 + 1.0 * torch.rand(n, **kw))
-            fill_rows(self.p, ids, 0.2 * torch.rand(n, **kw))
+            mu, sig, p = _ns.l0dr_draw(n, self._dr, kw)
+            fill_rows(self.mu, ids, mu)
+            fill_rows(self.sig, ids, sig)
+            fill_rows(self.p, ids, p)
         if self.radio is not None:
             self.radio.reset(ids)
 
@@ -444,7 +447,7 @@ class NetFast:
             else:
                 rem, fin = self.rem, torch.full_like(self.rem, INF)
                 for k in range(UL_PER_STEP):
-                    rem, fin = self._fluid(rem, fin, self._snr, finvals[:, k, None, None])
+                    rem, fin = self._fluid(rem, fin, self._snr, finvals[:, k, None, None], self._eta)
                 self.rem.copy_(rem)
         else:
             ok = (self.cap >= 0) & (self.dlv < (t + 1)[:, None, None])

@@ -40,6 +40,24 @@ NACT_EDGES = [2, 5, 9]      # L05 bins over backlogged robots per env
 SNR_EDGES = [0.0, 10.0, 20.0, 30.0]
 OWNQ_EDGES = [0, 1, 3]      # L05Q bins over the robot's own queued frames before this frame
 RUNGS = ["L0", "L0DR", "L05", "L05Q", "L1", "L2"]
+L1_ETA = 0.9                # L1: goodput factor on the 0.75 log2(1 + SNR) spectral efficiency (params["eta"])
+# L0DR: per-env ranges redrawn at every reset (params override them): median delay in control steps (log-uniform),
+# sigma of the log delay (uniform) and loss probability (uniform)
+L0DR_RANGES = {"median_steps": (0.05, 10.0), "log_sigma": (0.2, 1.2), "loss": (0.0, 0.2)}
+
+
+def l0dr_ranges(params):
+    """L0DR ranges: L0DR_RANGES updated with the keys of params (None = defaults)."""
+    return {**L0DR_RANGES, **{k: tuple(map(float, v)) for k, v in (params or {}).items() if k in L0DR_RANGES}}
+
+
+def l0dr_draw(n, dr, kw):
+    """Per-env (mu, sig, p) of L0DR for n rows from generator kw; same ops as the fixed ranges before."""
+    (m0, m1), (s0, s1), (p0, p1) = dr["median_steps"], dr["log_sigma"], dr["loss"]
+    mu = math.log(m0) + (math.log(m1) - math.log(m0)) * torch.rand(n, **kw)
+    sig = s0 + (s1 - s0) * torch.rand(n, **kw)
+    p = (p1 - p0) * torch.rand(n, **kw)
+    return mu, sig, (p if p0 == 0.0 else p0 + p)
 
 
 def se_from_snr_db(snr_db):
@@ -378,6 +396,7 @@ class NetDelay(NetBase):
     def _alloc_state(self):
         E, d = self.E, self.dev
         if self.mode == "L0DR":
+            self.dr = l0dr_ranges(self.params)
             self.mu = torch.zeros(E, device=d)
             self.sig = torch.zeros(E, device=d)
             self.p = torch.zeros(E, device=d)
@@ -388,9 +407,10 @@ class NetDelay(NetBase):
     def _reset_state(self, ids):
         if self.mode == "L0DR":     # per-env randomized delay/loss, redrawn at reset
             n, kw = self._nrows(ids), dict(device=self.dev, generator=self.gen)
-            fill_rows(self.mu, ids, math.log(0.05) + (math.log(10.0) - math.log(0.05)) * torch.rand(n, **kw))
-            fill_rows(self.sig, ids, 0.2 + 1.0 * torch.rand(n, **kw))
-            fill_rows(self.p, ids, 0.2 * torch.rand(n, **kw))
+            mu, sig, p = l0dr_draw(n, self.dr, kw)
+            fill_rows(self.mu, ids, mu)
+            fill_rows(self.sig, ids, sig)
+            fill_rows(self.p, ids, p)
 
     def _arrival_draws(self):
         """Per-robot draws [E,R] for every submit (positional, so one env's arrivals never shift another's):
@@ -426,7 +446,11 @@ class NetDelay(NetBase):
 
 
 class NetFluid(NetBase):
-    """L1: equal share of subbands among backlogged robots, no MAC state."""
+    """L1: equal share of subbands among backlogged robots, no MAC state. params["eta"]: goodput factor."""
+
+    def __init__(self, E, R, device, sizes, params=None, seed=None):
+        self.eta = float((params or {}).get("eta", L1_ETA))
+        super().__init__(E, R, device, sizes, seed=seed)
 
     def _transmit(self, t, snr_db):
         fin_t = torch.full_like(self.rem, float("inf"))
@@ -437,7 +461,7 @@ class NetFluid(NetBase):
             share = S / nb
             split = share.clamp(min=1.0)
             snr_sb = snr_db - 10 * torch.log10(split)
-            se = (0.75 * torch.log2(1 + 10 ** (snr_sb / 10))).clamp(max=SE_MAX) * 0.9
+            se = (0.75 * torch.log2(1 + 10 ** (snr_sb / 10))).clamp(max=SE_MAX) * self.eta
             b = share * se * BYTES_PER_SE * back
             self.rem, fin = serve_fifo(self.rem, b)
             fin_t = torch.where(fin, self._finvals(t, k), fin_t)
@@ -539,7 +563,7 @@ def make_net(rung, E, R, device, sizes, params=None, seed=None):
     if rung in ("L0", "L0DR", "L05", "L05Q"):
         return NetDelay(E, R, device, sizes, rung, params, seed=seed)
     if rung == "L1":
-        return NetFluid(E, R, device, sizes, seed=seed)
+        return NetFluid(E, R, device, sizes, params, seed=seed)
     if rung == "L2":
         return NetSlot(E, R, device, sizes, seed=seed)
     raise ValueError(rung)

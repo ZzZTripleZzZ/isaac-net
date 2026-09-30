@@ -12,7 +12,7 @@ Sources
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 import math
 
 # TS 38.101-1 Table 5.3.2-1, FR1: {scs_khz: {bw_mhz: N_RB}}
@@ -33,6 +33,52 @@ def rbg_size_38214(n_prb, config=1):
         if n_prb <= hi:
             return p1 if config == 1 else p2
     raise ValueError(n_prb)
+
+
+def fading_rho_from_speed(speed_mps, carrier_ghz=3.5, anchor_ms=2.5):
+    """AR(1) fading correlation per ms for a UE speed: the Jakes correlation J0(2 pi f_D anchor) over one legacy
+    UL slot spacing (2.5 ms), spread geometrically over its milliseconds. f_D = v f_c / c. 3 m/s at 3.5 GHz gives
+    0.9697 per ms (J0 = 0.926 per 2.5 ms), close to the default 0.93 per 2.5 ms. Clamped to [0, 1): past the
+    first zero of J0 (about 55 m/s at 3.5 GHz) consecutive 2.5 ms samples are treated as uncorrelated."""
+    import torch
+    fd = speed_mps * carrier_ghz * 1e9 / 299_792_458.0
+    j0 = float(torch.special.bessel_j0(torch.tensor(2 * math.pi * fd * anchor_ms * 1e-3, dtype=torch.float64)))
+    return min(max(j0, 0.0), 1.0 - 1e-12) ** (1 / anchor_ms)
+
+
+# NRConfig fields by the part of the package that reads them (see fields_read_by / unused_fields). The prototype
+# levels, the surrogates and the bounds read only APP (and their own level block); their radio is the fixed legacy
+# one. Fields no engine reads yet: shadow_dcorr_m, shadow_white_frac.
+FIELD_GROUPS = {
+    "app": ("control_step_ms", "frame_buffer", "timeout_steps", "msg_sizes"),
+    "l0": ("l0_delay_median_steps", "l0_delay_log_sigma", "l0_loss"),
+    "l0dr": ("dr_delay_median_steps", "dr_delay_log_sigma", "dr_loss"),
+    "l1": ("l1_eta",),
+    "frame": ("mu", "bandwidth_mhz", "n_prb", "rbg_size", "rbg_config", "tdd_pattern", "special_split",
+              "special_dl_data", "special_ul_data", "dl_ctrl_symbols", "ul_data_symbols"),
+    "nr": ("dmrs_re_per_prb", "overhead_re_per_prb", "k1", "k2", "gnb_proc_slots", "sr_period_slots",
+           "sr_grant_delay_slots", "ul_harq_rtt_slots", "cqi_period_slots", "proactive_grant", "proc_offset_ms",
+           "n_harq", "max_harq_tx", "harq_combining", "harq_fail", "rlc_retx_slots", "discard", "mcs_table",
+           "eff_sinr", "bler_source", "tbs_mode", "lena_ref_sc_per_rb", "bler_target", "ul_mcs_max", "dl_mcs_max",
+           "olla", "olla_up_db", "pf_metric", "pf_window", "retx_priority", "ul_power", "phr_cap",
+           "phr_min_db", "fading", "fading_rho_per_ms", "ue_speed_mps", "carrier_ghz", "dl_snr_offset_db",
+           "gnb_tx_dbm", "ue_nf_db", "tb_overhead_bytes", "pkt_payload_bytes", "pkt_overhead_bytes", "ul", "dl"),
+    "link": ("snr_ref_prbs", "noise_model", "ni_fixed_dbm", "gnb_nf_db", "ue_tx_dbm"),
+    "radio": ("pl_const_db", "pathloss_exp", "shadow_sigma_db", "shadow_modes", "n_cells", "cell_layout",
+              "cell_positions_m", "cell_isd_m", "cell_center_m", "cell_arena_m"),
+    "multicell": ("ul_interference", "li_alpha", "ul_pc", "ul_pc_p0_dbm", "ul_pc_alpha", "a3_offset_db",
+                  "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc"),
+    "unread": ("shadow_dcorr_m", "shadow_white_frac"),
+}
+
+
+def fields_read_by(level, cfg=None):
+    """NRConfig fields that the engine make_engine(level, ..., cfg) actually reads."""
+    groups = {"L0": ("app", "l0"), "L0DR": ("app", "l0dr"), "L1": ("app", "l1"),
+              "L2": ("app", "frame", "nr", "link", "radio")}.get(level, ("app",))
+    if level == "L2-legacy" and cfg is not None and not cfg.is_legacy_cell():
+        groups = ("app", "frame", "link", "radio", "multicell")        # NetSlotMC
+    return {f for g in groups for f in FIELD_GROUPS[g]}
 
 
 @dataclass
@@ -95,6 +141,8 @@ class NRConfig:
     phr_min_db: float = 3.0              # cap rule: per-PRB SNR (at the snr_ref_prbs split) >= this
     fading: bool = True
     fading_rho_per_ms: float = 0.93 ** (1 / 2.5)   # AR(1) per-subband Rayleigh; 0.93 per 2.5 ms (35 Hz)
+    ue_speed_mps: float | None = None    # set: fading_rho_per_ms = J0(2 pi f_D 2.5 ms)^(1/2.5), f_D = v f_c / c
+    carrier_ghz: float = 3.5             # carrier for the Doppler of ue_speed_mps (3 m/s at 3.5 GHz = 35 Hz)
     dl_snr_offset_db: float = 10.0       # step(): default DL per-PRB SNR = UL input SNR + offset
     # ---- link budget for step_rx() (shared with multicell/: pathgain + interference in, SINR out) ----
     noise_model: str = "fixed"           # "fixed": ni_fixed_dbm over snr_ref_prbs PRBs; "thermal": -174 dBm/Hz + NF
@@ -142,6 +190,14 @@ class NRConfig:
     frame_buffer: int = 16               # frames per robot per direction
     timeout_steps: int = 20              # application deadline in control steps
     msg_sizes: tuple = (4000.0, 30000.0) # bytes of traffic classes 1, 2, ... (Requests.send = class index)
+    # ---- delay levels (make_engine fills the level params from these when params is None) ----
+    l0_delay_median_steps: float = 0.05  # L0: i.i.d. lognormal delay, median in control steps
+    l0_delay_log_sigma: float = 0.5      # L0: sigma of the log delay
+    l0_loss: float = 0.0                 # L0: i.i.d. loss probability
+    dr_delay_median_steps: tuple = (0.05, 10.0)   # L0DR: per-env median delay range, log-uniform at every reset
+    dr_delay_log_sigma: tuple = (0.2, 1.2)        # L0DR: per-env sigma of the log delay, uniform
+    dr_loss: tuple = (0.0, 0.2)                   # L0DR: per-env loss probability, uniform
+    l1_eta: float = 0.9                  # L1: goodput factor on 0.75 log2(1 + SNR) (all backends, triton included)
 
     # ---------------- derived ----------------
     def __post_init__(self):
@@ -163,6 +219,11 @@ class NRConfig:
                 f"cell_layout='custom' needs one position per cell ({self.n_cells}); use cell_layout='hex' or "
                 "'grid', or the multicell() preset")
         assert len(self.msg_sizes) >= 1
+        assert 0 < self.dr_delay_median_steps[0] <= self.dr_delay_median_steps[1]
+        assert self.dr_delay_log_sigma[0] <= self.dr_delay_log_sigma[1] and 0 <= self.dr_loss[0] <= self.dr_loss[1] <= 1
+        assert self.l0_delay_median_steps > 0 and 0 <= self.l0_loss <= 1 and self.l1_eta > 0
+        if self.ue_speed_mps is not None:
+            self.fading_rho_per_ms = fading_rho_from_speed(self.ue_speed_mps, self.carrier_ghz)
 
     @property
     def scs_khz(self):
@@ -262,6 +323,14 @@ class NRConfig:
             return self.ni_fixed_dbm - 10 * math.log10(self.snr_ref_prbs)
         nf = self.gnb_nf_db if rx == "gnb" else self.ue_nf_db
         return -174.0 + 10 * math.log10(12 * self.scs_khz * 1e3) + nf
+
+    def unused_fields(self, level):
+        """Fields set away from their defaults that make_engine(level, ..., self) ignores (silently, unless
+        make_engine(..., strict=True))."""
+        ref = NRConfig()
+        read = fields_read_by(level, self)
+        return sorted(f.name for f in fields(self)
+                      if f.name not in read and getattr(self, f.name) != getattr(ref, f.name))
 
     def with_(self, **kw):
         return replace(self, **kw)

@@ -30,6 +30,8 @@ plus the legacy calls add_frames(t, send, det, hid, snr_db) and step(t, snr_db, 
 """
 from __future__ import annotations
 
+import math
+
 import torch
 
 from .config import NRConfig
@@ -61,8 +63,21 @@ def _check_proto_config(level, cfg: NRConfig):
                          "use the default cell settings, or level 'L2' / 'L2-legacy'")
 
 
+def _level_params(level, cfg: NRConfig, params):
+    """Parameters of the prototype delay levels and L1 from the config when the caller passes none."""
+    if params is not None:
+        return params
+    if level == "L0":
+        return {"mu": math.log(cfg.l0_delay_median_steps), "sig": cfg.l0_delay_log_sigma, "p": cfg.l0_loss}
+    if level == "L0DR":
+        return {"median_steps": cfg.dr_delay_median_steps, "log_sigma": cfg.dr_delay_log_sigma, "loss": cfg.dr_loss}
+    if level == "L1":
+        return {"eta": cfg.l1_eta}
+    return None
+
+
 def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backend="reference", *, sizes=None,
-                params=None, seed=None, inject=False):
+                params=None, seed=None, inject=False, strict=False):
     """Build the network engine of fidelity `level` for E envs x R robots.
 
     config: NRConfig shared by every module (default NRConfig()); the prototype levels read only its application
@@ -72,6 +87,9 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
       levels.load_level_params). seed: engine generator (reset draws); stepping draws come from the global
       torch RNG.
     inject: fast backends only, take the per-slot random draws from set_noise(...) (equivalence tests).
+    strict: raise if the config sets fields away from their defaults that this level ignores
+      (config.unused_fields(level)); by default they are ignored silently.
+    L0, L0DR and L1 without params take them from the config (l0_*, dr_*, l1_eta; defaults = earlier behavior).
     """
     if level not in LEVELS:
         raise ValueError(f"unknown level {level!r}; one of {LEVELS}")
@@ -83,6 +101,10 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     if sizes is not None:
         cfg = cfg.with_(msg_sizes=tuple(float(s) for s in sizes))
     sizes = tuple(cfg.msg_sizes)
+    if strict and cfg.unused_fields(level):
+        raise ValueError(f"level {level} ignores these config fields: {', '.join(cfg.unused_fields(level))} "
+                         "(see NRConfig.unused_fields and docs/configurability.md)")
+    params = _level_params(level, cfg, params)
     if level == "L2":
         if backend != "reference":
             raise NotImplementedError(f"backend {backend!r} is not available for the NR engine yet (follow-up); use "
