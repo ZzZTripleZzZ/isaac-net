@@ -22,6 +22,7 @@ arm sees the same initial poses, goals, shadowing and hazard draws; the runs dif
 delivers to the controller.
 
 usage (lab box): python benchmarks/closedloop/run_closedloop.py --out benchmarks/results/closedloop
+  heavier loads (docs/closed-loop.md, "Under load"): --interval 2 (one frame per 0.2 s) or --R 32
 """
 from __future__ import annotations
 
@@ -50,7 +51,7 @@ ARENA = 60.0
 P_TX, NI_DBM, PL0, PLEXP = 23.0, -101.44, 40.0, 3.5
 SHADOW_STD, MIN_SNR = 6.0, 7.0
 SEND_CLS = 2                       # the controller always sends the large (30 kB) camera frame
-MIN_INTERVAL = 5                   # at most one frame per robot every 5 steps (2 Hz)
+MIN_INTERVAL = 5                   # default: at most one frame per robot every 5 steps (2 Hz); --interval
 
 
 def snr_db(pos, sh):
@@ -70,8 +71,9 @@ class FleetLoop:
     Reward per robot-step: progress to the goal (m) - 1 inside an active hazard + 2 per goal reached."""
     VMAX, H_R, H_GROW, H_LIFE, H_RATE, DET_RANGE = 0.3, 15.0, 0.3, 100, 1 / 80, 50.0
 
-    def __init__(self, E, R, seed, dev):
+    def __init__(self, E, R, seed, dev, min_interval=MIN_INTERVAL):
         self.E, self.R, self.dev = E, R, dev
+        self.min_interval = int(min_interval)
         self.gen = torch.Generator(device=dev)
         self.gen.manual_seed(int(seed) * 7919 + 17)
         L = ARENA
@@ -113,7 +115,7 @@ class FleetLoop:
         away = self.pos - self.h_pos[:, None, :]
         near = (self.known[:, None] & (away.norm(dim=-1) < self.radius()[:, None] + 5.0))[..., None]
         vel = torch.where(near, self.unit(away), to_goal)
-        ok = ~in_flight & (self.since >= MIN_INTERVAL)
+        ok = ~in_flight & (self.since >= self.min_interval)
         send = torch.where(ok, torch.full_like(self.since, SEND_CLS), torch.zeros_like(self.since))
         self.since = torch.where(ok, torch.zeros_like(self.since), self.since + 1)
         return vel, send
@@ -252,8 +254,8 @@ def make_arm(arm, E, R, dev, seed, l0_params=None):
 
 
 # ------------------------------------------------------------------------------------------------ one episode
-def run_episode(arm, E, R, T, seed, dev, l0_params=None):
-    task = FleetLoop(E, R, seed, dev)
+def run_episode(arm, E, R, T, seed, dev, l0_params=None, min_interval=MIN_INTERVAL):
+    task = FleetLoop(E, R, seed, dev, min_interval)
     t0 = time.perf_counter()
     net = make_arm(arm, E, R, dev, seed, l0_params)
     t_build = time.perf_counter() - t0
@@ -347,6 +349,8 @@ def main():
     ap.add_argument("--E", type=int, default=8)
     ap.add_argument("--R", type=int, default=16)
     ap.add_argument("--T", type=int, default=300)
+    ap.add_argument("--interval", type=int, default=MIN_INTERVAL,
+                    help="minimum control steps between two sends of one robot (5 = 0.5 s)")
     ap.add_argument("--out", default=os.path.join(HERE, "..", "results", "closedloop"))
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     a = ap.parse_args()
@@ -371,7 +375,7 @@ def main():
         ds = []
         ta = time.perf_counter()
         for s in seeds:
-            row, fr = run_episode(arm, a.E, a.R, a.T, s, dev, l0)
+            row, fr = run_episode(arm, a.E, a.R, a.T, s, dev, l0, a.interval)
             rows.append(row)
             ds.append(fr[:, 3])
             allframes += [(arm, s, int(x[0]), int(x[1]), int(x[2]), float(x[3])) for x in fr]
@@ -414,7 +418,8 @@ def main():
             for g in grid:
                 w.writerow([arm, f"{g:.4g}", f"{np.searchsorted(x, g, 'right') / max(len(x), 1):.5f}"])
     # pairwise distances, pooled over seeds, plus split-half floors (even vs odd seeds within one arm)
-    pairs = [("L0", "L2"), ("L1", "L2"), ("L2", "ns3"), ("L2-legacy", "ns3"), ("L0", "ns3"), ("L1", "ns3")]
+    pairs = [("L0", "L2"), ("L1", "L2"), ("L2", "ns3"), ("L2-legacy", "ns3"), ("L0", "ns3"), ("L1", "ns3"),
+             ("ideal", "ns3")]
     with open(os.path.join(a.out, "distances.csv"), "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["a", "b", "n_a", "n_b", "w1_ms", "ks"])
@@ -432,10 +437,23 @@ def main():
             if len(ev) and len(od):
                 w.writerow([f"{arm} even seeds", f"{arm} odd seeds", len(ev), len(od), f"{w1(ev, od):.3f}",
                             f"{ks(ev, od):.4f}"])
+        # disjoint seeds: each arm's even seeds against ns-3's odd seeds, so the two samples share no trajectory
+        # (the pooled pairs above share seeds, hence trajectories, and can lie closer than the split-half floors)
+        if "ns3" in pooled:
+            m3 = fr[:, 0] == "ns3"
+            od3 = np.array([d for (s, d) in zip(fr[m3, 1], fr[m3, 2]) if s % 2 == 1], float)
+            for arm in ("L2", "L0", "L1", "L2-legacy"):
+                if arm not in pooled:
+                    continue
+                m = fr[:, 0] == arm
+                ev = np.array([d for (s, d) in zip(fr[m, 1], fr[m, 2]) if s % 2 == 0], float)
+                if len(ev) and len(od3):
+                    w.writerow([f"{arm} even seeds", "ns3 odd seeds", len(ev), len(od3), f"{w1(ev, od3):.3f}",
+                                f"{ks(ev, od3):.4f}"])
     with open(os.path.join(a.out, "setup.json"), "w") as f:
         json.dump(dict(arms=arms, seeds=seeds, E=a.E, R=a.R, T=a.T, arena_m=ARENA, ni_dbm=NI_DBM,
                        shadow_std_db=SHADOW_STD, min_snr_db=MIN_SNR, send_class_bytes=SIZES[SEND_CLS - 1],
-                       min_interval_steps=MIN_INTERVAL, timeout_steps=TIMEOUT, l0_params=l0,
+                       min_interval_steps=a.interval, timeout_steps=TIMEOUT, l0_params=l0,
                        device=str(dev), gpu=torch.cuda.get_device_name(0) if dev.type == "cuda" else None,
                        torch=torch.__version__), f, indent=1)
 

@@ -1,0 +1,4 @@
+N,runs,reps,E,steps,wall_s,wall_per_sim_s_per_env,threads,overrides
+8,11,4,44,322,49.81,0.03516,2,"bandwidth_mhz=10 n_prb=20"
+16,14,4,56,322,81.20,0.04503,2,"bandwidth_mhz=10 n_prb=20"
+32,14,4,56,322,103.26,0.05727,2,"bandwidth_mhz=10 n_prb=20"

@@ -62,6 +62,7 @@ nav:
       - 5G-LENA validation: validation-5g-lena.md
       - Fidelity vs 5G-LENA (formal study): fidelity-vs-lena.md
       - Fidelity under load (5G-LENA gap): fidelity-load-gap.md
+      - "Held-out 5G-LENA scenario (10 MHz)": fidelity-heldout.md
       - "Closed loop: one controller, every model": closed-loop.md
       - Public-data calibration: calibration-public-data.md
       - Performance: performance.md
