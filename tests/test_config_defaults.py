@@ -117,7 +117,8 @@ def test_unused_fields_and_strict():
     assert NRConfig(olla_up_db=0.1).unused_fields("L2") == []
     assert NRConfig(olla_up_db=0.1).unused_fields("L2-legacy") == ["olla_up_db"]
     assert NRConfig(pathloss_exp=3.0).unused_fields("L0") == ["pathloss_exp"]
-    assert "ul_pc" in multicell(3).unused_fields("L2") and "ul_pc" not in multicell(3).unused_fields("L2-legacy")
+    assert multicell(3).unused_fields("L2") == [] and multicell(3).unused_fields("L2-legacy") == []
+    assert multicell(3, dl_interference=False).unused_fields("L2-legacy") == ["dl_interference"]   # NR engine only
     with pytest.raises(ValueError, match="olla_up_db"):
         make_engine("L2-legacy", E, R, "cpu", NRConfig(olla_up_db=0.1), strict=True)
     make_engine("L2-legacy", E, R, "cpu", NRConfig(olla_up_db=0.1))          # not strict: ignored silently

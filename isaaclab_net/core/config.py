@@ -68,6 +68,7 @@ FIELD_GROUPS = {
               "cell_positions_m", "cell_isd_m", "cell_center_m", "cell_arena_m"),
     "multicell": ("ul_interference", "li_alpha", "ul_pc", "ul_pc_p0_dbm", "ul_pc_alpha", "a3_offset_db",
                   "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc"),
+    "nr_multicell": ("dl_interference",),      # read by the NR engine only (NetSlotMC has no downlink)
     "unread": ("shadow_dcorr_m", "shadow_white_frac"),
 }
 
@@ -75,7 +76,7 @@ FIELD_GROUPS = {
 def fields_read_by(level, cfg=None):
     """NRConfig fields that the engine make_engine(level, ..., cfg) actually reads."""
     groups = {"L0": ("app", "l0"), "L0DR": ("app", "l0dr"), "L1": ("app", "l1"),
-              "L2": ("app", "frame", "nr", "link", "radio")}.get(level, ("app",))
+              "L2": ("app", "frame", "nr", "link", "radio", "multicell", "nr_multicell")}.get(level, ("app",))
     if level == "L2-legacy" and cfg is not None and not cfg.is_legacy_cell():
         groups = ("app", "frame", "link", "radio", "multicell")        # NetSlotMC
     return {f for g in groups for f in FIELD_GROUPS[g]}
