@@ -164,7 +164,7 @@ All new fields default to the earlier behavior. `tests/test_config_defaults.py` 
 - `dr_delay_median_steps`, `dr_delay_log_sigma`, `dr_loss`: the per-env ranges `L0DR` draws at every reset, on every backend. `params` with the same keys override them.
 - `l1_eta`: the `L1` goodput factor, on every backend. The Triton fluid kernel takes it as a constexpr.
 - `ue_speed_mps`, `carrier_ghz`: when a speed is set, `fading_rho_per_ms` is derived from the Jakes correlation J0(2π f_D · 2.5 ms), spread over the milliseconds of that 2.5 ms interval. At 3 m/s and 3.5 GHz it gives 0.926 per 2.5 ms against the default 0.93. A set speed overrides an explicit `fading_rho_per_ms`.
-- `FIELD_GROUPS`, `fields_read_by(level, cfg)`, `NRConfig.unused_fields(level)` and `make_engine(..., strict=True)`: each field belongs to one group, each level reads a known set of groups, and strict mode refuses a config that sets fields the level would ignore. The map must be updated when the NR multi-cell merge makes `L2` read the multi-cell group.
+- `FIELD_GROUPS`, `fields_read_by(level, cfg)`, `NRConfig.unused_fields(level)` and `make_engine(..., strict=True)`: each field belongs to one group, each level reads a known set of groups, and strict mode refuses a config that sets fields the level would ignore. `L2` reads the multi-cell group and `dl_interference` (group `nr_multicell`).
 
 ## Edge-computing loop
 
