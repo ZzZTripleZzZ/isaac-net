@@ -216,6 +216,7 @@ def test_export_units_up_axis_frame_offset(tmp_path):
 
 
 def test_export_filters_and_mapping(tmp_path):
+    pytest.importorskip("pxr")
     from pxr import Usd, UsdGeom
 
     from isaaclab_net.tools.scene.usd_export import export_usd
