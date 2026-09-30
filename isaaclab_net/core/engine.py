@@ -4,7 +4,7 @@ Levels
   "L0", "L0DR", "L05", "L05Q", "L1"   prototype levels (proto/netsim.py and proto/netsim_fast.py)
   "L2"                                configurable NR engine (nr_engine.NRNet behind NREngine): NRConfig
                                       numerology / TDD / 3GPP MCS-TBS-BLER / multi-HARQ / optional downlink
-  "L2-legacy"                         the prototype slot-level NetSlot, frozen: the kill-test results were produced
+  "L2-legacy"                         the prototype slot-level NetSlot, frozen: the earlier prototype experiments ran
                                       with it and its graph backend is bitwise equal to its reference. With a
                                       multi-cell or thermal-noise config it runs NetSlotMC (proto/netsim_mc.py).
   "TR", "GE", "QA", "NN"              surrogates fitted from L2 / L2-legacy rollouts (levels/surrogates.py): trace

@@ -66,7 +66,7 @@ def rollout(policy_name, net, E, R, seed, T=300, L=150.0):
     gen = torch.Generator().manual_seed(seed + 12345)
     pol = POLICIES[policy_name]
     env = FleetEnv(E, R, net, "cpu")
-    env.L = L                         # arena side (gNB at the corner); 150 m is the kill-test default
+    env.L = L                         # arena side (gNB at the corner); 150 m is the example-task default
     if hasattr(net, "attach_env"):
         net.attach_env(env)
     log = FrameLog(net)

@@ -6,7 +6,7 @@
   NN  learned stateful surrogate: an MLP maps send-time features to a drop probability and delay quantiles
 
 Their parameters come from `python -m isaaclab_net.tools.fit_levels` (see that module for the fits and the exact
-TR matching rule). The parameter formats are those of the kill-test baselines, so their fit files load too.
+TR matching rule). The parameter formats are those of the earlier prototype baselines, so their fit files load too.
 """
 from __future__ import annotations
 

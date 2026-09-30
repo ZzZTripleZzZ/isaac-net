@@ -8,7 +8,7 @@
 > full resets only). Paths below are the lab-box layout; `BRIDGE_ROOT` and `NS3_TOOLCHAIN_ENV` override them.
 > The C++ program is our own code, written against the ns-3 / 5G-LENA APIs; no ns-3 or 5G-LENA source is included.
 
-Three ways to put ns-3.48 + 5G-LENA NR v5.1 (the `ns3ref` scenario `netslot-ref`) under the kill-test
+Three ways to put ns-3.48 + 5G-LENA NR v5.1 (the `ns3ref` scenario `netslot-ref`) under the example
 robot fleet. Each exposes the `netsim.NetBase` API, so it drops into `FleetEnv`, `train.py` and `evaluate`.
 
 | Variant | Class / tool | Loop | Use |

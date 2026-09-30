@@ -127,7 +127,7 @@ Every level exposes the same API, so a task switches fidelity by changing one ar
 | `L05`, `L05Q` | lookup tables fitted offline from `L2` rollouts | cheap state-conditioned delay |
 | `L1` | fluid slot model with equal PRB shares and FIFO queues | contention without MAC detail |
 | `L2` | configurable NR MAC and PHY (table above) | the fidelity model |
-| `L2-legacy` | the prototype slot-level MAC and PHY, frozen; multi-cell capable | reproducing the kill-test results, and speed at scale |
+| `L2-legacy` | the prototype slot-level MAC and PHY, frozen; multi-cell capable | reproducing the earlier prototype experiments, and speed at scale |
 | `TR` | trace replay: each env replays one recorded `L2` env-episode, open loop | the replayed-trace baseline |
 | `GE` | 3-state Markov-modulated delay and loss, one chain per env | the Gilbert–Elliott-style baseline |
 | `QA` | analytic processor-sharing queue per control step, FIFO service, SR delay | contention without slot simulation |

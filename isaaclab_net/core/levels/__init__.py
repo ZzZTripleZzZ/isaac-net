@@ -27,8 +27,8 @@ def load_level_params(level, params, sizes=None):
     """Parameters of one level from `params`, which is one of
       None                   QA falls back to QA_DEFAULT (uncalibrated); ORACLE / NOCOMM need nothing;
                              TR, GE and NN raise, because they only exist as fits
-      a path (str / PathLike) to a fit file written by isaaclab_net.tools.fit_levels (or a kill-test
-                             baselines fit file), loaded with torch.load(weights_only=True)
+      a path (str / PathLike) to a fit file written by isaaclab_net.tools.fit_levels (or the legacy
+                             baseline fitter), loaded with torch.load(weights_only=True)
       a fit-file dict        {"TR": ..., "GE": ..., "QA": ..., "NN": ..., "meta": {...}}: the entry of `level`
       the level's own dict   used as is
     A fit file records the message sizes it was fitted with (meta["sizes"]); they must equal `sizes`."""

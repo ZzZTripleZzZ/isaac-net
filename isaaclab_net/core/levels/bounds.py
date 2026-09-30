@@ -6,7 +6,7 @@ task in which communication does not exist (every accepted message sits in its F
 timeout drops it, so the queue fills and later messages overflow, exactly as behind a dead link). Train or
 evaluate a task under both before comparing fidelity levels: if the ORACLE return is not clearly above the
 NOCOMM return, the network carries little information the policy uses, and no fidelity level can matter for
-that task. Same semantics as the ORACLE / NOCOMM modes of the kill-test NetDelay.
+that task. Same semantics as the ORACLE / NOCOMM modes of the earlier prototype NetDelay.
 """
 from __future__ import annotations
 
