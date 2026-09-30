@@ -125,9 +125,13 @@ def harq_chains(rows):
     """Reconstruct UL HARQ chains from rx rows with CRC (srsRAN PHY log): per (run, ue, harq id), a chain starts
     at rv 0 / new data and ends at CRC OK or when the next chain starts. Returns dicts with ntx, success, the
     first transmission's MCS / SINR and the slot gaps between transmissions (the HARQ round trip)."""
+    # only sources that report failed CRCs (MAC pcaps and the T-tracer PDU event list decoded TBs only, and
+    # mixing them with the PHY log would duplicate transmissions)
+    srcs = {r["source"] for r in rows if r["crc"] == 0}
     by = defaultdict(list)
     for r in rows:
-        if r["dir"] == "UL" and r["event"] == "rx" and r["crc"] in (0, 1) and r["harq_id"] >= 0:
+        if (r["dir"] == "UL" and r["event"] == "rx" and r["crc"] in (0, 1) and r["harq_id"] >= 0
+                and r["source"] in srcs):
             by[(r["run_id"], r["ue"], r["harq_id"])].append(r)
     chains = []
     for k, rs in by.items():

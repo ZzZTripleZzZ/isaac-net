@@ -185,3 +185,13 @@ def test_preset_rejects_unknown_fields(tmp_path):
     p.write_text(json.dumps({"base": "oai_like", "nrconfig": {"special_split": [8, 4, 2]}}))
     assert preset.load_preset(str(p)).special_split == (8, 4, 2)
     assert os.path.exists(str(p))
+
+
+def test_harq_chains_ignore_decoded_only_sources():
+    from isaaclab_net.tools.measure.schema import new_row
+    base = dict(run_id="r", ue="ue1", dir="UL", event="rx", harq_id=0)
+    rows = [new_row("sched", **base, source="srsran_phylog", slot_abs=0, rv=0, crc=0, mcs=5),
+            new_row("sched", **base, source="srsran_phylog", slot_abs=8, rv=2, crc=1, mcs=5),
+            new_row("sched", **base, source="srsran_pcap", slot_abs=8, crc=1)]
+    ch = calibrate.harq_chains(rows)
+    assert len(ch) == 1 and ch[0]["ntx"] == 2 and ch[0]["success"] and ch[0]["gaps"] == [8]
