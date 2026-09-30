@@ -159,6 +159,8 @@ class MyFleetEnv(NetEnvMixin, DirectRLEnv):
 
 One control step is 0.1 s of simulated time. At about one million robots the network runs in the loop at 1.33 million robot-steps per second in 16.4 GB of device memory. From 131k robots upwards the network costs 9–20% of the step. The `graph` backend replays thousands of small kernels per step, so under time-slicing it is several times slower than `triton`: use `graph` for bitwise-reference runs and `triton` for scale. Startup grows by about 1.1 ms per robot (PhysX cloning), which is 19 minutes at one million robots. End-to-end PPO (rsl_rl, 1,024 × 16, L2-legacy `triton`) ran 30 iterations in 241 s at 53k robot-steps per second.
 
+**A second backend: MuJoCo Playground / MJX.** The same `NetModule` runs inside jitted, vmapped JAX code: [`isaaclab_net.mjx.NetModuleMJX`](isaaclab_net/mjx/net_module.py) hands the MJX poses to the torch engine through `jax.experimental.buffer_callback` with zero-copy DLPack views on XLA's own CUDA stream, and [`mjx_fleet_env.py`](isaaclab_net/examples/mjx_fleet_env.py) is the fleet task as a Playground env that Brax PPO trains. The in-env network is bitwise equal to a direct torch replay of the same poses on `graph`, `triton` and the reference engine; versions, costs and limits are in [docs/backends-mjx.md](docs/backends-mjx.md).
+
 ## Configure the network
 
 One `NRConfig` dataclass configures every module: numerology, carrier and TDD pattern, MAC timing, HARQ and RLC, the PHY tables, the radio and cell layout, and the application fields (frame buffer, timeout, message sizes). The configurable NR engine is level `L2`:
@@ -264,6 +266,7 @@ The reference simulator is ns-3.48 with 5G-LENA NR v5.1, used unmodified except 
 - [x] Multi-cell interference and handover (legacy L2)
 - [x] Multi-cell MAC in the NR engine (per-cell schedulers and HARQ, uplink and downlink interference, power control, handover)
 - [x] Isaac Lab 3.0 integration on the engine API: DirectRLEnv mixin, network domain randomization, fleet demo env, PPO
+- [x] Second backend: MuJoCo Playground / MJX (JAX) through a zero-copy `buffer_callback`, fleet env, Brax PPO
 - [ ] Uncontended Isaac Lab scaling benchmarks and more demo tasks
 - [ ] Validation against ns-3 5G-LENA and public measurement traces
 - [x] Test suite (CPU tests, GPU equivalence tests) and CI
@@ -287,10 +290,11 @@ isaaclab-net/
 │   │   │                         #   Triton kernels, and the multi-cell NetSlotMC
 │   │   └── levels/               #   fitted surrogates TR, GE, QA, NN and the ORACLE / NOCOMM bounds
 │   ├── isaac/                    # Isaac Lab layer: NetModule on make_engine, radio, DirectRLEnv mixin, mdp terms
+│   ├── mjx/                      # MuJoCo Playground / MJX layer: NetModuleMJX (JAX buffer_callback), replay
 │   ├── bridges/                  # ns-3 co-simulation (lockstep, process pool, offline replay), validation only
 │   │   └── ns3/                  #   the C++ ns-3 programs and their build scripts
 │   ├── examples/                 # fleet_task.py (pure torch), edge_control.py (edge-offloaded control),
-│   │                             # isaac_fleet_env.py (Isaac Lab demo env)
+│   │                             # isaac_fleet_env.py (Isaac Lab), mjx_fleet_env.py (MJX)
 │   └── tools/                    # PHY table export, local 5G-LENA table extraction, surrogate fits (fit_levels)
 ├── tests/                        # pytest suite; scripts/ (equivalence scripts), bridges/ (need ns-3)
 ├── benchmarks/                   # engine, NR, multi-cell, Isaac and ns-3 scaling benchmarks
@@ -303,7 +307,7 @@ isaaclab-net/
 
 ## Documentation
 
-Collaborator documentation lives in [`docs/`](docs/README.md): the [project status](docs/STATUS.md) with open items and starter tasks, the [5G-LENA validation](docs/validation-5g-lena.md), the [public-data calibration](docs/calibration-public-data.md), the [real-network measurement protocol](docs/measurement-protocol.md) with its parsers and calibration hooks in `isaaclab_net/tools/measure/`, [performance](docs/performance.md) with the backend equivalence methodology, the [Isaac Lab integration](docs/isaac-lab.md), [multi-cell networks](docs/multicell.md) and the [ns-3 bridges](docs/bridges.md).
+Collaborator documentation lives in [`docs/`](docs/README.md): the [project status](docs/STATUS.md) with open items and starter tasks, the [5G-LENA validation](docs/validation-5g-lena.md), the [public-data calibration](docs/calibration-public-data.md), the [real-network measurement protocol](docs/measurement-protocol.md) with its parsers and calibration hooks in `isaaclab_net/tools/measure/`, [performance](docs/performance.md) with the backend equivalence methodology, the [Isaac Lab integration](docs/isaac-lab.md), the [MuJoCo Playground / MJX backend](docs/backends-mjx.md), [multi-cell networks](docs/multicell.md) and the [ns-3 bridges](docs/bridges.md).
 
 ## Contributing
 
