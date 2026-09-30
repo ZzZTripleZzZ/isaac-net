@@ -1,6 +1,12 @@
 """Backend-agnostic, GPU-batched 5G uplink module for parallel robot simulators.
 
-Design skeleton (not yet run on a GPU). Pure torch, no simulator imports.
+Registry engine of the Isaac layer. Snapshot of isaac/demo's core/ref_engine.py (2026-09-29), which is the
+bug-fixed successor of the prototype isaac/netmodule.py skeleton: MessageHistory cap-0 bugfix; one-hot
+(sync-free) enqueue; optional per-message `tag` carried through the FIFO and reported as
+NetOutput.delivered_tag. Package change: the L2 PF average is floored at PF_AVG_MIN = 1 byte/slot as in
+core/proto/netsim.py, so its L2 matches the current NetSlot (tests/test_isaac_layer.py).
+Pure torch, no simulator imports, eager only. For speed use the fast engine (L2 backend graph/triton) through
+isaaclab_net.isaac.NetModule.
 The only contract with a physics backend is tensors:
 
     net = NetModule(NetConfig(num_envs=E, num_robots=R, ...))
@@ -28,6 +34,7 @@ from typing import Callable, Optional, Sequence, Union
 import torch
 
 EnvIds = Optional[Union[torch.Tensor, Sequence[int], slice]]
+PF_AVG_MIN = 1.0      # floor on the L2 PF average (bytes/slot), as core/proto/netsim.PF_AVG_MIN
 
 
 # --------------------------------------------------------------------------------------
@@ -56,6 +63,7 @@ class NetConfig:
     fading_rho: float = 0.93                 # J0(2*pi*35 Hz*2.5 ms): 3 m/s at 3.5 GHz
     phr_min_db: float = 3.0                  # power headroom floor per subband
     pf_window: float = 100.0
+    backend: str = "ref"                     # "ref" = this eager engine; L2 also: "eager"/"graph"/"compile"/"triton" (fast engine, isaac/net_module.py)
 
     @property
     def slots_per_step(self) -> int:
@@ -89,6 +97,7 @@ class TrafficRequest:
     """
     send: torch.Tensor
     bytes: Optional[torch.Tensor] = None
+    tag: Optional[torch.Tensor] = None     # [E,R] long, opaque per-message label (e.g. hazard id if detecting, else -1)
 
 
 @dataclass
@@ -104,6 +113,7 @@ class NetOutput:
     sinr_db: torch.Tensor        # [E,R] wideband SINR averaged over the step
     blocked: torch.Tensor        # [E,R] bool, LOS blocked to the serving gNB (last chunk)
     serving: torch.Tensor        # [E,R] long, serving gNB index
+    delivered_tag: torch.Tensor  # [E,R,F] long, tag of each message delivered this step (pre-compaction order), -1 elsewhere
 
 
 # --------------------------------------------------------------------------------------
@@ -195,6 +205,7 @@ class NetModule:
         self._register("cls", self._full((R, F), 0, L))
         self._register("rem", self._full((R, F), 0.0))         # bytes still to send
         self._register("dlv", self._full((R, F), float("inf")))  # L0 only: sampled delivery time
+        self._register("tag", self._full((R, F), -1, L))        # opaque per-message label, carried through the FIFO
         # freshness bookkeeping. last_cap = 0 means "state at reset is known" (documented choice)
         self._register("last_cap", self._full((R,), 0, L))
         # pose history for intra-step interpolation, valid flag avoids interpolating across a reset
@@ -279,23 +290,27 @@ class NetModule:
 
     # ---------------- enqueue ----------------
     def _enqueue(self, req: TrafficRequest) -> torch.Tensor:
+        # One-hot write into FIFO slot `count` (the buffer is compacted), no nonzero()/host sync.
+        # Was: nonzero + fancy-index scatter, which forced a device->host sync every control step.
         count = self.queued()
         want = req.send > 0
         new = want & (count < self.F)
         overflow = (want & ~new).long()
-        e, r = new.nonzero(as_tuple=True)
-        if e.numel():
-            i = count[e, r]
-            c = req.send[e, r]
-            self.cap[e, r, i] = self.t[e]
-            self.cls[e, r, i] = c
-            self.rem[e, r, i] = req.bytes[e, r] if req.bytes is not None else self.sizes[c - 1]
-            if self.cfg.rung == "L0":
-                n = e.numel()
-                delay = torch.exp(self.l0_log_mu[e] + self.l0_log_sigma[e] * torch.randn(n, device=self.dev))
-                lost = torch.rand(n, device=self.dev) < self.l0_loss[e]
-                dl = self.t[e].float() + delay
-                self.dlv[e, r, i] = torch.where(lost, torch.full_like(dl, float("inf")), dl)
+        m = new[..., None] & (torch.arange(self.F, device=self.dev) == count[..., None])     # [E,R,F]
+        c = req.send.clamp(min=1)
+        size = req.bytes if req.bytes is not None else self.sizes[c - 1]
+        self.cap = torch.where(m, self.t[:, None, None].expand_as(self.cap), self.cap)
+        self.cls = torch.where(m, c[..., None].expand_as(self.cls), self.cls)
+        self.rem = torch.where(m, size[..., None].expand_as(self.rem), self.rem)
+        if req.tag is not None:
+            self.tag = torch.where(m, req.tag[..., None].expand_as(self.tag), self.tag)
+        else:
+            self.tag = torch.where(m, torch.full_like(self.tag, -1), self.tag)
+        if self.cfg.rung == "L0":
+            delay = torch.exp(self.l0_log_mu[:, None] + self.l0_log_sigma[:, None] * torch.randn(self.E, self.R, device=self.dev))
+            lost = torch.rand(self.E, self.R, device=self.dev) < self.l0_loss[:, None]
+            dl = torch.where(lost, torch.full_like(delay, float("inf")), self.t[:, None].float() + delay)
+            self.dlv = torch.where(m, dl[..., None].expand_as(self.dlv), self.dlv)
         return overflow
 
     # ---------------- MAC rungs; each returns finish time [E,R,F] in env-clock steps ----------------
@@ -382,7 +397,7 @@ class NetModule:
                                     torch.where(tx, torch.zeros_like(hc), self.hcnt))
             self.wait = torch.where(fail, g + cfg.harq_rtt_slots + cfg.rlc_extra_slots * exhausted.long(), self.wait)
             self.bsr = torch.where(tx, self.rem.sum(-1), self.bsr)
-            self.avg = (1 - 1 / cfg.pf_window) * self.avg + (1 / cfg.pf_window) * served
+            self.avg = ((1 - 1 / cfg.pf_window) * self.avg + (1 / cfg.pf_window) * served).clamp(min=PF_AVG_MIN)
         return fin_t
 
     def _after_step_l2(self):
@@ -424,13 +439,15 @@ class NetModule:
         self.last_cap = torch.maximum(self.last_cap, newest)
         delay = torch.where(delivered_f, (fin - self.cap.float()) * self.cfg.step_dt,
                             torch.full_like(fin, float("nan")))
+        dtag = torch.where(delivered_f, self.tag, torch.full_like(self.tag, -1))
         timed = (self.cap >= 0) & ~delivered_f & ((tf1[:, None, None] - self.cap) >= self.cfg.timeout_steps)
         gone = delivered_f | timed
         self.cap = torch.where(gone, torch.full_like(self.cap, -1), self.cap)
         self.rem = torch.where(gone, torch.zeros_like(self.rem), self.rem)
         self.dlv = torch.where(gone, torch.full_like(self.dlv, float("inf")), self.dlv)
+        self.tag = torch.where(gone, torch.full_like(self.tag, -1), self.tag)
         order = self._compact_order()
-        for n in ("cap", "cls", "rem", "dlv"):
+        for n in ("cap", "cls", "rem", "dlv", "tag"):
             setattr(self, n, getattr(self, n).gather(-1, order))
         # delay stays in pre-compaction FIFO order: entry f is the f-th queued message this step
         if self.cfg.rung == "L2":
@@ -450,6 +467,7 @@ class NetModule:
             sinr_db=sinr_acc,
             blocked=blk_last if blk_last is not None else torch.zeros_like(newest, dtype=torch.bool),
             serving=serving,
+            delivered_tag=dtag,
         )
 
     def _compact_order(self) -> torch.Tensor:
@@ -473,7 +491,9 @@ class MessageHistory:
         self.H, self.dev = history_len, torch.device(device)
         self.hist = torch.zeros(history_len, num_envs, num_robots, dim, device=self.dev)
         self.seen = torch.zeros(num_envs, num_robots, dim, device=self.dev)
-        self.seen_cap = torch.zeros(num_envs, num_robots, dtype=torch.long, device=self.dev)
+        # BUGFIX (2026-09-29): was zeros. With seen_cap = 0 the strict test newest_cap > seen_cap
+        # discarded the first delivered capture (env-clock 0) of every episode. -1 = "only the reset state".
+        self.seen_cap = torch.full((num_envs, num_robots), -1, dtype=torch.long, device=self.dev)
         self._arE = torch.arange(num_envs, device=self.dev)
 
     def push(self, t_env: torch.Tensor, data: torch.Tensor):
@@ -492,7 +512,7 @@ class MessageHistory:
         """init [n,R,D]: the receiver is told the true state at reset (matches last_cap = 0)."""
         self.hist[:, env_ids] = init[None]
         self.seen[env_ids] = init
-        self.seen_cap[env_ids] = 0
+        self.seen_cap[env_ids] = -1       # BUGFIX: was 0, see __init__
 
 
 def net_features(out: NetOutput, step_dt: float) -> torch.Tensor:
