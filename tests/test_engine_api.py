@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from engine_api import default_params
-from isaaclab_net.core import LEVELS, Requests, make_engine, netslot_compat
+from isaaclab_net.core import SIM_LEVELS, Requests, make_engine, netslot_compat
 from isaaclab_net.core.proto import netsim
 
 E, R = 4, 5
@@ -33,7 +33,7 @@ def _drive(net, steps, gen, reset_at=None, ids=None, pos=False):
     return outs
 
 
-@pytest.mark.parametrize("level", LEVELS)
+@pytest.mark.parametrize("level", SIM_LEVELS)          # the surrogate and bound levels: test_levels.py
 def test_dict_outputs_and_clock(level, seeded):
     net = _engine(level)
     F = net.config.frame_buffer

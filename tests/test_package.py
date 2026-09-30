@@ -25,6 +25,8 @@ MODULES = [
     "isaaclab_net.bridges.ns3_offline.replaynet", "isaaclab_net.bridges.ns3_offline.offline_ns3",
     "isaaclab_net.bridges.ns3_offline.replay_error", "isaaclab_net.bridges.ns3_offline.lena_replay",
     "isaaclab_net.tools", "isaaclab_net.tools.extract_lena_tables",
+    "isaaclab_net.core.levels", "isaaclab_net.core.levels.base", "isaaclab_net.core.levels.surrogates",
+    "isaaclab_net.core.levels.bounds", "isaaclab_net.tools.fit_levels",
 ]
 
 
@@ -37,7 +39,8 @@ def test_top_level_api():
     import isaaclab_net as inet
     from isaaclab_net.core import NRConfig, make_engine
     assert inet.make_engine is make_engine and inet.NRConfig is NRConfig
-    assert set(inet.LEVELS) == {"L0", "L0DR", "L05", "L05Q", "L1", "L2", "L2-legacy"}
+    assert set(inet.LEVELS) == {"L0", "L0DR", "L05", "L05Q", "L1", "L2", "L2-legacy", "TR", "GE", "QA", "NN",
+                                "ORACLE", "NOCOMM"}
     net = inet.make_engine("L2", 2, 3, "cpu", seed=0)
     out = net.step(None, torch.zeros(2, 3))
     assert out["newest"].shape == (2, 3)

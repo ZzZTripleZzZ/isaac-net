@@ -7,11 +7,18 @@ Levels
   "L2-legacy"                         the prototype slot-level NetSlot, frozen: the kill-test results were produced
                                       with it and its graph backend is bitwise equal to its reference. With a
                                       multi-cell or thermal-noise config it runs NetSlotMC (proto/netsim_mc.py).
+  "TR", "GE", "QA", "NN"              surrogates fitted from L2 / L2-legacy rollouts (levels/surrogates.py): trace
+                                      replay, Markov-modulated delay/loss, analytic queue, learned surrogate.
+                                      params = a fit file path or dict from isaaclab_net.tools.fit_levels.
+  "ORACLE", "NOCOMM"                  value-of-information bounds (levels/bounds.py): instant lossless delivery,
+                                      and nothing delivered. Not network models: they bracket what any level
+                                      can give a task.
 
 Backends
   "reference"                          the readable eager engine of the level (every level; the only NR backend)
   "eager", "graph", "compile", "triton" prototype fast backends (graph = bitwise equal to reference; triton for
                                       L1 / L2-legacy only). A graph/triton backend for the NR engine is a follow-up.
+                                      The surrogate and bound levels have "reference" (= "eager") and "graph".
 
 Every engine returned here has the contract API of ARCHITECTURE.md:
   reset(env_ids=None)                 partial reset: None, index tensor, list or bool mask [E]
@@ -26,13 +33,15 @@ from __future__ import annotations
 import torch
 
 from .config import NRConfig
+from .levels import BOUND_LEVELS, SURROGATE_LEVELS, make_level
 from .nr_engine import NRNet
 from .proto import netsim as _proto
 from .radio import RadioMC
 from .traffic import Requests
 
 PROTO_LEVELS = ("L0", "L0DR", "L05", "L05Q", "L1")
-LEVELS = PROTO_LEVELS + ("L2", "L2-legacy")
+SIM_LEVELS = PROTO_LEVELS + ("L2", "L2-legacy")
+LEVELS = SIM_LEVELS + SURROGATE_LEVELS + BOUND_LEVELS
 FAST_BACKENDS = ("eager", "graph", "compile", "triton")
 BACKENDS = ("reference",) + FAST_BACKENDS
 
@@ -45,10 +54,10 @@ def _check_proto_config(level, cfg: NRConfig):
         raise ValueError(f"level {level} has fixed {', '.join(f'{k}={v[1]}' for k, v in bad.items())}; "
                          f"the config asks for {', '.join(f'{k}={v[0]}' for k, v in bad.items())}. "
                          "Use level 'L2' for a configurable engine.")
-    if level in PROTO_LEVELS and cfg.n_cells != 1:
+    if level != "L2-legacy" and cfg.n_cells != 1:
         raise ValueError(f"level {level} is single-cell; multi-cell runs on 'L2-legacy'")
-    if level == "L1" and not cfg.is_legacy_cell():
-        raise ValueError("level L1 has the fixed legacy radio (one gNB at the origin, -90 dBm noise floor); "
+    if level in ("L1", "QA") and not cfg.is_legacy_cell():
+        raise ValueError(f"level {level} has the fixed legacy radio (one gNB at the origin, -90 dBm noise floor); "
                          "use the default cell settings, or level 'L2' / 'L2-legacy'")
 
 
@@ -59,7 +68,9 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     config: NRConfig shared by every module (default NRConfig()); the prototype levels read only its application
       fields (frame_buffer, timeout_steps, control_step_ms, msg_sizes) and check that they match their constants.
     sizes: override of config.msg_sizes. params: fitted parameters of L0 ({"mu", "sig", "p"}) and L05 / L05Q
-      ({"q", "pdrop"}). seed: engine generator (reset draws); stepping draws come from the global torch RNG.
+      ({"q", "pdrop"}); for TR / GE / QA / NN a fit file path, a fit-file dict or the level's own dict (see
+      levels.load_level_params). seed: engine generator (reset draws); stepping draws come from the global
+      torch RNG.
     inject: fast backends only, take the per-slot random draws from set_noise(...) (equivalence tests).
     """
     if level not in LEVELS:
@@ -78,6 +89,12 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
                                       "backend='reference', or level='L2-legacy' for the graph / triton backends")
         return NREngine(E, R, device, cfg, seed=seed)
     _check_proto_config(level, cfg)
+    if level in SURROGATE_LEVELS + BOUND_LEVELS:
+        if backend not in ("reference", "eager", "graph"):
+            raise NotImplementedError(f"level {level} has the backends 'reference' and 'graph', not {backend!r}")
+        net = make_level(level, E, R, device, sizes, params, backend=backend, inject=inject, seed=seed)
+        net.config = cfg
+        return net
     if level == "L2-legacy" and not cfg.is_legacy_cell():
         if backend != "reference":
             raise NotImplementedError("the multi-cell legacy engine (NetSlotMC) has only the reference backend")
