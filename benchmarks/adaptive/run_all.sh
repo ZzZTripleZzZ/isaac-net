@@ -1,7 +1,7 @@
 #!/bin/bash
 # Accuracy vs cost sweeps of the adaptive engine (docs/adaptive-fidelity.md) on one GPU.
 # usage: bash benchmarks/adaptive/run_all.sh [outdir] [fitdir]   (fitdir: outside the source tree)
-# Writes <outdir>/adaptive_*.jsonl, transient_*.jsonl, adaptive_tables.md.
+# Writes <outdir>/adaptive_*.jsonl, transient_*.jsonl, kernel_time.jsonl and tables.md.
 set -e
 cd "$(dirname "$0")/../.."
 OUT=${1:-runs}
@@ -15,6 +15,9 @@ python benchmarks/adaptive/fit_l05q.py --E 1024 --R 16 --steps 400 --out "$FIT/l
 # 1. L1 (triton) -> L2-legacy (triton), E = 4096 x 16
 python $S --E 4096 --R 16 --backend triton --scenarios mixed,uniform-0.05,uniform-0.2,uniform-0.5 $LOAD \
     --out "$OUT/adaptive_l1_triton.jsonl"
+# 1b. the cost table of the docs: decision periods 1 and 5, all engines timed round-robin in one run
+python $S --E 4096 --R 16 --backend triton --scenarios mixed --thresholds 1000 --budgets mask,0.1,0.25,0.5 \
+    --decision_period 1,5 --static 0.1,0.25 --reps 7 --out "$OUT/adaptive_cost.jsonl"
 # 2. L05Q (graph, fitted) -> L2-legacy (triton), E = 4096 x 16
 python $S --E 4096 --R 16 --cheap L05Q --cheap_params "$FIT/l05q_fit.pt" --backend graph --exp_backend triton \
     --scenarios mixed,uniform-0.2,uniform-0.5 $LOAD --out "$OUT/adaptive_l05q_triton.jsonl"
