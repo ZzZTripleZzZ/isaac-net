@@ -39,7 +39,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.utils import configclass
 
-from netmodule import (MessageHistory, NetConfig, NetModule, ParamRanges, TrafficRequest,
+from isaaclab_net.isaac.netmodule import (MessageHistory, NetConfig, NetModule, ParamRanges, TrafficRequest,
                        net_features, segment_sphere_blocked)
 
 NUM_ROBOTS = 32

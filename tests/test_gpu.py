@@ -140,7 +140,7 @@ def test_fast_backend_seeded_determinism(backend):
 
 @pytest.mark.parametrize("backend", ["graph", pytest.param("triton", marks=needs_triton)])
 def test_example_env_smoke(backend):
-    from env import OBS_DIM, TASK_SIZES, FleetEnv
+    from isaaclab_net.examples.fleet_task import OBS_DIM, TASK_SIZES, FleetEnv
     E, R, dev = 16, 8, torch.device("cuda")
     torch.manual_seed(0)
     net = make_fast(E, R, dev, backend=backend, sizes=TASK_SIZES["T1"])

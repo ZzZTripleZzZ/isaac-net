@@ -7,13 +7,13 @@ import math
 
 import os
 import sys as _sys
-_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # repo root
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
 
-import netsim
-from netsim import UL_PER_STEP, S
+from isaaclab_net.core.proto import netsim
+from isaaclab_net.core.proto.netsim import UL_PER_STEP, S
 
 SIZES = (4000.0, 30000.0)
 L0_PARAMS = {"mu": math.log(0.3), "sig": 0.8, "p": 0.05}

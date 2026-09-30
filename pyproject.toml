@@ -4,25 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "isaaclab-net"
-version = "0.0.1"
+version = "0.1.0"
 description = "GPU-batched 5G network module for massively parallel robot RL in Isaac Lab (prototype)"
 readme = "README.md"
 license = { text = "BSD-3-Clause" }
 requires-python = ">=3.10"
 # Install torch first to pick the build (CUDA, or CPU-only via --index-url https://download.pytorch.org/whl/cpu).
-dependencies = ["torch>=2.4"]
+# Triton ships with the CUDA build of torch on Linux; it is imported lazily, only by the `triton` backend.
+dependencies = ["torch>=2.4", "numpy>=1.23"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4", "ruff>=0.5"]
 
-[tool.setuptools]
-# The code still lives in prototype/ as loose modules; the isaaclab_net package is a later milestone.
-# Until then nothing is installed as a package, and pytest puts prototype/ on the path (see below).
-packages = []
+[tool.setuptools.packages.find]
+include = ["isaaclab_net*"]
+
+[tool.setuptools.package-data]
+# Sionna-derived BLER tables (Apache-2.0) and their license. The 5G-LENA tables (GPL-derived) are never
+# shipped: they are generated locally by `python -m isaaclab_net.tools.extract_lena_tables` (see README).
+"isaaclab_net.core" = ["data/*.npz", "data/LICENSE-*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["prototype", "prototype/fast", "tests"]
+# "." keeps a plain checkout working without `pip install -e .`; "tests" makes engine_api importable.
+pythonpath = [".", "tests"]
 markers = [
     "gpu: needs a CUDA GPU (skipped automatically without one)",
     "slow: longer runs (deselect with -m 'not slow')",
@@ -32,7 +37,8 @@ addopts = "-ra"
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-extend-exclude = ["prototype/isaac/isaac_env_skeleton.py", "prototype/isaac/maniskill_adapter_skeleton.py",
+# Files that import Isaac Lab / ManiSkill / ns-3 bindings, which CI does not install.
+extend-exclude = ["isaaclab_net/isaac/isaac_env_skeleton.py", "isaaclab_net/isaac/maniskill_adapter_skeleton.py",
                   "venv*", ".pydeps"]
 
 [tool.ruff.lint]
@@ -42,8 +48,12 @@ select = ["E4", "E7", "E9", "F"]
 ignore = ["E701", "E702", "E731", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
-# Existing prototype findings, left untouched while the engine API is being reworked (see tests/README.md).
-"prototype/fast/bench.py" = ["E402", "F821", "F841"]   # F821: false positive from `del net` after a closure
-"prototype/fast/bench_env.py" = ["E402"]
-"prototype/fast/test_equiv.py" = ["F401"]
-"prototype/isaac/netmodule.py" = ["F401", "F841"]
+# Existing prototype findings, left untouched (see tests/README.md).
+"benchmarks/bench.py" = ["E402", "F821", "F841"]   # F821: false positive from `del net` after a closure
+"benchmarks/bench_env.py" = ["E402"]
+"tests/scripts/test_equiv.py" = ["F401"]
+"isaaclab_net/isaac/netmodule.py" = ["F401", "F841"]
+# Merged components, kept as delivered (dead locals in nrconfig's PHY; lab validation scripts).
+"isaaclab_net/core/phy.py" = ["F841"]
+"benchmarks/ns3/*" = ["E402", "F841"]
+"tests/bridges/*" = ["E402", "F841"]

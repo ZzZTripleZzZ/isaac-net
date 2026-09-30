@@ -20,7 +20,7 @@ import torch
 
 from mani_skill.envs.sapien_env import BaseEnv
 
-from netmodule import MessageHistory, NetConfig, NetModule, TrafficRequest, net_features
+from isaaclab_net.isaac.netmodule import MessageHistory, NetConfig, NetModule, TrafficRequest, net_features
 
 NUM_ROBOTS = 16
 
