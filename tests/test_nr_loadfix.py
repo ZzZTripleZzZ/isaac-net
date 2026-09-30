@@ -25,7 +25,7 @@ SIZES = (4000.0, 30000.0)
 
 def lena_cfg(**kw):
     """The validation config without the locally generated 5G-LENA tables (Sionna curves, same TB size rule)."""
-    return lena_validation(bler_source="pdsch", **kw)
+    return lena_validation(bler_source="pdsch", rng="global", **kw)     # the tests patch torch.rand_like
 
 
 def drive(net, T, E, R, p=0.3, seed=0, reset_at=None, snr_lo=5.0, snr_hi=25.0):
@@ -45,7 +45,7 @@ def drive(net, T, E, R, p=0.3, seed=0, reset_at=None, snr_lo=5.0, snr_hi=25.0):
     return outs
 
 
-@pytest.mark.parametrize("cfgf", [NRConfig, lena_cfg])
+@pytest.mark.parametrize("cfgf", [lambda: NRConfig(rng="global"), lena_cfg], ids=["NRConfig", "lena_cfg"])
 def test_l1_all_off_is_bitwise_nrnet(cfgf):
     E, R = 4, 6
     torch.manual_seed(7)
@@ -78,12 +78,12 @@ class SlotLog:
         self.ul, self.rows, self._orig = ul, [], ul.slot
         ul.slot = self
 
-    def __call__(self, g, frac, nsym, sinr, gain, ack=0):
+    def __call__(self, g, frac, nsym, sinr, gain, ack=0, **kw):
         ul = self.ul
         sent0, tbb0 = ul.sent.clone(), ul.ctr["tb_bytes"].clone()
         prb0, rx0 = ul.prb_used_env.clone(), float(ul.ctr["tb_retx"])
         new0 = float(ul.ctr["tb_new"])
-        self._orig(g, frac, nsym, sinr, gain, ack)
+        self._orig(g, frac, nsym, sinr, gain, ack, **kw)
         self.rows.append(dict(g=g, rbg=(ul.prb_used_env - prb0) / 10, data=ul.sent - sent0,
                               tb=float(ul.ctr["tb_bytes"] - tbb0), retx=float(ul.ctr["tb_retx"]) - rx0,
                               new=float(ul.ctr["tb_new"]) - new0))
@@ -155,9 +155,9 @@ def test_l5_tdma_retx(monkeypatch):
     orig = ul.slot
     per_slot = []
 
-    def chk(gs, frac, nsym, sinr, gain, ack=0):
+    def chk(gs, frac, nsym, sinr, gain, ack=0, **kw):
         rv0 = ul.rv_tx.clone()
-        orig(gs, frac, nsym, sinr, gain, ack)
+        orig(gs, frac, nsym, sinr, gain, ack, **kw)
         per_slot.append(ul.rv_tx - rv0)                    # [E, ntx]: TBs by transmission number in this slot
     ul.slot = chk
     snr = torch.full((E, R), 6.0)
@@ -185,9 +185,9 @@ def test_l6_amc_previous_allocation():
     first = []
     orig = ul.slot
 
-    def rec(g, frac, nsym, sinr, gain, ack=0):
+    def rec(g, frac, nsym, sinr, gain, ack=0, **kw):
         n0 = float(ul.ctr["tb_new"])
-        orig(g, frac, nsym, sinr, gain, ack)
+        orig(g, frac, nsym, sinr, gain, ack, **kw)
         if float(ul.ctr["tb_new"]) > n0:
             first.append((int(ul.h_mcs[0, 0, 0]), float(ul.prb_used_env[0])))
     ul.slot = rec

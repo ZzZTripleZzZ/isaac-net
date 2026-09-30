@@ -170,9 +170,9 @@ class LoadFixUlMac(UlMac):
         need_sr = (self._visible() > 0) & (self.est <= 0) & ~self.boot & ~inflight & (self.sr_t < 0)
         self.sr_t = torch.where(need_sr, torch.full_like(self.sr_t, g), self.sr_t)
 
-    def _pre_slot(self, g):
+    def _pre_slot(self, g, gh=None):
         if not self.lf.grant_pipeline:
-            return super()._pre_slot(g)
+            return super()._pre_slot(g, g if gh is None else gh)
         self._arrivals()
         lf = self.lf
         owed = (self.sr_t >= 0) & (g - self.sr_t >= lf.sr_boot_slots)
@@ -207,10 +207,10 @@ class LoadFixUlMac(UlMac):
         self.rep_g = torch.where(oh, torch.full_like(self.rep_g, g), self.rep_g)
 
     # ---------------- one data slot (MacLink.slot with the switches) ----------------
-    def slot(self, g, frac, nsym, sinr_ref_db, gain_now, ack_slot=0):
+    def slot(self, g, frac, nsym, sinr_ref_db, gain_now, ack_slot=0, gh=None, rel=0):
         lf = self.lf
         if not lf.any():
-            return super().slot(g, frac, nsym, sinr_ref_db, gain_now, ack_slot)
+            return super().slot(g, frac, nsym, sinr_ref_db, gain_now, ack_slot, gh=gh, rel=rel)
         cfg, E, R, S, P, d, phy = self.cfg, self.E, self.R, self.S, self.P, self.dev, self.phy
         w = self.sb_prb
         unsent = self.unsent()
@@ -348,7 +348,8 @@ class LoadFixUlMac(UlMac):
             comb = g1(self.h_comb) + 10 ** (eff / 10) if cfg.harq_combining == "cc" else 10 ** (eff / 10)
             eff_used = 10 * torch.log10(comb.clamp(min=1e-9))
         p_err = phy.tb_error_prob(mcs, eff_used, tbs, mcs_eq)
-        ok = tx & (torch.rand_like(p_err) >= p_err)
+        u = torch.rand_like(p_err) if self.rng is None else self.rng.step_uniform(self._bler_site, rel, R)
+        ok = tx & (u >= p_err)
         fail = tx & ~ok
         exh = fail & (ntx >= cfg.max_harq_tx)
         # ---- HARQ state ----
@@ -428,6 +429,7 @@ class LoadFixNet(NRNet):
                 ("f_snr", torch.float32), ("f_own", torch.long)]
         # a fresh MAC is already in its initial state; no second reset(), which would redraw the fading state
         self.ul = LoadFixUlMac(self.cfg, self.lf, E, R, device, meta)
+        self.ul.rng = self.rng                     # engine RNG (rng="engine"), as NRNet gives its links
 
 
 def make_arm(name, **extra):

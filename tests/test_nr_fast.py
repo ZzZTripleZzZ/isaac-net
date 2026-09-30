@@ -179,3 +179,30 @@ def test_g5_netmodule_backend(backend):
     if backend == "graph":
         for k in ("newest_cap", "queue_len", "queue_bytes", "sinr_db"):
             assert torch.equal(o[k], oref[k]), k
+
+
+@pytest.mark.gpu
+def test_g6_slot_tap_wrapper_on_graph():
+    """The energy wrapper's per-slot tap (core/slot_tap.py, a SINR hook) is captured by graph: its per-robot counters
+    and the engine outputs equal the reference bitwise. The fused triton kernel refuses such hooks."""
+    from isaaclab_net.core.energy import EnergyConfig
+    E, R = 4, 3
+    cfg = NRConfig(msg_sizes=SIZES, energy=EnergyConfig(battery_j=500.0), dl=True)
+    ref = make_engine("L2", E, R, "cuda", cfg, "reference", seed=2)
+    fast = make_engine("L2", E, R, "cuda", cfg, "graph", seed=2)
+    g = torch.Generator(device="cuda").manual_seed(0)
+    for t in range(5):
+        send = torch.randint(0, 3, (E, R), device="cuda", generator=g)
+        snr = 25 * torch.rand(E, R, device="cuda", generator=g)
+        oa, ob = [], []
+        for eng, o in ((ref, oa), (fast, ob)):
+            eng.submit(None, send)
+            eng.add_dl_frames(None, send.float() * 1500)
+            o.append(eng.step(None, snr))
+        for k in oa[0]:
+            assert torch.equal(oa[0][k].nan_to_num(-7.0), ob[0][k].nan_to_num(-7.0)), (t, k)
+    assert float(oa[0]["energy_cum_j"].sum()) > 0
+    tri = make_engine("L2", E, R, "cuda", cfg, "triton", seed=2)
+    tri.submit(None, send)
+    with pytest.raises(NotImplementedError, match="hooks"):
+        tri.step(None, snr)
