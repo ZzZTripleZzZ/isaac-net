@@ -63,6 +63,12 @@ BLOCKAGE_DB = 20.0
 
 
 class Ns3NetModule:
+    """The Isaac NetModule call pattern over the ns-3 lockstep bridge (see the module docstring).
+
+    cfg: a NetConfig (num_envs, num_robots, device, msg_sizes, frame_depth). reset(env_ids) marks envs for a
+    rebuild at the next step; step(poses_end [E,R,3], TrafficRequest, blocked) returns an output object whose
+    `ns3` field holds the raw per-UE ns-3 statistics. close() stops the ns-3 processes.
+    """
     def __init__(self, cfg, transport="tcp", mode="procs", run=1, ns3_args=None, shadow_sigma_db=6.0,
                  spawn=True, endpoints=None, host="127.0.0.1", envs_per_proc=None, seed=0):
         self.cfg = cfg

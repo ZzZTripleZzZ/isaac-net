@@ -29,6 +29,7 @@ RBG_TABLE = [(36, 2, 4), (72, 4, 8), (144, 8, 16), (275, 16, 16)]
 
 
 def rbg_size_38214(n_prb, config=1):
+    """RBG size P in PRBs for a bandwidth part of n_prb PRBs (TS 38.214 Table 5.1.2.2.1-1, configuration 1 or 2)."""
     for hi, p1, p2 in RBG_TABLE:
         if n_prb <= hi:
             return p1 if config == 1 else p2
@@ -84,6 +85,16 @@ def fields_read_by(level, cfg=None):
 
 @dataclass
 class NRConfig:
+    """The one configuration of every isaaclab_net module: numerology, carrier and TDD pattern, MAC timing, HARQ
+    and RLC, PHY tables and link adaptation, radio and cell layout, and the application fields.
+
+    Every field has a default, so NRConfig() is a complete configuration (one cell, DDDSU at 30 kHz, 20 MHz).
+    The presets (netslot_compat, lena_like, lena_validation, srsran_like, oai_like, multicell) return an
+    NRConfig and take keyword overrides; cfg.with_(**changes) returns a modified copy. Derived quantities
+    (nprb, rbg, slots_per_step, ...) are properties computed from the fields. Each level reads only some fields
+    (fields_read_by); unused_fields(level) lists the non-default fields a level ignores, and
+    make_engine(..., strict=True) raises on them.
+    """
     # ---- numerology and carrier ----
     mu: int = 1                          # SCS = 15 * 2^mu kHz, mu in {0, 1, 2}
     bandwidth_mhz: int = 20
@@ -230,14 +241,17 @@ class NRConfig:
 
     @property
     def scs_khz(self):
+        """Subcarrier spacing in kHz, 15 * 2^mu."""
         return 15 * 2 ** self.mu
 
     @property
     def slot_ms(self):
+        """Slot duration in ms, 1 / 2^mu."""
         return 1.0 / 2 ** self.mu
 
     @property
     def nprb(self):
+        """PRBs of the carrier: n_prb if set, else TS 38.101-1 N_RB for bandwidth_mhz at scs_khz."""
         if self.n_prb is not None:
             return self.n_prb
         tab = NRB_FR1[self.scs_khz]
@@ -247,10 +261,12 @@ class NRConfig:
 
     @property
     def rbg(self):
+        """RBG size in PRBs (one subband): rbg_size if set, else the TS 38.214 value for nprb."""
         return self.rbg_size if self.rbg_size is not None else rbg_size_38214(self.nprb, self.rbg_config)
 
     @property
     def n_subbands(self):
+        """Number of RBGs (subbands) of the carrier, ceil(nprb / rbg)."""
         return math.ceil(self.nprb / self.rbg)
 
     @property
@@ -298,21 +314,26 @@ class NRConfig:
 
     @property
     def sr_delay(self):
+        """Slots from a scheduling request to the first PUSCH: sr_grant_delay_slots, default gnb_proc_slots + k2."""
         return self.sr_grant_delay_slots if self.sr_grant_delay_slots is not None else self.gnb_proc_slots + self.k2
 
     @property
     def ul_rtt(self):
+        """Slots from a PUSCH to its earliest retransmission: ul_harq_rtt_slots, default gnb_proc_slots + k2."""
         return self.ul_harq_rtt_slots if self.ul_harq_rtt_slots is not None else self.gnb_proc_slots + self.k2
 
     @property
     def ul_slots_per_step(self):
+        """Slots per control step that carry uplink data symbols."""
         return sum(1 for g in range(self.slots_per_step) if self.slot_symbols(g)[1] > 0)
 
     @property
     def dl_slots_per_step(self):
+        """Slots per control step that carry downlink data symbols."""
         return sum(1 for g in range(self.slots_per_step) if self.slot_symbols(g)[0] > 0)
 
     def summary(self):
+        """One-line human-readable summary of the frame structure, HARQ, PHY and scheduler settings."""
         return (f"mu={self.mu} ({self.scs_khz} kHz), {self.bandwidth_mhz} MHz -> {self.nprb} PRB, "
                 f"RBG {self.rbg} -> {self.n_subbands} subbands {self.subband_prbs}, TDD {self.tdd_pattern} "
                 f"S={self.special_split}, {self.slots_per_step} slots/step "
@@ -336,6 +357,7 @@ class NRConfig:
                       if f.name not in read and getattr(self, f.name) != getattr(ref, f.name))
 
     def with_(self, **kw):
+        """A copy of this config with the given fields replaced (dataclasses.replace)."""
         return replace(self, **kw)
 
     # ---------------- cells ----------------
@@ -359,6 +381,7 @@ class NRConfig:
 
     @property
     def ul_pc_on(self):
+        """Whether uplink fractional power control is on: ul_pc, or by default on exactly when n_cells > 1."""
         return self.n_cells > 1 if self.ul_pc is None else bool(self.ul_pc)
 
     @property
@@ -368,10 +391,12 @@ class NRConfig:
 
     @property
     def ttt_slots(self):
+        """A3 time-to-trigger a3_ttt_ms in uplink data slots."""
         return int(round(self.a3_ttt_ms / self.ul_slot_ms))
 
     @property
     def ho_int_slots(self):
+        """Handover interruption ho_interruption_ms in uplink data slots."""
         return int(round(self.ho_interruption_ms / self.ul_slot_ms))
 
     @property

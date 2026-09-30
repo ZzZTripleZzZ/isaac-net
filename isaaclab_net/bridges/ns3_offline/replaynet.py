@@ -20,6 +20,9 @@ from ...core.proto.netsim import NetBase
 
 
 class ReplayNet(NetBase):
+    """NetBase whose frame outcomes come from a recorded rollout, with the fallbacks of the module docstring.
+    Valid only for the policy that produced the recording: the outcomes do not react to the running policy."""
+
     def __init__(self, E, R, device, sizes, outcomes):
         """outcomes: {(e, r, t): (cls, delay_steps or inf)}."""
         self.table = outcomes

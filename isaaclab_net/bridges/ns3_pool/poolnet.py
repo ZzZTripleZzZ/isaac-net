@@ -42,6 +42,10 @@ def equiv_pos(snr_db):
 
 
 class PoolNet(NetBase):
+    """NetBase drop-in whose uplink is one ns-3 / 5G-LENA worker process per env (see the module docstring).
+    Every reset() restarts all workers, so partial resets are not supported. attach_env(env) supplies real
+    robot positions for the fading geometry; close() stops the workers."""
+
     def __init__(self, E, R, device, sizes, extra_args=(), launcher="local", seed_run=1, log_dir=None,
                  send_positions=True):
         self.pool = Ns3Pool(E, R, extra_args, launcher, seed_run=seed_run, log_dir=log_dir)

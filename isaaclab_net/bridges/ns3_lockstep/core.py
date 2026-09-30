@@ -31,6 +31,14 @@ def shadow_from_snr(pos_xy, snr_db):
 
 
 class Ns3Lockstep:
+    """Drive E envs x R UEs over one or several ns-3 bridge processes, one 100 ms control step per step() call.
+
+    mode "procs" (one process per env), "single" (one process, E cells) or "groups" (envs_per_proc envs per
+    process); transport "tcp", "unix" or "shm" (ns3-ai, binary netslot-bridge-ai). spawn=False connects to
+    servers that are already running at `endpoints` instead of launching them. reset(groups, pos, shadow)
+    rebuilds the scenario of those process groups; step(pos, frames, shadow) returns the completed frames and
+    the per-UE ns-3 statistics. close() stops the processes. Ns3Net and Ns3NetModule are built on it.
+    """
     def __init__(self, E, R, mode="procs", transport="tcp", envs_per_proc=None, run=1,
                  ns3_args=None, binary=None, spawn=True, endpoints=None, log_dir=None, host="127.0.0.1"):
         self.E, self.R, self.mode, self.transport = E, R, mode, transport
