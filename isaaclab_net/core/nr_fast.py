@@ -382,6 +382,8 @@ class NRTritonEngine(NRGraphEngine):
     size and BLER-table index of every (symbols, PRBs, MCS) are exact tables precomputed with phy.py; EESM, BLER
     interpolation and HARQ combining run in the kernel in float32 (float64 where phy.py uses it). Reduction order and
     fused multiply-adds differ from ATen, so the engine equals the reference to float rounding, not bitwise.
+    The 5G-LENA MAC switches pf_update, pf_avg_idle, ul_retx_sched and ul_amc_alloc run in the kernel;
+    ul_grant_model="bsr" (and so lena_match_v2) is refused for now (use graph).
     Limits: one cell (n_cells = 1), no user SINR hook; robots are padded to a power of two (R up to about 256)."""
 
     backend = "triton"
@@ -390,6 +392,12 @@ class NRTritonEngine(NRGraphEngine):
         if cfg.n_cells != 1:
             raise NotImplementedError("the triton backend of the NR engine is single-cell for now; use backend='graph' "
                                       "for n_cells > 1")
+        if cfg.ul_grant_model != "lumped":
+            raise NotImplementedError(
+                f"the triton backend does not implement ul_grant_model={cfg.ul_grant_model!r} (the 5G-LENA SR / BSR "
+                "grant pipeline, which lena_match_v2 / lena_validation_v2 turn on) yet; use backend='graph' (bitwise "
+                "equal to the reference) or backend='reference'. The other 5G-LENA MAC switches (pf_update, "
+                "pf_avg_idle, ul_retx_sched, ul_amc_alloc) run on triton.")
         super().__init__(E, R, device, cfg, seed=seed)
         from . import nr_triton
         from .nr_rng import STEP, salt
@@ -458,7 +466,10 @@ class NRTritonEngine(NRGraphEngine):
             TB_OH=cfg.tb_overhead_bytes, SR_DELAY=cfg.sr_delay, UL_RTT=cfg.ul_rtt, RLC_RETX=cfg.rlc_retx_slots,
             GNB_PROC=cfg.gnb_proc_slots, REF_PRBS=float(cfg.snr_ref_prbs), PHR_MIN=float(cfg.phr_min_db),
             WB_DB=wb_db, W0=w[0], OLLA_UP=float(cfg.olla_up_db), OLLA_DN=float(net.ul.olla_dn),
-            PF_A=1 - 1 / cfg.pf_window, PF_B=1 / cfg.pf_window)
+            PF_A=1 - 1 / cfg.pf_window, PF_B=1 / cfg.pf_window,
+            PF_RBG=cfg.pf_update == "rbg", PF_FREEZE=cfg.pf_avg_idle == "freeze",
+            RETX_TDMA=cfg.ul_retx_sched == "tdma", AMC_PREV=cfg.ul_amc_alloc == "previous",
+            LENA_CTR=bool(net.ul._lena_mac))
         self._num_warps = 16 if RB >= 128 else (8 if RB >= 64 else 4)
 
     def _sched_table(self, g0, sched, dt0):
@@ -544,8 +555,9 @@ class NRTritonEngine(NRGraphEngine):
                 continue
             H = link.ntx_hist.shape[0]
             cnt = a[:, off * HB:(off + 1) * HB].sum(0)
-            for i, k in enumerate(self._nt.CTR_NAMES):
-                link.ctr[k] += cnt[i]
+            for i, k in enumerate(self._nt.CTR_NAMES + self._nt.LENA_CTR_NAMES):
+                if k in link.ctr:
+                    link.ctr[k] += cnt[i]
             link.ctr["prb_avail"] += link._w_sum * E * link.n_cells * n
             link.ntx_hist += a[:, (off + 1) * HB:(off + 1) * HB + H].sum(0)
             link.rv_tx += a[:, (off + 2) * HB:(off + 2) * HB + H]

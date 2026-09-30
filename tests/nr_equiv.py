@@ -28,7 +28,8 @@ import time
 
 import torch
 
-from isaaclab_net.core import NRConfig, make_engine, multicell
+from isaaclab_net.core import NRConfig, lena_match_v2, make_engine, multicell
+from isaaclab_net.core.config import LENA_MAC_V2
 from isaaclab_net.core.nr_fast import state_dict
 from isaaclab_net.core.traffic import TrafficModel as TM
 
@@ -48,6 +49,15 @@ CFGS = {
     "traffic_c3": lambda: multicell(3, traffic=[TM.periodic(600, 10, jitter_ms=2), TM.policy()], frame_buffer=64),
     "ul_compat": lambda: NRConfig(n_prb=50, rbg_size=10, dmrs_re_per_prb=0, n_harq=1, eff_sinr="mean_db",
                                   sr_grant_delay_slots=10, ul_harq_rtt_slots=20),
+    # 5G-LENA MAC switches (docs/fidelity-load-gap.md): lena_match_v2 without the local 5G-LENA tables, per-RBG PF
+    # with frozen averages on both links, and every switch at three cells (TDMA retx per cell, BSR state handover)
+    "ul_lena_v2": lambda: lena_match_v2(bler_source="pdsch"),
+    "ul_dl_pf_rbg": lambda: NRConfig(dl=True, pf_update="rbg", pf_avg_idle="freeze", ul_grant_model="bsr"),
+    "cells3_v2": lambda: multicell(3, dl=True, frame_buffer=32, **LENA_MAC_V2),
+    # the switches the triton kernel implements (everything but the BSR grant pipeline)
+    "ul_lena_sched": lambda: lena_match_v2(bler_source="pdsch", ul_grant_model="lumped"),
+    "ul_dl_pf": lambda: NRConfig(dl=True, pf_update="rbg", pf_avg_idle="freeze", ul_retx_sched="tdma",
+                                 ul_amc_alloc="previous"),
 }
 
 

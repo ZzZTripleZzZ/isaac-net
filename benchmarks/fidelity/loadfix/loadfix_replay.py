@@ -1,4 +1,6 @@
 """Replay the primary-arm 5G-LENA runs through LoadFixNet (isaaclab_net/core/nr_loadfix.py) for one arm.
+LoadFixNet is now NRNet on the NRConfig switches that the prototype names map to (the shim in nr_loadfix.py); the
+engine-integrated v2 preset is replayed by nr_replay.py with NRF_PRESET=lena_validation_v2 (run_v2.sh).
 
 Same inputs, seeds and output format as benchmarks/fidelity/nr_replay.py (per-run .npz that compare.py reads), so
 an arm here and the fidelity study's arms are directly comparable: identical per-UE snr1_db, the exact LENA frame

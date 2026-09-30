@@ -10,10 +10,14 @@ GPU (marker gpu; tests/nr_equiv.py is the harness, its CLI runs the 300-step ver
   G1 graph == reference bitwise: every output and every state tensor at every step, UL, UL+DL, three cells, per-robot
      Doppler, round robin / max C/I, traffic models with sub-step arrivals (one and three cells), with random partial
      resets; statistics and counters at the end
-  G2 triton, teacher forced: identical decisions from an identical state (UL, UL+DL, LENA-like UL)
+  G2 triton, teacher forced: identical decisions from an identical state (UL, UL+DL, LENA-like UL, and the 5G-LENA
+     MAC switches the kernel implements: per-RBG PF with frozen averages, TDMA UL retx, previous-PUSCH AMC)
   G3 triton, free running: aggregates within a few percent of the reference
   G4 the CUDA (Triton) draws equal the torch path (uniforms bitwise, normals to rounding)
   G5 make_engine("L2", backend="graph" / "triton") through the Isaac NetModule
+  G7 graph == reference bitwise with the 5G-LENA MAC switches on (lena_match_v2, per-RBG PF on UL + DL with the BSR
+     pipeline, every switch at three cells, the switches without the BSR pipeline); triton refuses the BSR pipeline
+     (test_nr_loadfix.py L10)
 """
 import math
 
@@ -126,11 +130,20 @@ def test_g1_graph_bitwise(cfg):
 
 
 @pytest.mark.gpu
-@pytest.mark.parametrize("cfg", ["ul", "ul_dl", "ul_lena", "ul_compat", "traffic"])
+@pytest.mark.parametrize("cfg", ["ul", "ul_dl", "ul_lena", "ul_compat", "traffic", "ul_lena_sched", "ul_dl_pf"])
 def test_g2_triton_teacher_forced(cfg):
     r = nr_equiv.run("triton", cfg, E=16, R=8, steps=12, seed=3, mode="teacher", p_reset=0.3)
     assert r["robot_steps_active"] > 50
     assert r["robot_steps_mismatch"] <= max(1, r["robot_steps_active"] // 1000), r
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("cfg", ["ul_lena_v2", "ul_dl_pf_rbg", "cells3_v2", "ul_lena_sched", "ul_dl_pf"])
+def test_g7_graph_bitwise_lena_mac_switches(cfg):
+    """graph == reference bitwise with the 5G-LENA MAC switches on (BSR pipeline state, per-RBG PF, TDMA retx)."""
+    r = nr_equiv.run("graph", cfg, E=8, R=6, steps=40, seed=3, p_reset=0.2)
+    assert r["resets"] > 0 and r["frames_delivered"][0] > 20
+    assert r["bitwise"], r["first_mismatch"]
 
 
 @pytest.mark.gpu

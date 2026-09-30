@@ -4,7 +4,8 @@ Inputs per run come from lena_extract.py: each UE's single-subband full-power SN
 fixed-SNR input mode) and the exact frame schedule of the LENA run (which UE sent a frame of S bytes at
 which 100 ms instant), so the NR engine sees the same link budgets and the same offered traffic, frame by
 frame. The configuration is lena_validation() (= lena_match in the validation geometry) plus the
-overrides given on the command line, which is how the ablation arms are produced.
+overrides given on the command line, which is how the ablation arms are produced. NRF_PRESET=lena_validation_v2
+replays the v2 preset instead (the 5G-LENA MAC switches of docs/fidelity-load-gap.md).
 
 All runs with the same N are batched along the env axis (runs x replicas); replicas differ only in the
 engine's random draws (TB decoding). The torch seed depends on N only, so every arm uses the same random
@@ -26,7 +27,7 @@ import time
 import numpy as np
 import torch
 
-from isaaclab_net.core.config import lena_validation
+from isaaclab_net.core import config as C
 from isaaclab_net.core.nr_engine import NRNet
 
 DRAIN_STEPS = 22          # LENA: traffic 0.5..30.5 s, simulation ends at 32.7 s
@@ -87,7 +88,7 @@ def main():
         for j in range(reps):
             snr[k * reps + j] = torch.from_numpy(z["snr1_db"]).float()
             sched[:, k * reps + j] = s
-    cfg = lena_validation(**ov)
+    cfg = getattr(C, os.environ.get("NRF_PRESET", "lena_validation"))(**ov)
     torch.manual_seed(12345 + N)
     net = NRNet(E, N, "cpu", (4000.0, 30000.0), cfg)
     acc = TbAcc(E, N)

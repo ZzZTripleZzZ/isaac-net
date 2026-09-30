@@ -162,8 +162,8 @@ def _gather_p(x, pidx, p):
 
 @triton.jit
 def _mac_slot(
-        # per-robot state [RB]
-        sent, floor, olla, avg, bsr, sr_t, last_tx, enq,
+        # per-robot state [RB] (lnp: PRBs of the last PUSCH, ul_amc_alloc="previous")
+        sent, floor, olla, avg, bsr, sr_t, last_tx, enq, lnp,
         # per-subband state / inputs [RB, SB]
         csi, ref, gain, pc,
         # HARQ [RB, PB]
@@ -189,7 +189,9 @@ def _mac_slot(
         MCS_MAX: tl.constexpr, MAX_TX: tl.constexpr, TARGET: tl.constexpr, TB_OH: tl.constexpr,
         SR_DELAY: tl.constexpr, UL_RTT: tl.constexpr, RLC_RETX: tl.constexpr, GNB_PROC: tl.constexpr,
         REF_PRBS: tl.constexpr, PHR_MIN: tl.constexpr, WB_DB: tl.constexpr, W0: tl.constexpr,
-        OLLA_UP: tl.constexpr, OLLA_DN: tl.constexpr, PF_A: tl.constexpr, PF_B: tl.constexpr):
+        OLLA_UP: tl.constexpr, OLLA_DN: tl.constexpr, PF_A: tl.constexpr, PF_B: tl.constexpr,
+        PF_RBG: tl.constexpr, PF_FREEZE: tl.constexpr, RETX_TDMA: tl.constexpr, AMC_PREV: tl.constexpr,
+        LENA_CTR: tl.constexpr):
     BIG: tl.constexpr = 2 ** 62
     unsent = enq - sent
     # DL processes whose ACK has reached the gNB become free
@@ -261,12 +263,22 @@ def _mac_slot(
         metric = rate / avg[:, None]
     metric = tl.where(sm[None, :], metric, 0.0)
     # ---- retransmission admission: rank by the metric sum, admit while the RBG counts fit ----
-    rkey = tl.where(has_rx, tl.sum(metric, axis=1), -1.0)
-    rkey = tl.where(rm, rkey, float("-inf"))
-    val = tl.where(has_rx, rx_nsb, 0)
-    before = (rkey[None, :] > rkey[:, None]) | ((rkey[None, :] == rkey[:, None]) & (ridx[None, :] <= ridx[:, None]))
-    cum = tl.sum(tl.where(before, val[None, :], 0), axis=1)
-    has_rx = has_rx & (cum <= S_)
+    n_block = 0.0
+    if RETX_TDMA:          # ul_retx_sched="tdma": the oldest NACK alone, nothing new in its slot
+        rdy = tl.where(has_rx, _gather_p(h_rdy, pidx, rx_p), BIG)
+        first = tl.argmin(rdy, axis=0)
+        adm = (ridx == first) & has_rx
+        blk = tl.max(adm.to(tl.int32), axis=0) > 0
+        new_el = new_el & (~blk)
+        n_block = (blk & (tl.sum(tl.where(adm, rx_nsb, 0), axis=0) < S_)).to(tl.float32)
+        has_rx = adm
+    else:
+        rkey = tl.where(has_rx, tl.sum(metric, axis=1), -1.0)
+        rkey = tl.where(rm, rkey, float("-inf"))
+        val = tl.where(has_rx, rx_nsb, 0)
+        before = (rkey[None, :] > rkey[:, None]) | ((rkey[None, :] == rkey[:, None]) & (ridx[None, :] <= ridx[:, None]))
+        cum = tl.sum(tl.where(before, val[None, :], 0), axis=1)
+        has_rx = has_rx & (cum <= S_)
     want_cnt = tl.where(has_rx, rx_nsb, tl.where(new_el, n_max, 0))
     if RETX_PRIO:
         prio = 1e9 * has_rx.to(tl.float32)
@@ -276,14 +288,21 @@ def _mac_slot(
     cnt = tl.zeros(sent.shape, tl.int64)
     left = need.to(tl.float32)
     won = tl.zeros(ref.shape, tl.int32)
+    got = tl.zeros(avg.shape, tl.float32)       # pf_update="rbg": bytes granted so far in this slot
     for s in tl.static_range(S_):
         want = (cnt < want_cnt) & (has_rx | (left > 0)) & rm
-        ms = tl.where(want, _col(metric, sidx, s) + prio, -1.0)
+        if PF_RBG:
+            msc = _col(rate, sidx, s) / tl.maximum(PF_A * avg + PF_B * got, 1e-9)
+        else:
+            msc = _col(metric, sidx, s)
+        ms = tl.where(want, msc + prio, -1.0)
         best = tl.max(ms, axis=0)
         wi = tl.argmax(ms, axis=0)
         sel = (ridx == wi) & (best >= 0)
         won = tl.where((sidx[None, :] == s) & sel[:, None], 1, won)
         cnt += sel.to(tl.int64)
+        if PF_RBG:
+            got = got + _col(rate, sidx, s) * sel.to(tl.float32)
         left = left - _col(rate, sidx, s) * sel.to(tl.float32) * (~has_rx).to(tl.float32)
     n_sb = tl.sum(won, axis=1).to(tl.int64)
     n_prb = tl.sum(won.to(tl.float32) * w[None, :], axis=1)
@@ -306,13 +325,25 @@ def _mac_slot(
     # highest MCS whose TB error probability at the (OLLA-offset) effective SINR meets the target, one MCS at a time
     lin_tx = libdevice.exp10(tl.minimum(tl.maximum(est_tx, -30.0), 60.0) / 10.0)
     toff0 = (nsi * (NPRB + 1) + n_prb.to(tl.int32)) * MB
+    if AMC_PREV:           # ul_amc_alloc="previous": MCS for the previous PUSCH's PRBs, TB for this allocation
+        toffr = (nsi * (NPRB + 1) + tl.where(lnp > 0, lnp, n_prb).to(tl.int32)) * MB
+        if WHOLE_BAND:
+            lwr = tl.where(sm[None, :] & rm[:, None], lw_all[None, :], float("-inf"))
+            lnwr = _lse_rows(lwr)
+        else:
+            lwr = lw
+            lnwr = lnw
+    else:
+        toffr = toff0
+        lwr = lw
+        lnwr = lnw
     mcs_new = tl.zeros(sent.shape, tl.int32)
-    tbs_new = tl.load(tbs_ptr + toff0, mask=tx_new, other=0)
+    tbs_new = tl.load(tbs_ptr + toffr, mask=tx_new, other=0)
     for m in range(MCS_MAX + 1):           # MCS_MAX <= M - 1 (phy.mcs_max)
-        effm = _eff_m(lin_tx, est_tx, lw, lnw, tl.load(beta_ptr + m), MODE)
+        effm = _eff_m(lin_tx, est_tx, lwr, lnwr, tl.load(beta_ptr + m), MODE)
         if OLLA:
             effm = effm + olla
-        o = toff0 + m
+        o = toffr + m
         tb = tl.load(tbs_ptr + o, mask=tx_new, other=0)
         bm = _bler(tab_ptr, m, effm, tl.load(ci0_ptr + o, mask=tx_new, other=0),
                    tl.load(cwi_ptr + o, mask=tx_new, other=0.0), tl.load(bg_ptr + o, mask=tx_new, other=0),
@@ -321,6 +352,8 @@ def _mac_slot(
         okm = (tbler <= TARGET) & (tb > 0)
         mcs_new = tl.where(okm, m, mcs_new)
         tbs_new = tl.where(okm, tb, tbs_new)
+    if AMC_PREV:
+        tbs_new = tl.load(tbs_ptr + toff0 + mcs_new, mask=tx_new, other=0)
     tbs_new = tbs_new.to(tl.int64)
     cap_b = tl.maximum(tbs_new // 8 - TB_OH, 1)
     byt_new = tl.minimum(cap_b, unsent)
@@ -417,7 +450,20 @@ def _mac_slot(
     if DIR == 0:
         bsr = tl.where(tx, enq - sent, bsr)
         csi = gain
-    avg = _pf_update(avg, served, PF_A, PF_B)
+    if AMC_PREV:
+        lnp = tl.where(tx, n_prb, lnp)
+    if PF_RBG | PF_FREEZE:     # pf_update="rbg": granted TB bytes; pf_avg_idle="freeze": active robots only
+        if PF_RBG:
+            upd = (tbs_new // 8).to(tl.float32) * tx_new.to(tl.float32)
+        else:
+            upd = served.to(tl.float32)
+        new_avg = PF_A * avg + PF_B * upd
+        if PF_FREEZE:
+            avg = tl.where((need > 0) & (~has_rx), new_avg, avg)
+        else:
+            avg = new_avg
+    else:
+        avg = _pf_update(avg, served, PF_A, PF_B)
     if SCHED == 2:
         last_tx = tl.where(tx, g, last_tx)
     # ---- counters ----
@@ -432,6 +478,10 @@ def _mac_slot(
     cnt_acc += tl.where(hidx == 7, cnt_lost, 0.0)
     cnt_acc += tl.where(hidx == 8, tl.sum((tx_new & pending).to(tl.float32)), 0.0)
     cnt_acc += tl.where(hidx == 9, tl.sum(n_prb * txf), 0.0)
+    if LENA_CTR:           # grant accounting counters of the 5G-LENA MAC switches (LENA_CTR_NAMES)
+        cnt_acc += tl.where(hidx == 10, tl.sum(((tbs_new // 8) * tx_new.to(tl.int64)).to(tl.float32)), 0.0)
+        cnt_acc += tl.where(hidx == 11, tl.sum((tx_new & (byt_new == 0)).to(tl.float32)), 0.0)
+        cnt_acc += tl.where(hidx == 12, n_block, 0.0)
     k = tl.minimum(ntx, MAX_TX)
     ohk = hidx[None, :] == k[:, None]
     hist_ok += tl.sum((ohk & ok[:, None]).to(tl.float32), axis=0)
@@ -443,7 +493,7 @@ def _mac_slot(
     ack = tl.minimum(sent, tl.min(lo_own, axis=1))
     done = (cap >= 0) & (qend <= ack[:, None]) & (lost == 0) & (fin == float("inf"))
     fin = tl.where(done, fin_val, fin)
-    return (sent, olla, avg, bsr, sr_t, last_tx, csi,
+    return (sent, olla, avg, bsr, sr_t, last_tx, lnp, csi,
             h_st.to(tl.int32), h_lo, h_hi, h_rdy, h_ntx.to(tl.int32), h_mcs.to(tl.int32), h_tbs.to(tl.int32),
             h_nsb.to(tl.int32), h_comb, h_lexp, h_nrb,
             lost, fin, cnt_acc, hist_ok, hist_tx, hist_fail)
@@ -518,6 +568,8 @@ def nr_step_kernel(
         # UL link state
         u_sent, u_floor, u_olla, u_avg, u_bsr, u_srt, u_ltx, u_enq, u_csi, u_hst, u_hlo, u_hhi, u_hrdy, u_hntx,
         u_hmcs, u_htbs, u_hnsb, u_hcomb, u_hlexp, u_hnrb, u_cap, u_qs, u_qe, u_lost, u_fin,
+        # UL PRBs of the last PUSCH [E,R] (ul_amc_alloc="previous"; any float buffer otherwise, never read)
+        u_lnp,
         # DL link state
         d_sent, d_floor, d_olla, d_avg, d_bsr, d_srt, d_ltx, d_enq, d_csi, d_hst, d_hlo, d_hhi, d_hrdy, d_hntx,
         d_hmcs, d_htbs, d_hnsb, d_hcomb, d_hlexp, d_hnrb, d_cap, d_qs, d_qe, d_lost, d_fin,
@@ -544,7 +596,9 @@ def nr_step_kernel(
         MCS_MAX_UL: tl.constexpr, MCS_MAX_DL: tl.constexpr, MAX_TX: tl.constexpr, TARGET: tl.constexpr,
         TB_OH: tl.constexpr, SR_DELAY: tl.constexpr, UL_RTT: tl.constexpr, RLC_RETX: tl.constexpr,
         GNB_PROC: tl.constexpr, REF_PRBS: tl.constexpr, PHR_MIN: tl.constexpr, WB_DB: tl.constexpr,
-        W0: tl.constexpr, OLLA_UP: tl.constexpr, OLLA_DN: tl.constexpr, PF_A: tl.constexpr, PF_B: tl.constexpr):
+        W0: tl.constexpr, OLLA_UP: tl.constexpr, OLLA_DN: tl.constexpr, PF_A: tl.constexpr, PF_B: tl.constexpr,
+        PF_RBG: tl.constexpr, PF_FREEZE: tl.constexpr, RETX_TDMA: tl.constexpr, AMC_PREV: tl.constexpr,
+        LENA_CTR: tl.constexpr):
     e = tl.program_id(0).to(tl.int64)
     ridx = tl.arange(0, RB)
     rm = ridx < R
@@ -584,6 +638,10 @@ def nr_step_kernel(
             u_hntx, u_hmcs, u_htbs, u_hnsb, u_hcomb, u_hlexp, u_hnrb, u_cap, u_qs, u_qe, u_lost, u_fin,
             ridx, rm, sidx, sm, pidx, pm, fidx, fm, S_, P, F)
         uref = tl.load(uref_ptr + o_rs, mask=m_rs, other=0.0)
+        if AMC_PREV:
+            u_s_lnp = tl.load(u_lnp + er, mask=rm, other=0.0)
+        else:
+            u_s_lnp = tl.zeros([RB], tl.float32)
         if PC:
             pc = tl.load(pc_ptr + er, mask=rm, other=0.0)
         else:
@@ -655,10 +713,11 @@ def nr_step_kernel(
             if dls != 0:
                 ub = mix32(base0 ^ salt(u32((3 << 16) | rel)))
                 ud = rng_uniform(ub, ridx)
-                (d_s_sent, d_s_olla, d_s_avg, d_s_bsr, d_s_srt, d_s_ltx, d_s_csi, d_s_hst, d_s_hlo, d_s_hhi,
+                (d_s_sent, d_s_olla, d_s_avg, d_s_bsr, d_s_srt, d_s_ltx, _lnp, d_s_csi, d_s_hst, d_s_hlo, d_s_hhi,
                  d_s_hrdy, d_s_hntx, d_s_hmcs, d_s_htbs, d_s_hnsb, d_s_hcomb, d_s_hlexp, d_s_hnrb, d_s_lost,
                  d_s_fin, d_cnt, d_hok, d_htx, d_hfl) = _mac_slot(
-                    d_s_sent, d_s_floor, d_s_olla, d_s_avg, d_s_bsr, d_s_srt, d_s_ltx, d_s_enq, d_s_csi, dref,
+                    d_s_sent, d_s_floor, d_s_olla, d_s_avg, d_s_bsr, d_s_srt, d_s_ltx, d_s_enq,
+                    tl.zeros([RB], tl.float32), d_s_csi, dref,
                     gain, tl.zeros([RB], tl.float32), d_s_hst, d_s_hlo, d_s_hhi, d_s_hrdy, d_s_hntx, d_s_hmcs,
                     d_s_htbs, d_s_hnsb, d_s_hcomb, d_s_hlexp, d_s_hnrb, d_s_cap, d_s_qs, d_s_qe, d_s_lost, d_s_fin,
                     d_cnt, d_hok, d_htx, d_hfl,
@@ -668,7 +727,8 @@ def nr_step_kernel(
                     d_tbs, d_cbs, d_ncb, d_bg, d_ci0, d_cwi, S0, DS, C0, DC,
                     1, S_, SB, M, MB, C, G, NL, EQW, NPRB, MODE, COMB, SCHED, WIDEBAND, HARQ_DROP, OLLA,
                     PHR_CAP, WHOLE_BAND, False, STEP, RETX_PRIO, MCS_MAX_DL, MAX_TX, TARGET, TB_OH, SR_DELAY,
-                    UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B)
+                    UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B,
+                    PF_RBG, PF_FREEZE, False, False, LENA_CTR)
         if UL:
             if GATE:
                 if (srf != 0) | (uls != 0):
@@ -679,10 +739,11 @@ def nr_step_kernel(
             if uls != 0:
                 ub = mix32(base0 ^ salt(u32((2 << 16) | rel)))
                 uu = rng_uniform(ub, ridx)
-                (u_s_sent, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_csi, u_s_hst, u_s_hlo, u_s_hhi,
+                (u_s_sent, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_lnp, u_s_csi, u_s_hst, u_s_hlo, u_s_hhi,
                  u_s_hrdy, u_s_hntx, u_s_hmcs, u_s_htbs, u_s_hnsb, u_s_hcomb, u_s_hlexp, u_s_hnrb, u_s_lost,
                  u_s_fin, u_cnt, u_hok, u_htx, u_hfl) = _mac_slot(
-                    u_s_sent, u_s_floor, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_enq, u_s_csi, uref,
+                    u_s_sent, u_s_floor, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_enq, u_s_lnp, u_s_csi,
+                    uref,
                     gain, pc, u_s_hst, u_s_hlo, u_s_hhi, u_s_hrdy, u_s_hntx, u_s_hmcs,
                     u_s_htbs, u_s_hnsb, u_s_hcomb, u_s_hlexp, u_s_hnrb, u_s_cap, u_s_qs, u_s_qe, u_s_lost, u_s_fin,
                     u_cnt, u_hok, u_htx, u_hfl,
@@ -692,7 +753,8 @@ def nr_step_kernel(
                     u_tbs, u_cbs, u_ncb, u_bg, u_ci0, u_cwi, S0, DS, C0, DC,
                     0, S_, SB, M, MB, C, G, NL, EQW, NPRB, MODE, COMB, SCHED, WIDEBAND, HARQ_DROP, OLLA,
                     PHR_CAP, WHOLE_BAND, PC, STEP, RETX_PRIO, MCS_MAX_UL, MAX_TX, TARGET, TB_OH, SR_DELAY,
-                    UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B)
+                    UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B,
+                    PF_RBG, PF_FREEZE, RETX_TDMA, AMC_PREV, LENA_CTR)
     if FADING and STORE_H:
         tl.store(h_ptr + o_h, hr, mask=m_rs)
         tl.store(h_ptr + o_h + 1, hi, mask=m_rs)
@@ -703,6 +765,8 @@ def nr_step_kernel(
                  u_s_sent, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_csi, u_s_hst, u_s_hlo, u_s_hhi,
                  u_s_hrdy, u_s_hntx, u_s_hmcs, u_s_htbs, u_s_hnsb, u_s_hcomb, u_s_hlexp, u_s_hnrb, u_s_lost,
                  u_s_fin, ridx, rm, sidx, sm, pidx, pm, fidx, fm, S_, P, F)
+        if AMC_PREV:
+            tl.store(u_lnp + er, u_s_lnp, mask=rm)
         tl.store(acc_ptr + ao + hidx, u_cnt)
         tl.store(acc_ptr + ao + HB + hidx, u_hok)
         tl.store(acc_ptr + ao + 2 * HB + hidx, u_htx)
@@ -721,6 +785,7 @@ def nr_step_kernel(
 
 CTR_NAMES = ("tb_new", "tb_retx", "tb_ok", "tb_fail", "exhaust", "bytes_ok", "bytes_new", "lost_frames",
              "new_while_pending", "prb_used")
+LENA_CTR_NAMES = ("tb_bytes", "tb_empty", "retx_block")     # accumulator slots 10-12 when the link has them
 LINK_PTRS = ("sent", "floor", "olla", "avg", "bsr", "sr_t", "last_tx", "q.enq", "csi", "h_state", "h_lo", "h_hi",
              "h_ready", "h_ntx", "h_mcs", "h_tbs", "h_nsb", "h_comb", "h_lexp", "h_nrb", "q.cap", "q.start",
              "q.end", "q.lost", "q.fin")
@@ -752,7 +817,7 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
     for ul_p, dl_p in passes:
         const = dict(eng._const, UL=ul_p and UL_on, DL=dl_p and DL_on, STORE_H=ul_p or not UL_on)
         eng._kernel = nr_step_kernel[(E,)](
-            *_link_args(U), *_link_args(D),
+            *_link_args(U), getattr(U, "last_nprb", U.avg), *_link_args(D),
             net.h, uref if uref is not None else dref, dref if dref is not None else dummy,
             pc if pc is not None else dummy, eng._tdev, net.rng.env, net.rng.episode, net.rng.ctr[STEP], net.rng.s0, eng._chs,
             *(gate if gate is not None else (dummy, dummy, dummy)), gate[0].shape[-1] if gate is not None else 1,

@@ -21,6 +21,7 @@ Each preset returns an `NRConfig` and takes keyword overrides, for example `nets
 | `netslot_compat()` | the geometry and timing of the legacy slot-level model with the 3GPP PHY: one HARQ process, 50 PRBs in 5 subbands of 10, `DDDSU` |
 | `lena_like()` (alias `lena_match`) | the ns-3 5G-LENA reference scenario as far as the model allows; needs the locally generated 5G-LENA BLER tables |
 | `lena_validation()` | `lena_like()` in the geometry of the 5G-LENA validation sweep (fading off, whole-band UE power, per-UE link budgets) |
+| `lena_match_v2()`, `lena_validation_v2()` | the same two with 5G-LENA's MAC behavior under load (per-RBG PF, TDMA UL retransmissions, the SR / BSR grant pipeline and the RLC tail stall; [load gap](../fidelity-load-gap.md)), which matches 5G-LENA in loaded cells too |
 | `srsran_like()`, `oai_like()` | uplink latency fitted to public srsRAN and OAI measurements (see [Public-data calibration](../calibration-public-data.md)) |
 | `multicell(n)` | a hexagonal cluster of `n` cells at 100 m spacing, thermal noise, same-slot interference, uplink power control and A3 handover; runs on `L2` (up to 7 cells) and on `L2-legacy` |
 

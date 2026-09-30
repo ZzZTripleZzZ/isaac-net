@@ -13,6 +13,7 @@ Over the 153 runs of the primary (no-fading) arm, with the SR-to-grant delay fit
 - **Where it fails.** The gap is concentrated in loaded cells. In runs where 5G-LENA drops 1–20% of frames (moderate) the engine's p50 is 27% low and it drops 4.1 pp fewer frames, and in saturated runs (5G-LENA drop ≥ 20%) the p50 is 35% low and the drop rate 6.9 pp low. The engine is optimistic in both cases.
 - **KS distance.** The median KS distance is 0.28 against an engine replica-to-replica floor of 0.007, so the two delay distributions remain statistically distinguishable even where quantiles agree to a few percent (see the KS note under Caveats).
 - **Legacy engine.** The slot-level engine that the scale results use (`L2-legacy`) has a median p95 error of −19% (absolute 36%) and a KS distance of 0.50 on the same runs, and in saturated runs it drops 32 pp fewer frames than 5G-LENA. The NR engine is the better LENA match on every delay metric and on saturation.
+- **v2 (`lena_validation_v2()`).** With 5G-LENA's MAC behavior under load in the engine (per-RBG PF with frozen averages, TDMA UL retransmissions, the SR / BSR grant pipeline with the RLC tail stall, previous-PUSCH AMC; [fidelity-load-gap.md](fidelity-load-gap.md)) and no fitted parameter, the median p50 error is −1.2% in moderate and −0.1% in saturated cells (was −27% and −34%), light load stays at −0.2%, the drop gap in loaded cells shrinks to −1.4 and −1.7 pp, and over the sweep the median KS distance falls from 0.28 to 0.17 and the median absolute p95 error from 8.6% to 3.5%. See [v2](#v2-5g-lena-mac-behavior-under-load).
 - **Speed.** The NR engine's reference backend is not faster than 5G-LENA for one small cell: 0.47–0.81 s of wall time per simulated second on one CPU thread (E = 1) against 0.015–0.93 s for 5G-LENA, with break-even at N = 64. Batching 16 envs on one thread brings it to 0.03–0.17 s per env-second.
 
 ## Method
@@ -27,7 +28,7 @@ For every run the NR engine receives:
 - **the same traffic, frame by frame**: the exact list of (UE, 100 ms instant, S) of every frame the 5G-LENA run generated, read from the run's `frames.csv`, rather than a fresh Bernoulli draw with the same p. The engine therefore offers the same frames as 5G-LENA in every run, and all remaining differences come from the network models;
 - **the same duration**: 300 traffic steps (0.5–30.5 s) plus 2.2 s of drain, the 5G-LENA simulation end.
 
-The configuration is `lena_validation()` (the `lena_match` preset in the validation geometry, [validation-5g-lena.md](validation-5g-lena.md) lists every switch) on the `reference` backend, which is the only backend of the NR engine. The runs execute on CPU (2 threads per process, 8 processes, on the shared lab box). Each run is replayed with 4 engine replicas that differ only in the engine's random draws (TB decoding). The torch seed depends on N only, so every ablation arm sees the same random stream (common random numbers) and arm-to-arm differences are not sampling noise. The 5G-LENA side is one ns-3 run per seed.
+The configuration is `lena_validation()` (the `lena_match` preset in the validation geometry, [validation-5g-lena.md](validation-5g-lena.md) lists every switch) on the `reference` backend (the only backend of the NR engine when the study ran; the graph backend added since is bitwise equal to it). The runs execute on CPU (2 threads per process, 8 processes, on the shared lab box). Each run is replayed with 4 engine replicas that differ only in the engine's random draws (TB decoding). The torch seed depends on N only, so every ablation arm sees the same random stream (common random numbers) and arm-to-arm differences are not sampling noise. The 5G-LENA side is one ns-3 run per seed.
 
 ### What is measured
 
@@ -171,7 +172,35 @@ Attribution, in order of effect:
 4. **UE power split** (`allocated` instead of whole-band power) lowers per-RB SINR for multi-RBG grants, which moves the p50 closer and the tail further away, and with the power-headroom cap the p95 error doubles to −16%.
 5. **Power-headroom cap alone and 16 vs 1 HARQ processes are inert in this geometry**, and bit-identical to the primary arm on every run. The PHR cap only acts on the `allocated` power path (the whole-band path grants every RBG). With DDDSU at μ = 1, the UL HARQ round trip (3 slots) is shorter than the UL-slot spacing (5 slots) and retransmissions take priority, so a UE never has a second TB in flight and additional HARQ processes are never used.
 
-The remaining post-fit gap is not attributable to any of these switches. From the traces its main candidates are 5G-LENA's grant overhead and its AMC failure mode, described above.
+The remaining post-fit gap is not attributable to any of these switches. From the traces its main candidates are 5G-LENA's grant overhead and its AMC failure mode, described above. The follow-up study [fidelity-load-gap.md](fidelity-load-gap.md) traced the loaded-cell gap to 5G-LENA's scheduler and grant pipeline, which the next section adds to the engine.
+
+### v2: 5G-LENA MAC behavior under load
+
+`lena_validation_v2()` is `lena_validation()` with the MAC switches of the load-gap study on (`pf_update="rbg"`, `pf_avg_idle="freeze"`, `ul_retx_sched="tdma"`, `ul_amc_alloc="previous"`, `ul_grant_model="bsr"`, `tb_overhead_bytes=8`). It has **no fitted parameter**: the grant pipeline and the RLC tail stall replace the fitted 40-slot SR-to-grant delay, which v2 does not read, and every pipeline value is 5G-LENA's own. `lena_validation()` stays as it was, so the tables above remain reproducible. The replay is the same (153 runs, 4 replicas, reference backend on CPU) with the engine RNG, the engine's default since the fast backends; `primary_eng` is `lena_validation()` on that RNG, so the two arms differ only in the switches. With `rng="global"` the v2 arm reproduces the load-gap prototype's `all` arm bitwise on every run.
+
+Sweep level, medians over runs:
+
+| Arm | KS | W1 ms | p50 err | \|p50\| | p95 err | \|p95\| | p95 \|err\| 90th pct | Drop Δ | \|drop Δ\| 90th pct | \|goodput\| | BLER Δ | PRB err |
+|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| primary (global RNG, the tables above) | 0.278 | 12.8 | -7.2% | 9.7% | -7.8% | 9.2% | 36% | -0.63 pp | 8.1 pp | 0.6% | +0.12 pp | -9.7% |
+| primary_eng | 0.279 | 12.9 | -6.2% | 9.7% | -7.0% | 8.6% | 35% | -0.63 pp | 8.1 pp | 0.6% | +0.09 pp | -9.6% |
+| v2 | 0.169 | 7.4 | -0.2% | 3.4% | -1.2% | 3.5% | 19% | 0.00 pp | 3.3 pp | 0.5% | +0.47 pp | -3.4% |
+
+By load regime:
+
+| Arm | Regime | Runs | p50 err | \|p50\| | p95 err | \|p95\| | Drop Δ pp | \|goodput\| | PRB err | TB ratio | KS | W1 ms |
+|:---|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| primary_eng | light | 79 | -0.2% | 4.2% | -9.2% | 9.5% | +0.00 | 0.0% | -13.4% | 0.71 | 0.256 | 3.5 |
+| primary_eng | moderate | 36 | -26.9% | 26.9% | -15.4% | 16.9% | -4.05 | 4.4% | -5.4% | 0.38 | 0.316 | 66.8 |
+| primary_eng | saturated | 38 | -33.7% | 34.8% | -3.3% | 4.2% | -6.84 | 11.8% | +0.0% | 0.23 | 0.380 | 135.2 |
+| v2 | light | 79 | -0.2% | 2.5% | -2.5% | 3.5% | +0.00 | 0.0% | -3.2% | 1.02 | 0.245 | 2.0 |
+| v2 | moderate | 36 | -1.2% | 4.8% | -6.1% | 8.7% | -1.42 | 1.7% | -4.9% | 1.00 | 0.128 | 17.4 |
+| v2 | saturated | 38 | -0.1% | 4.4% | +0.1% | 1.4% | -1.70 | 3.9% | -3.0% | 0.97 | 0.088 | 30.3 |
+| v2 | light, seed 2 | 34 | -0.2% | 0.2% | -1.2% | 2.9% | +0.00 | 0.0% | -2.4% | 1.05 | 0.259 | 1.0 |
+| v2 | moderate, seed 2 | 8 | -1.1% | 9.0% | -0.4% | 18.3% | -1.57 | 1.7% | -2.3% | 1.04 | 0.129 | 40.9 |
+| v2 | saturated, seed 2 | 9 | -2.6% | 6.7% | +1.3% | 1.4% | -3.62 | 5.6% | -2.4% | 0.97 | 0.053 | 26.1 |
+
+v2 removes the loaded-cell delay bias and most of the drop bias, cuts the light-load PRB error from −13% to −3%, sends as many TBs as 5G-LENA, and lowers the KS distance in loaded cells from 0.32–0.38 to 0.09–0.13. Two things get slightly worse. The first-transmission BLER difference grows from +0.1 to +0.5 pp, and the median absolute light-load p50 error with the engine RNG is 2.5% instead of the prototype's 1.3% (the signed median is −0.2% in both). The drop rate stays 1.4–1.7 pp low in loaded cells; [fidelity-load-gap.md](fidelity-load-gap.md) lists the candidates. On CPU the v2 arm costs 1.11 times the wall time of `primary_eng`. v2 runs on the reference and graph backends; the triton backend does not implement the BSR grant pipeline yet and refuses the v2 presets.
 
 ### Legacy engine (`L2-legacy`)
 
@@ -226,7 +255,7 @@ The reference NR engine costs about 0.5 s per simulated second whatever N is, be
 
 ## Caveats
 
-- **The SR-to-grant value is a fitted proxy.** 40 slots is chosen on seeds 1 and 3 and holds on seed 2, but the measured SR-to-DCI delay is 4.5 ms (about 7 ms to PUSCH). The fit absorbs 5G-LENA grant-pipeline latency that the engine does not model. It is a calibration, not a model of the SR procedure, and it will not transfer to another scheduler or TDD pattern without refitting.
+- **The SR-to-grant value is a fitted proxy.** 40 slots is chosen on seeds 1 and 3 and holds on seed 2, but the measured SR-to-DCI delay is 4.5 ms (about 7 ms to PUSCH). The fit absorbs 5G-LENA grant-pipeline latency that the engine does not model. It is a calibration, not a model of the SR procedure, and it will not transfer to another scheduler or TDD pattern without refitting. `lena_validation_v2()` models the pipeline instead and has no fitted value.
 - **Per-frame agreement is only statistical.** 5G-LENA's sample path depends on the process heap layout ([bridges.md](bridges.md), "5G-LENA is sensitive to heap layout"): a different argv length changes the run from the first few steps on. The engine cannot reproduce 5G-LENA frame by frame, and this page compares distributions and quantiles, never individual frames. It also means one 5G-LENA run per seed carries sampling noise of its own that this study cannot measure, and the replica floor covers only the engine's noise.
 - **Fading is off in the reference.** The primary arm is a frequency-flat channel with whole-band UE power, because stock 5G-LENA's uplink AMC fails with frequency selectivity (70% median drop in the fading arm). The comparison validates the MAC, HARQ, RLC and PHY abstraction on a flat channel. It says nothing about the engine's fading model.
 - **Coverage.** The validation drop redraws any UE below 7 dB `snr1_db` (about 5% at N = 64), so every validated UE is above 5G-LENA's MCS-0 point. The example fleet task uses a 150 m arena with the gNB at the corner, and by the Monte Carlo in `coverage_check.py`, 24% of positions there are below 7 dB with thermal noise and 73% with the legacy −90 dBm noise-plus-interference floor (6% in the 100 m validation arena). In that arena, 5G-LENA delivers only 0–4% of what the slot-level engine delivers in closed loop, with a mean UL SINR of about −19 dB ([bridges.md](bridges.md)), and 0 of 820 frames for a random 8-UE drop in the example task's link budget. The engines are optimistic below the MCS-0 point, since they keep scheduling with OLLA and a power-headroom rule where stock 5G-LENA sends MCS-0 TBs that fail. This study does not validate that region. A task run in the 150 m arena operates mostly outside the validated range, and its results should not be presented as 5G-LENA-equivalent.
@@ -252,6 +281,9 @@ python $REPO/benchmarks/fidelity/compare.py data_fade replay_fade results fade_
 python $REPO/benchmarks/fidelity/timing.py <ns3ref>/timing.csv results/timing_nr.csv cpu 1 1
 python $REPO/benchmarks/fidelity/timing.py <ns3ref>/timing.csv results/timing_nr.csv cpu 16 1
 python $REPO/benchmarks/fidelity/report.py results                               # the tables on this page
+bash $REPO/benchmarks/fidelity/loadfix/run_v2.sh  # v2, v2_global, primary_eng (about 15 min, CPU)
+python $REPO/benchmarks/fidelity/compare.py data replay results
+python $REPO/benchmarks/fidelity/loadfix/report_loadfix.py results results/loadfix_v2       # the v2 tables
 ```
 
 `compare.py` copies nothing, so `lena_runs.csv`, `lena_per_ue.csv`, `lena_sr_dci.csv` (and their `_fade` versions) and the 5G-LENA `timing.csv` (as `timing_lena.csv`) are copied into `results/` by hand. The per-frame `.npz` files (about 38 MB for the 5G-LENA side and all replays) stay on the lab box under `/home/zzhang66/experiments/lenafid/`.
@@ -270,3 +302,4 @@ python $REPO/benchmarks/fidelity/report.py results                              
 | `lena_runs.csv`, `lena_per_ue.csv`, `lena_sr_dci.csv`, `*_fade.csv` | the 5G-LENA side as extracted (per-UE HARQ counts with the corrected RNTI map, SR-to-DCI delays) |
 | `timing_lena.csv`, `timing_nr.csv` | speed measurements |
 | `replay_groups.txt` | wall time of every replay job, with its overrides |
+| `loadfix_v2/` | the v2 section: `per_run_` and `summary_` of `v2`, `v2_global`, `primary_eng`, their `ablation.csv` rows and `arms_by_regime.csv` |

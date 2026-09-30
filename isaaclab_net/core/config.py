@@ -65,6 +65,8 @@ FIELD_GROUPS = {
            "n_harq", "max_harq_tx", "harq_combining", "harq_fail", "rlc_retx_slots", "discard", "mcs_table",
            "eff_sinr", "bler_source", "tbs_mode", "lena_ref_sc_per_rb", "bler_target", "ul_mcs_max", "dl_mcs_max",
            "olla", "olla_up_db", "scheduler", "pf_metric", "pf_window", "retx_priority", "ul_power", "phr_cap",
+           "pf_update", "pf_avg_idle", "ul_retx_sched", "ul_amc_alloc", "ul_grant_model", "sr_boot_slots",
+           "sr_boot_bytes", "bsr_delay_slots", "bsr_hdr_bytes", "bsr_est_hdr_bytes", "rlc_tail_bytes", "rlc_tail_timer_ms",
            "phr_min_db", "fading", "fading_rho_per_ms", "ue_speed_mps", "carrier_ghz", "fading_doppler",
            "doppler_min_speed_mps", "dl_snr_offset_db",
            "gnb_tx_dbm", "ue_nf_db", "tb_overhead_bytes", "pkt_payload_bytes", "pkt_overhead_bytes", "ul", "dl"),
@@ -83,6 +85,13 @@ FIELD_GROUPS = {
     "fidelity": ("fidelity",),     # read by core/adaptive.py (make_adaptive), not by make_engine's levels
 }
 
+# fields read only by ul_grant_model="bsr" (the 5G-LENA grant pipeline of mac_ul.UlMac)
+BSR_PIPELINE_FIELDS = ("sr_boot_slots", "sr_boot_bytes", "bsr_delay_slots", "bsr_hdr_bytes", "bsr_est_hdr_bytes",
+                       "rlc_tail_bytes", "rlc_tail_timer_ms")
+# the 5G-LENA MAC switches and their default (engine before the switches) values
+LENA_MAC_DEFAULTS = {"pf_update": "slot", "pf_avg_idle": "decay", "ul_retx_sched": "ofdma", "ul_amc_alloc": "current",
+                     "ul_grant_model": "lumped"}
+
 CHANNELS = ("log_distance", "tr38901", "radio_map")
 # channel="tr38901_<scenario>" is shorthand for channel="tr38901", tr38901_scenario=<scenario>
 TR38901_SHORT = {"tr38901_rma": "RMa", "tr38901_uma": "UMa", "tr38901_umi": "UMi", "tr38901_inh": "InH",
@@ -100,6 +109,9 @@ def fields_read_by(level, cfg=None):
     read = {f for g in groups for f in FIELD_GROUPS[g]} | set(FIELD_GROUPS["wrappers"])
     if level == "L2":
         read.add("rng")                # engine RNG of the NR engine (nr_rng.py)
+        if cfg is not None:            # the UL grant model reads either the lumped SR delay or the BSR pipeline
+            read -= set(BSR_PIPELINE_FIELDS) if cfg.ul_grant_model == "lumped" else {"sr_grant_delay_slots",
+                                                                                     "proactive_grant"}
     if cfg is not None and cfg.traffic is not None and not any(m.generates for m in cfg.traffic):
         read.add("traffic")            # policy() only: the submit() path every level has
     return read
@@ -233,6 +245,27 @@ class NRConfig:
     pf_metric: str = "subband"           # "subband" (frequency-selective) or "wideband" (5G-LENA OFDMA PF)
     pf_window: float = 100.0             # EWMA window in scheduled slots of that direction
     retx_priority: bool = True
+    # ---- 5G-LENA MAC behavior under load (docs/fidelity-load-gap.md); defaults = the engine before these switches ----
+    pf_update: str = "slot"              # "slot": PF metric fixed within a slot, average updated with the served
+                                         # bytes; "rbg": 5G-LENA OFDMA PF, the winner's average is updated with its
+                                         # granted bytes after every RBG (RBGs spread over backlogged UEs)
+    pf_avg_idle: str = "decay"           # "decay": every UE's PF average moves every data slot; "freeze": only UEs
+                                         # with new data to schedule update it (5G-LENA active list)
+    ul_retx_sched: str = "ofdma"         # "ofdma": UL retx share the slot with new data; "tdma": one UL retx per
+                                         # slot (oldest NACK first) on every data symbol, nothing else in its slot
+    ul_amc_alloc: str = "current"        # UL MCS for the PRBs of the current grant, or "previous": for the PRBs
+                                         # of the UE's previous PUSCH (5G-LENA NrAmc), TB sized for the current one
+    ul_grant_model: str = "lumped"       # "lumped": SR -> grant after sr_grant_delay_slots, BSR = exact buffer;
+                                         # "bsr": 5G-LENA pipeline (SR bootstrap grant, 38.321 short-BSR levels
+                                         # rounded up with a report delay, padded over-grants, RLC tail stall);
+                                         # makes sr_grant_delay_slots and proactive_grant unused
+    sr_boot_slots: int = 6               # bsr: SR -> first PUSCH slot the bootstrap grant may use
+    sr_boot_bytes: int = 17              # bsr: bootstrap grant after an SR (5G-LENA srGrantSize 12 + 2 RLC + 3 MAC)
+    bsr_delay_slots: int = 10            # bsr: PUSCH carrying a BSR -> first PUSCH scheduled with it (2 UL slots)
+    bsr_hdr_bytes: int = 8               # bsr: UE adds short BSR (5) + MAC subheader (3) to the reported buffer
+    bsr_est_hdr_bytes: int = 5           # bsr: scheduler adds RLC (2) + MAC subheader (3) to the reported buffer
+    rlc_tail_bytes: int = 16             # bsr: RLC header residue the draining TB leaves behind (0 = no tail stall)
+    rlc_tail_timer_ms: float = 10.0      # bsr: RLC buffer-status timer that reports the residue
     # ---- radio model inside the engine ----
     snr_ref_prbs: int = 10               # input UL SNR = full UE power over this many PRBs
     ul_power: str = "allocated"          # "allocated": UE power split over its grant; "whole_band": fixed PSD
@@ -353,6 +386,12 @@ class NRConfig:
         assert not (self.harq_combining == "ir_lena" and self.eff_sinr != "eesm")
         assert self.ul_power in ("allocated", "whole_band")
         assert self.proactive_grant in ("off", "every_ul_slot", "per_period")
+        assert self.pf_update in ("slot", "rbg") and self.pf_avg_idle in ("decay", "freeze")
+        assert self.pf_update == "slot" or self.scheduler in ("pf", "pf_wideband"), "pf_update='rbg' needs a PF scheduler"
+        assert self.ul_retx_sched in ("ofdma", "tdma") and self.ul_amc_alloc in ("current", "previous")
+        assert self.ul_grant_model in ("lumped", "bsr")
+        assert self.sr_boot_slots >= 1 and self.bsr_delay_slots >= 1 and self.sr_boot_bytes >= 1
+        assert self.rlc_tail_bytes >= 0 and self.rlc_tail_timer_ms > 0
         assert self.mcs_table in (1, 2) and self.n_harq >= 1 and self.max_harq_tx >= 1
         assert sum(self.special_split) == 14
         assert self.cell_layout in ("hex", "grid", "custom") and self.ho_rlc in ("carry", "flush")
@@ -481,6 +520,15 @@ class NRConfig:
     def sr_delay(self):
         """Slots from a scheduling request to the first PUSCH: sr_grant_delay_slots, default gnb_proc_slots + k2."""
         return self.sr_grant_delay_slots if self.sr_grant_delay_slots is not None else self.gnb_proc_slots + self.k2
+
+    @property
+    def rlc_tail_timer_slots(self):
+        """ul_grant_model="bsr": RLC buffer-status timer rlc_tail_timer_ms in slots (at least one)."""
+        return max(1, int(round(self.rlc_tail_timer_ms / self.slot_ms)))
+
+    def lena_mac_switches(self):
+        """The 5G-LENA MAC switches (LENA_MAC_DEFAULTS) set away from their defaults, {field: value}."""
+        return {k: getattr(self, k) for k, v in LENA_MAC_DEFAULTS.items() if getattr(self, k) != v}
 
     @property
     def ul_rtt(self):
@@ -667,3 +715,28 @@ def lena_validation(**kw):
     base = dict(fading=False, ul_power="whole_band", gnb_nf_db=6.99697, frame_buffer=128, sr_grant_delay_slots=40)
     base.update(kw)
     return lena_like(**base)
+
+
+# 5G-LENA MAC behavior under load (docs/fidelity-load-gap.md): per-RBG PF averages frozen while idle, TDMA UL
+# retransmissions, UL MCS for the previous PUSCH's PRBs, the SR/BSR grant pipeline with the RLC tail stall, 8 bytes of
+# MAC overhead per TB (3 B subheader + 5 B short BSR). No fitted parameter: every value is 5G-LENA's own.
+LENA_MAC_V2 = dict(pf_update="rbg", pf_avg_idle="freeze", ul_retx_sched="tdma", ul_amc_alloc="previous",
+                   ul_grant_model="bsr", tb_overhead_bytes=8)
+
+
+def lena_match_v2(**kw):
+    """lena_like() (= lena_match) with the 5G-LENA MAC behavior under load (LENA_MAC_V2): the version that also
+    matches 5G-LENA in loaded cells. lena_match / lena_like stay as they were, so earlier results stay reproducible.
+    The lumped SR-to-grant delay (sr_grant_delay_slots, proactive_grant) is replaced by the grant pipeline."""
+    base = dict(LENA_MAC_V2)
+    base.update(kw)
+    return lena_like(**base)
+
+
+def lena_validation_v2(**kw):
+    """lena_validation() geometry (fading off, whole-band UE power, NF 7 dB, 128-frame buffers) on lena_match_v2().
+    The fitted 40-slot SR-to-grant delay of lena_validation() is not used: the grant pipeline and the RLC tail stall
+    model what it stood in for (fidelity-vs-lena.md, "v2")."""
+    base = dict(fading=False, ul_power="whole_band", gnb_nf_db=6.99697, frame_buffer=128)
+    base.update(kw)
+    return lena_match_v2(**base)

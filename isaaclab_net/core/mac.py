@@ -22,6 +22,14 @@ rate with pf_metric="wideband"), "pf_wideband" the same with the wideband rate, 
 round robin (the robot whose last transmission is oldest first, channel-blind). Every scheduler keeps the same
 retransmission admission and the same greedy RBG-by-RBG filling up to the need or the power-headroom cap.
 
+5G-LENA MAC behavior under load (docs/fidelity-load-gap.md; defaults reproduce the engine before them bitwise):
+pf_update="rbg" updates the RBG winner's PF average with its granted bytes after every RBG (5G-LENA OFDMA PF, so RBGs
+spread over backlogged robots) and pf_avg_idle="freeze" moves the average only for robots with new data to schedule
+(both links); ul_retx_sched="tdma" sends one UL retransmission per slot and cell, oldest NACK first, alone in its slot;
+ul_amc_alloc="previous" picks the UL MCS for the PRB count of the robot's previous PUSCH and sizes the TB for the
+current grant; ul_grant_model="bsr" (mac_ul.py) replaces the lumped SR delay by the SR / BSR pipeline, whose payload
+rule enters through _tb_payload.
+
 Time: g (slot) and frac (completion time) are Python numbers in the reference, or 0-dim device tensors (long,
 float64) when the graph backend captures the step (nr_fast.py); gh is always the host slot index, used only for
 decisions that are fixed by the TDD pattern. Random draws: torch.rand_like (cfg.rng="global") or the engine's
@@ -37,6 +45,7 @@ from .phy import PHY
 from .queues import FrameQueue, env_mask, onehot, reset_where
 
 BIG = 2 ** 62
+BSR_DEPTH = 4              # ul_grant_model="bsr": buffer status reports in flight per robot ("K" state dims)
 
 
 class MacLink:
@@ -79,12 +88,16 @@ class MacLink:
         self.rng = None            # nr_rng.NRRng (cfg.rng="engine"; set by NRNet)
         self._bler_site = BLER[self.dir]
         self._w_sum = float(self.sb_prb.sum())
-        dims = {"P": self.P, "S": self.S}
+        dims = {"P": self.P, "S": self.S, "K": BSR_DEPTH}
         for n, (ex, dt, v) in self.STATE.items():
             setattr(self, n, torch.full((E, R) + tuple(dims[k] for k in ex), v, dtype=dt, device=device))
         self.ctr = {k: torch.zeros((), device=device) for k in
                     ("tb_new", "tb_retx", "tb_ok", "tb_fail", "exhaust", "bytes_ok", "bytes_new", "lost_frames",
                      "new_while_pending", "prb_used", "prb_avail")}
+        self._lena_mac = bool(cfg.lena_mac_switches())   # 5G-LENA MAC switches on: grant accounting counters
+        if self._lena_mac:
+            for k in ("tb_bytes", "tb_empty", "retx_block"):
+                self.ctr[k] = torch.zeros((), device=device)
         self.ntx_hist = torch.zeros(cfg.max_harq_tx + 1, device=device)   # transmissions per decoded TB
         self.rv_tx = torch.zeros(E, cfg.max_harq_tx + 1, device=device)   # per env: TBs sent as transmission k
         self.rv_fail = torch.zeros(E, cfg.max_harq_tx + 1, device=device) # of which failed
@@ -134,7 +147,11 @@ class MacLink:
         """(state after ACK, ready slot after ACK, ready slot after NACK)."""
         raise NotImplementedError
 
-    def _post_slot(self, tx, gain_now):
+    def _tb_payload(self, cap_b, unsent, tx_new, g):
+        """Stream bytes a new TB of capacity cap_b carries (ul_grant_model="bsr" holds back the RLC tail)."""
+        return torch.minimum(cap_b, unsent)
+
+    def _post_slot(self, tx, gain_now, g=None, tx_new=None, tbs_new=None):
         pass
 
     # ---------------- one data slot ----------------
@@ -184,9 +201,29 @@ class MacLink:
             metric_sb = rate_sb / self.avg[..., None]
         # retransmission admission: rank pending retx per cell (PF metric) and admit them while their
         # RBG counts fit the carrier, so no retx is left with a partial (unusable) allocation
-        rkey = torch.where(has_rx, metric_sb.sum(-1), torch.full_like(metric_sb[..., 0], -1.0))
         M = self.member
-        if M is None:
+        tdma = self.dir == "ul" and cfg.ul_retx_sched == "tdma"
+        rkey = None if tdma else torch.where(has_rx, metric_sb.sum(-1), torch.full_like(metric_sb[..., 0], -1.0))
+        if tdma:
+            # 5G-LENA UL HARQ (NrMacSchedulerHarqRr::ScheduleUlHarq): one retransmission per slot and cell, the
+            # oldest NACK first, on every data symbol, so no new data is scheduled in that slot
+            rdy = torch.where(has_rx, self.h_ready.gather(-1, rx_p[..., None]).squeeze(-1), torch.full_like(rx_nsb, BIG))
+            if M is None:
+                first = rdy.argmin(-1)
+                admitted = onehot(first, R) & has_rx.any(-1, keepdim=True) & has_rx
+                block = admitted.any(-1, keepdim=True)
+                n_block = (block[:, 0] & (rx_nsb * admitted).sum(-1).lt(S)).sum()
+            else:
+                rx_c = has_rx[:, None, :] & M
+                first = torch.where(M, rdy[:, None, :], torch.full_like(M, BIG, dtype=rdy.dtype)).argmin(-1)
+                adm_c = onehot(first, R) & rx_c
+                admitted = adm_c.any(1)
+                blk_c = adm_c.any(-1)
+                block = (blk_c[..., None] & M).any(1)
+                n_block = (blk_c & (rx_nsb[:, None, :] * adm_c).sum(-1).lt(S)).sum()
+            new_el = new_el & ~block
+            self.ctr["retx_block"] += n_block
+        elif M is None:
             order = rkey.argsort(-1, descending=True)
             cum = (rx_nsb * has_rx).gather(-1, order).cumsum(-1)
             adm_sorted = has_rx.gather(-1, order) & (cum <= S)
@@ -205,9 +242,15 @@ class MacLink:
         cnt = torch.zeros(E, R, dtype=torch.long, device=d)
         left = need.float()
         cols = []
+        rbg_pf = cfg.pf_update == "rbg"
+        if rbg_pf:              # 5G-LENA OFDMA PF: the winner's average moves after every RBG, before the next
+            wwin = 1.0 / cfg.pf_window
+            base = (1 - wwin) * self.avg
+            got = torch.zeros(E, R, device=d)                  # bytes granted so far in this slot
         for s in range(S):
             want = (cnt < want_cnt) & (has_rx | (left > 0))
-            m = torch.where(want, metric_sb[..., s] + prio, torch.full_like(left, -1.0))
+            ms = rate_sb[..., s] / (base + wwin * got).clamp(min=1e-9) if rbg_pf else metric_sb[..., s]
+            m = torch.where(want, ms + prio, torch.full_like(left, -1.0))
             if M is None:
                 best, wi = m.max(-1)
                 oh = onehot(wi, R) & (best >= 0)[:, None]
@@ -216,6 +259,8 @@ class MacLink:
                 oh = (onehot(wi, R) & (best >= 0)[..., None]).any(1)
             cols.append(oh)
             cnt = cnt + oh.long()
+            if rbg_pf:
+                got = got + rate_sb[..., s] * oh
             left = left - rate_sb[..., s] * oh * ~has_rx
         won = torch.stack(cols, -1)
         n_sb = won.sum(-1)
@@ -226,10 +271,19 @@ class MacLink:
         # ---- link adaptation for new TBs ----
         est_tx = self._la_estimate(sinr_ref_db, n_prb, est)
         off = self.olla if cfg.olla else torch.zeros_like(self.olla)
-        mcs_new, tbs_new = phy.select_mcs(est_tx, won, off, n_prb, nsym, cfg.dmrs_re_per_prb,
-                                          cfg.overhead_re_per_prb, cfg.eff_sinr, w)
+        amc_prev = self.dir == "ul" and cfg.ul_amc_alloc == "previous"
+        if amc_prev:            # 5G-LENA UL AMC: MCS for the PRBs of the previous PUSCH, TB for this allocation
+            ref_prb = torch.where(self.last_nprb > 0, self.last_nprb, n_prb)
+            ref_won = torch.ones_like(won) if cfg.ul_power == "whole_band" else won
+            mcs_new, _ = phy.select_mcs(est_tx, ref_won, off, ref_prb, nsym, cfg.dmrs_re_per_prb,
+                                        cfg.overhead_re_per_prb, cfg.eff_sinr, w)
+            tbs_new = phy.tbs_all(n_prb, nsym, cfg.dmrs_re_per_prb, cfg.overhead_re_per_prb).gather(
+                -1, mcs_new[..., None]).squeeze(-1)
+        else:
+            mcs_new, tbs_new = phy.select_mcs(est_tx, won, off, n_prb, nsym, cfg.dmrs_re_per_prb,
+                                              cfg.overhead_re_per_prb, cfg.eff_sinr, w)
         cap_b = (tbs_new // 8 - cfg.tb_overhead_bytes).clamp(min=1)
-        byt_new = torch.minimum(cap_b, unsent)
+        byt_new = self._tb_payload(cap_b, unsent, tx_new, g)
         # ---- bind TBs to processes ----
         p_tx = torch.where(tx_rx, rx_p, p_new)
         ohp = onehot(p_tx, P) & tx[..., None]
@@ -301,14 +355,18 @@ class MacLink:
         if cfg.olla:
             self.olla = (self.olla + cfg.olla_up_db * ok - self.olla_dn * fail).clamp(-10, 10)
         served = (hi_tx - lo_tx) * ok
-        self._post_slot(tx, gain_now)
-        self._pf_update(g, served, tx, won)
+        self._post_slot(tx, gain_now, g, tx_new, tbs_new)
+        if amc_prev:
+            self.last_nprb = torch.where(tx, n_prb, self.last_nprb)
+        self._pf_update(g, served, tx, won, need, has_rx, tbs_new, tx_new)
         # ---- counters ----
         c = self.ctr
         c["tb_new"] += tx_new.sum(); c["tb_retx"] += tx_rx.sum(); c["tb_ok"] += ok.sum()
         c["tb_fail"] += fail.sum(); c["exhaust"] += exh.sum(); c["bytes_ok"] += served.sum()
         c["bytes_new"] += (byt_new * tx_new).sum(); c["new_while_pending"] += (tx_new & pending).sum()
         c["prb_used"] += (n_prb * tx).sum(); c["prb_avail"] += self._w_sum * E * self.n_cells
+        if self._lena_mac:
+            c["tb_bytes"] += ((tbs_new // 8) * tx_new).sum(); c["tb_empty"] += (tx_new & (byt_new == 0)).sum()
         ohk = onehot(ntx.clamp(max=cfg.max_harq_tx), cfg.max_harq_tx + 1)
         self.ntx_hist += (ohk & ok[..., None]).sum((0, 1))
         self.rv_tx += (ohk & tx[..., None]).sum(1)
@@ -320,12 +378,22 @@ class MacLink:
         done = (q.cap >= 0) & (q.end <= ack[..., None]) & ~q.lost & torch.isinf(q.fin)
         q.fin = torch.where(done, frac + cfg.proc_offset_ms / cfg.control_step_ms, q.fin)
 
-    def _pf_update(self, g, served, tx, won):
-        """Scheduler state after a data slot: PF average (EWMA of the served bytes of every robot) and, for round
-        robin, the slot of the last transmission. One step of its own so variants (per-RBG averages, freezing while
-        idle) plug in here; the graph backend captures whatever this method does."""
+    def _pf_update(self, g, served, tx, won, need=None, has_rx=None, tbs_new=None, tx_new=None):
+        """Scheduler state after a data slot: PF average and, for round robin, the slot of the last transmission.
+        pf_update="slot": EWMA of the served bytes of every robot; "rbg": of the granted TB bytes of new TBs (the
+        per-RBG updates of the slot, committed). pf_avg_idle="freeze": only robots with new data to schedule in this
+        slot (need > 0, no retransmission admitted) update their average (5G-LENA's active list)."""
         cfg = self.cfg
-        self.avg = (1 - 1 / cfg.pf_window) * self.avg + (1 / cfg.pf_window) * served
+        if cfg.pf_update == "slot" and cfg.pf_avg_idle == "decay":
+            self.avg = (1 - 1 / cfg.pf_window) * self.avg + (1 / cfg.pf_window) * served
+        else:
+            wwin = 1.0 / cfg.pf_window
+            upd = (tbs_new // 8).float() * tx_new if cfg.pf_update == "rbg" else served.float()
+            new_avg = (1 - wwin) * self.avg + wwin * upd
+            if cfg.pf_avg_idle == "freeze":
+                self.avg = torch.where((need > 0) & ~has_rx, new_avg, self.avg)
+            else:
+                self.avg = new_avg
         if cfg.scheduler == "rr":
             self.last_tx = torch.where(tx, g, self.last_tx)
 

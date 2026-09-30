@@ -1,6 +1,6 @@
 # Why the NR engine is optimistic under load, and a fix
 
-The formal comparison in [fidelity-vs-lena.md](fidelity-vs-lena.md) found that the NR engine (level `L2`, `lena_validation()`) matches 5G-LENA at light load but is optimistic once the cell is loaded: in runs where 5G-LENA drops 1–20% of frames (moderate) the engine's median delay is 27% low and it drops 4.1 percentage points fewer frames, and in saturated runs (5G-LENA drop ≥ 20%) the median delay is 35% low and the drop rate 6.9 pp low. This page attributes that gap mechanism by mechanism, from 5G-LENA's own MAC, RLC and PHY traces and from engine replays of the same 153 runs, and measures a prototype of each missing mechanism. The prototypes live in `isaaclab_net/core/nr_loadfix.py` as subclasses of the engine (`LoadFixNet`, `LoadFixUlMac`); with every switch off they are bitwise the engine. Every number below is in a CSV under `benchmarks/fidelity/results/loadfix/`.
+The formal comparison in [fidelity-vs-lena.md](fidelity-vs-lena.md) found that the NR engine (level `L2`, `lena_validation()`) matches 5G-LENA at light load but is optimistic once the cell is loaded: in runs where 5G-LENA drops 1–20% of frames (moderate) the engine's median delay is 27% low and it drops 4.1 percentage points fewer frames, and in saturated runs (5G-LENA drop ≥ 20%) the median delay is 35% low and the drop rate 6.9 pp low. This page attributes that gap mechanism by mechanism, from 5G-LENA's own MAC, RLC and PHY traces and from engine replays of the same 153 runs, and measures a prototype switch for each missing mechanism. All of them are now `NRConfig` switches of the engine itself, turned on together by the presets `lena_match_v2()` and `lena_validation_v2()`, with defaults that leave the engine bitwise unchanged ([Status](#status-in-the-engine-v2)). The tables below keep the prototype's switch names; the Status section maps them to the fields. Every number below is in a CSV under `benchmarks/fidelity/results/loadfix/` (the study) and `benchmarks/fidelity/results/loadfix_v2/` (the engine-integrated rerun).
 
 ## Summary
 
@@ -44,7 +44,7 @@ A single 30 KB frame of the N = 1 run `n1_s30000_f0.3_r1` shows the whole pipeli
 
 ## Mechanism by mechanism
 
-Each row is one switch of `LoadFixConfig`, replayed alone on all 153 runs (`arms_by_regime.csv`). Signed medians over runs; the |p50| column is the median absolute error.
+Each row is one prototype switch (Status maps it to its `NRConfig` field), replayed alone on all 153 runs (`arms_by_regime.csv`). Signed medians over runs; the |p50| column is the median absolute error.
 
 | Arm | Switch | Regime | p50 err | \|p50\| | p95 err | Drop Δ pp | PRB err | TB ratio | KS |
 |:---|:---|:---|---:|---:|---:|---:|---:|---:|---:|
@@ -182,15 +182,37 @@ Every switch pays for itself in the leave-one-out table. The frozen PF average i
 
 **Remaining gap.** The drop rate stays 1.4–1.7 pp low in loaded cells. Candidates, in order of the evidence: 5G-LENA's link-adaptation failure mode for a few edge UEs (about 1 pp of the moderate gap, see [fidelity-vs-lena.md](fidelity-vs-lena.md)), which the engine does not reproduce; the half-MCS disagreement of (b); and the SR re-sends of 5G-LENA while backlogged (2.7–12.9 SRs per frame), each of which re-arms a 17 B bootstrap owed until the next BSR, which the prototype ignores.
 
-## Phase 2: folding the prototype into the engine
+## Status: in the engine (v2)
 
-The fast-backend branch `feat/nrfast` owns `nr_engine.py`, `mac.py`, `mac_ul.py`, `mac_dl.py` and `phy.py` and had not merged into `main` when this study finished, so the prototype stays a subclass and the engine is unchanged. The patch after that merge:
+Every mechanism is an `NRConfig` field of the engine (`mac.py`, `mac_ul.py`). The defaults reproduce the engine before these switches bitwise, and the preset `lena_match_v2()` (the `lena_match` scenario) and its validation-geometry form `lena_validation_v2()` turn all of them on. `lena_match`, `lena_like` and `lena_validation` are unchanged, so the published fidelity numbers stay reproducible.
 
-1. **Config.** New `NRConfig` fields in the `nr` group, defaults reproducing today's engine bitwise: `pf_update = "slot" | "rbg"` (per-RBG average update with granted bytes), `pf_avg_idle = "decay" | "freeze"`, `ul_retx_sched = "ofdma" | "tdma"`, `amc_ref_alloc = "current" | "previous"`, `ul_grant_model = "lumped" | "bsr"` with `sr_boot_slots = 6`, `sr_boot_bytes = 17`, `bsr_delay_slots = 10`, `bsr_table = "38321_short"`, `rlc_tail_bytes = 16`, `rlc_tail_timer_slots = 20`. `ul_grant_model="bsr"` makes `sr_grant_delay_slots` and `proactive_grant` unused, which `unused_fields()` should report. A preset `lena_validation(pipeline=True)` (or `lena_validation_v2()`) sets all of them and `tb_overhead_bytes=8`; `lena_validation()` itself stays as it is so the published fidelity numbers stay reproducible.
-2. **`mac.py` `MacLink.slot`.** (i) Retransmission admission: under `tdma`, admit the retx with the smallest `h_ready` per env and clear `new_el` for that env. (ii) PF loop: keep `got` (bytes granted so far, `rate_sb` summed over won RBGs) and use `rate_sb[..., s] / ((1 − 1/w)·avg + (1/w)·got)` under `rbg`. (iii) Link adaptation: under `previous`, call `select_mcs` with `last_nprb` (fall back to `n_prb` when zero) and gather the TB size of the chosen MCS at `n_prb`. (iv) The payload of a new TB goes through a new hook `_tb_payload(cap_b, unsent, g, tx_new)` (default `min(cap_b, unsent)`), which `UlMac` overrides for the tail residue. (v) The PF average update: granted TB bytes under `rbg`, and under `freeze` only for UEs with `need > 0` and no retransmission. The copy in `nr_loadfix.LoadFixUlMac.slot` is exactly this code with the switches.
-3. **`mac_ul.py` `UlMac`.** Under `bsr`: new `STATE` entries (`est`, `boot`, `rep_v`/`rep_g` with a new dims key of depth 4, `hid`, `hid_until`, `enq_seen`, `armed`, `last_nprb`), `sr_step`, `_pre_slot`, `_need`, `_post_slot` and `compact` as in `LoadFixUlMac`; the BSR level table as a buffer. All state is `[E, R, ...]` with the existing partial reset, so `reset(env_ids)` needs no change beyond `STATE`.
-4. **Fast backends.** The graph backend captures `MacLink.slot`, so it follows once the new state is in `STATE` and the new branches are static Python conditions on the config (they are). The Triton kernel needs the per-RBG metric update in its RBG loop, the retx admission rule and the new state in its carried tensors; until then it should refuse the non-default values (`unused_fields` or an assertion).
-5. **Tests.** Move `tests/test_nr_loadfix.py` over to the engine: L1 becomes "defaults bitwise equal to the frozen engine" (the existing frozen copy in `tests/nr_frozen/` covers it), L2–L8 run against `NRNet` with the new fields, plus graph == reference with the switches on (`gpu`).
+| Prototype switch | `NRConfig` field | Links |
+|:---|:---|:---|
+| `pf_intra_slot` | `pf_update="rbg"` (default `"slot"`) | UL and DL, PF schedulers |
+| `pf_active_only` | `pf_avg_idle="freeze"` (default `"decay"`) | UL and DL |
+| `retx_tdma` | `ul_retx_sched="tdma"` (default `"ofdma"`) | UL, one retransmission per slot and cell |
+| `amc_prev_alloc` | `ul_amc_alloc="previous"` (default `"current"`) | UL |
+| `grant_pipeline` | `ul_grant_model="bsr"` (default `"lumped"`) with `sr_boot_slots` 6, `sr_boot_bytes` 17, `bsr_delay_slots` 10, `bsr_hdr_bytes` 8, `bsr_est_hdr_bytes` 5, `rlc_tail_bytes` 16, `rlc_tail_timer_ms` 10 | UL |
+| `tb_overhead_bytes=8` | `tb_overhead_bytes=8` (existing field; the v2 presets set it) | UL and DL |
+
+Under `ul_grant_model="bsr"` the fields `sr_grant_delay_slots` and `proactive_grant` are not read, and `unused_fields("L2")` reports them when they are set; under `"lumped"` it reports the pipeline fields instead. The extra per-robot state (`est`, `boot`, the four reports in flight `rep_v` / `rep_g`, `hid`, `hid_until`, `enq_seen`, `armed`, and `last_nprb` for the previous-PUSCH AMC) is part of `UlMac.STATE` only when its switch is on, so it has the fixed `[E, R, ...]` shape and the partial `reset(env_ids)` of every other MAC state. The switches work with several cells: TDMA admits one retransmission per cell and slot, and a handover hands the target the robot's quantized buffer while reports in flight are lost. With any switch on, the MAC counts granted TB bytes, empty grants and slots blocked by a TDMA retransmission (`counters()`: `tb_bytes`, `tb_empty`, `retx_block`). `core/nr_loadfix.py` is now a compatibility shim that maps the prototype's `LoadFixConfig` onto these fields for the study's scripts.
+
+**Backends.** The graph backend captures the switches like any other MAC code and stays bitwise equal to the reference with them on (`tests/test_nr_fast.py` G7: `lena_match_v2`, per-RBG PF with the BSR pipeline on UL and DL, and every switch at three cells). The fused Triton kernel implements `pf_update`, `pf_avg_idle`, `ul_retx_sched` and `ul_amc_alloc` (teacher-forced test G2) but not yet the BSR grant pipeline: `make_engine(..., backend="triton")` refuses `ul_grant_model="bsr"`, and with it the v2 presets, with a message that points to `graph`. Porting the pipeline means carrying the nine extra per-robot arrays (four of them 4 deep) through the kernel, whose registers already spill at R = 64–100; that is a follow-up.
+
+**Checks.** `tests/test_nr_loadfix.py` L0 runs every switch set against a frozen copy of the prototype (`tests/nr_frozen/loadfix_proto.py`) and finds every output and state tensor bitwise equal, through a partial reset, with the global and with the engine RNG. On the full replay, `lena_validation_v2(rng="global")` reproduces the prototype's `all` arm bitwise in all 153 runs (every per-frame delay, TB and PRB count), so the numbers above carry over to the engine unchanged.
+
+**Replay with the engine RNG** (`lena_validation_v2()` as it runs by default; `primary_eng` is `lena_validation()` on the same RNG, the before; medians over runs):
+
+| Arm | Regime | Runs | p50 err | \|p50\| | p95 err | \|p95\| | Drop Δ pp | Goodput \|err\| | PRB err | TB ratio | KS | W1 ms |
+|:---|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| primary_eng | light | 79 | -0.2% | 4.2% | -9.2% | 9.5% | +0.00 | 0.0% | -13.4% | 0.71 | 0.256 | 3.5 |
+| primary_eng | moderate | 36 | -26.9% | 26.9% | -15.4% | 16.9% | -4.05 | 4.4% | -5.4% | 0.38 | 0.316 | 66.8 |
+| primary_eng | saturated | 38 | -33.7% | 34.8% | -3.3% | 4.2% | -6.84 | 11.8% | +0.0% | 0.23 | 0.380 | 135.2 |
+| v2 | light | 79 | -0.2% | 2.5% | -2.5% | 3.5% | +0.00 | 0.0% | -3.2% | 1.02 | 0.245 | 2.0 |
+| v2 | moderate | 36 | -1.2% | 4.8% | -6.1% | 8.7% | -1.42 | 1.7% | -4.9% | 1.00 | 0.128 | 17.4 |
+| v2 | saturated | 38 | -0.1% | 4.4% | +0.1% | 1.4% | -1.70 | 3.9% | -3.0% | 0.97 | 0.088 | 30.3 |
+
+The engine RNG changes the draws but not the result: moderate p50 −1.2% (prototype −1.2%), saturated −0.1% (−0.6%), light p50 −0.2% unchanged, drop gaps −1.4 and −1.7 pp as before. On the reference backend (CPU, 2 threads, shared lab box) the v2 arm took 1.11 times the wall time of `primary_eng` over the whole sweep (1.03 times at N = 64).
 
 ## Reproducing
 
@@ -200,11 +222,16 @@ On the lab box, in a directory holding the `data/` of `lena_extract.py` and a ch
 export ISAACLAB_NET_LENA_TABLES=<path to lena_eesm_tables.npz> REPO=$PWD/repo PYTHONPATH=$PWD/repo
 python repo/benchmarks/fidelity/loadfix/lena_pipeline.py <ns3ref>/sweep/nofade data results      # 5G-LENA grant accounting
 mkdir -p replay && ln -s <fidelity study replay>/primary replay/primary                          # the base arm
-bash repo/benchmarks/fidelity/loadfix/run_loadfix.sh                                              # 9 arms, about 40 min each on 2 threads
+bash repo/benchmarks/fidelity/loadfix/run_loadfix.sh                                              # 9 arms (prototype names, via the shim)
 python repo/benchmarks/fidelity/loadfix/loadfix_replay.py data replay all_no_retx all 4 64 lf.retx_tdma=False   # one leave-one-out job
 python repo/benchmarks/fidelity/compare.py data replay results
 python repo/benchmarks/fidelity/loadfix/report_loadfix.py results results/loadfix
+bash repo/benchmarks/fidelity/loadfix/run_v2.sh              # v2 (engine RNG), v2_global, primary_eng; about 15 min
+python repo/benchmarks/fidelity/compare.py data replay results
+python repo/benchmarks/fidelity/loadfix/report_loadfix.py results results/loadfix_v2
 ```
+
+`run_v2.sh` calls `nr_replay.py` with `NRF_PRESET=lena_validation_v2`, so the v2 arm is the plain engine, not the shim.
 
 ### Result files (`benchmarks/fidelity/results/loadfix/`)
 
@@ -215,3 +242,4 @@ python repo/benchmarks/fidelity/loadfix/report_loadfix.py results results/loadfi
 | `per_run_<arm>.csv`, `summary_<arm>.csv` | `compare.py` outputs of every arm, same columns as the fidelity study |
 | `tail_check.csv`, `mcs_check.txt` | share of frames completed by an RLC tail PDU per run (`tail_check.py`); engine vs 5G-LENA UL MCS per UE (`mcs_check.py`) |
 | `doc_tables.md` | the arm tables of this page, as `report_loadfix.py` writes them |
+| `../loadfix_v2/arms_by_regime.csv`, `per_run_*.csv`, `summary_*.csv`, `ablation.csv` | the engine-integrated rerun: arms `v2`, `v2_global` (bitwise the prototype's `all`) and `primary_eng` |
