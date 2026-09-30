@@ -2,6 +2,8 @@
 
 Usage (from the repository root with the Isaac venv active):
     python benchmarks\isaac\bench.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton --steps 300
+Network options (isaaclab_net/examples/fleet_args.py): --obs (observation features), --env_decimation,
+--net_decimation, --net_substeps, --dr (network domain randomization).
 Random actions (uniform in [-1,1]), so about 1/3 of robot-steps send nothing, 1/3 small, 1/3 large.
 Appends one JSON line with env steps/s, robot-steps/s, GPU memory and device-wide GPU utilisation.
 """
@@ -29,11 +31,14 @@ parser.add_argument("--out", default="bench.jsonl")
 parser.add_argument("--backend", default="triton", choices=["reference", "eager", "graph", "compile", "triton"],
                     help="engine backend (triton: L1 and L2-legacy only; the NR engine L2: reference only)")
 add_launcher_args(parser)
-args = parser.parse_args()
-
 _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root
 if _root not in sys.path:
     sys.path.insert(0, _root)                     # isaaclab_net without `pip install -e .`
+from isaaclab_net.examples.fleet_args import add_net_args, isaac_cfg_from_args  # noqa: E402
+
+add_net_args(parser)
+args = parser.parse_args()
+
 
 
 def gpu_query():
@@ -76,9 +81,12 @@ def main():
 
     u_before, m_before = gpu_query()
     cfg = make_cfg(args.num_envs, args.num_robots, args.level, device=getattr(args, "device", None) or "cuda:0",
-                   backend=args.backend)
+                   backend=args.backend, isaac=isaac_cfg_from_args(args))
+    cfg.decimation = cfg.sim.render_interval = args.env_decimation
     rec = dict(E=args.num_envs, R=args.num_robots, level=args.level, steps=args.steps,
-               backend=args.backend if args.level != "off" else "-",
+               backend=args.backend if args.level != "off" else "-", obs=list(cfg.net_isaac.obs_features),
+               env_decimation=args.env_decimation, net_decimation=args.net_decimation,
+               net_substeps=args.net_substeps, dr=bool(args.dr),
                gpu_util_before=u_before, gpu_mem_before_mib=m_before)
     with launch_simulation(cfg, args):
         t0 = time.time()

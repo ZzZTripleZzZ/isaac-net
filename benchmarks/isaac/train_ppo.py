@@ -1,8 +1,9 @@
 """PPO smoke training (rsl_rl, Isaac Lab 3.0 wrapper) on NetFleetEnv with the network in the loop.
 
-Centralised policy over the env's R robots: obs [E, R*12], actions [E, R*3]. The point is a working
+Centralised policy over the env's R robots: obs [E, R*(9 + network features)] (R*12 by default), actions [E, R*3]. The point is a working
 training pipeline and its throughput, not a tuned policy.
 usage: python benchmarks\\isaac\\train_ppo.py --num_envs 1024 --num_robots 16 --level L2-legacy --backend triton --iters 30
+Network options as bench.py (--obs, --env_decimation, --net_decimation, --net_substeps, --dr).
 """
 from __future__ import annotations
 
@@ -21,10 +22,13 @@ parser.add_argument("--level", default="L2-legacy", help="off, or a make_engine 
 parser.add_argument("--backend", default="triton")
 parser.add_argument("--iters", type=int, default=30)
 add_launcher_args(parser)
-args = parser.parse_args()
 _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root
 if _root not in sys.path:
     sys.path.insert(0, _root)                     # isaaclab_net without `pip install -e .`
+from isaaclab_net.examples.fleet_args import add_net_args, isaac_cfg_from_args  # noqa: E402
+
+add_net_args(parser)
+args = parser.parse_args()
 
 
 def main():
@@ -50,7 +54,8 @@ def main():
                                          desired_kl=0.01, max_grad_norm=1.0)
 
     cfg = make_cfg(args.num_envs, args.num_robots, args.level, device=getattr(args, "device", None) or "cuda:0",
-                   backend=args.backend)
+                   backend=args.backend, isaac=isaac_cfg_from_args(args))
+    cfg.decimation = cfg.sim.render_interval = args.env_decimation
     agent = handle_deprecated_rsl_rl_cfg(FleetPPOCfg(), check_rsl_rl_version())   # as the official train script
     agent.device = cfg.sim.device
     with launch_simulation(cfg, args):

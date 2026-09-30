@@ -5,7 +5,8 @@ or poses through their own radio. The Isaac layer uses this radio by default bec
 task needs on top of the engine radio:
   * per-env parameters (transmit power, noise, path-loss law, shadowing sigma, blockage loss) that EventTerms can
     randomize without touching the network state (network domain randomization, mdp.randomize_network);
-  * several gNBs at arbitrary env-local 3-D positions (strongest cell serves; no handover model);
+  * several gNBs at arbitrary env-local 3-D positions (strongest cell serves; no handover model), with an optional
+    per-env x/y offset of every gNB (cell placement randomization, gnb_offset_m);
   * line-of-sight blockage from a callback (other robots, people, static meshes).
 
 The model is the one of the engine radio (core/proto/netsim.Radio): log-distance path loss plus a spatially
@@ -25,6 +26,7 @@ from ..core.config import NRConfig
 from ..core.proto.netsim import env_index, fill_rows
 
 RADIO_PARAMS = ("p_tx_dbm", "noise_dbm", "pl_const_db", "pl_exp", "shadow_sigma_db", "blockage_db")
+CELL_PARAMS = ("gnb_offset_m",)          # per-env [G,2] x/y offset of the gNBs; ranges (lo, hi) per coordinate
 
 
 @dataclass
@@ -58,6 +60,7 @@ class IsaacRadio:
         self.E, self.dev, self.K = E, torch.device(device), shadow_modes
         self.gnb = torch.as_tensor(gnb_pos, dtype=torch.float32, device=self.dev).reshape(-1, 3)   # [G,3] env-local
         self.G = self.gnb.shape[0]
+        self.gnb_offset_m = torch.zeros(E, self.G, 2, device=self.dev)   # per-env cell placement offset
         self.ranges = ranges
         if seed is None:
             seed = int(torch.randint(0, 2 ** 62, ()).item())
@@ -84,6 +87,12 @@ class IsaacRadio:
         fill_rows(self.k, ids, k)
         fill_rows(self.phi, ids, phi)
 
+    @property
+    def gnb_env(self) -> torch.Tensor:
+        """[E,G,3] per-env gNB positions: nominal gnb plus the per-env x/y offset."""
+        off = torch.cat([self.gnb_offset_m, torch.zeros_like(self.gnb_offset_m[..., :1])], -1)
+        return self.gnb[None] + off
+
     def ids(self, env_ids) -> torch.Tensor:
         ids = env_index(env_ids, self.E, self.dev)
         return torch.arange(self.E, device=self.dev) if ids is None else ids
@@ -93,8 +102,13 @@ class IsaacRadio:
         ids = env_index(env_ids, self.E, self.dev)
         n = self.E if ids is None else ids.numel()
         for k, v in values.items():
+            if k == "gnb_offset_m":
+                if isinstance(v, torch.Tensor):
+                    v = v.to(self.dev, torch.float32).expand(n, self.G, 2)
+                fill_rows(self.gnb_offset_m, ids, v if isinstance(v, torch.Tensor) else float(v))
+                continue
             if k not in RADIO_PARAMS:
-                raise KeyError(f"{k!r} is not a radio parameter; one of {RADIO_PARAMS}")
+                raise KeyError(f"{k!r} is not a radio parameter; one of {RADIO_PARAMS + CELL_PARAMS}")
             if isinstance(v, torch.Tensor):
                 v = v.to(self.dev, torch.float32).reshape(-1).expand(n)
             fill_rows(getattr(self, k), ids, v if isinstance(v, torch.Tensor) else float(v))
@@ -103,11 +117,12 @@ class IsaacRadio:
         """Uniform draw within `ranges` ({name: (lo, hi)}, default self.ranges) for env_ids, from self.gen."""
         ids = self.ids(env_ids)
         for k, (lo, hi) in (ranges if ranges is not None else self.ranges.as_dict()).items():
-            u = torch.rand(ids.numel(), device=self.dev, generator=self.gen)
+            shape = (ids.numel(), self.G, 2) if k == "gnb_offset_m" else (ids.numel(),)
+            u = torch.rand(shape, device=self.dev, generator=self.gen)
             self.set_params(ids, **{k: lo + (hi - lo) * u})
 
     def params(self) -> dict:
-        return {k: getattr(self, k).clone() for k in RADIO_PARAMS}
+        return {k: getattr(self, k).clone() for k in RADIO_PARAMS + CELL_PARAMS}
 
     # ------------------------------------------------------------------ SNR
     def snr_db(self, pos: torch.Tensor, blocked: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -115,7 +130,7 @@ class IsaacRadio:
         blocked [E,R,G] bool adds blockage_db where the line of sight is blocked. Returns [E,R,G]."""
         if pos.shape[-1] == 2:
             pos = torch.cat([pos, torch.zeros_like(pos[..., :1])], -1)
-        d = (pos[:, :, None, :] - self.gnb[None, None]).norm(dim=-1).clamp(min=1.0)       # [E,R,G]
+        d = (pos[:, :, None, :] - self.gnb_env[:, None]).norm(dim=-1).clamp(min=1.0)     # [E,R,G]
         pl = self.pl_const_db[:, None, None] + 10 * self.pl_exp[:, None, None] * torch.log10(d)
         amp = self.shadow_sigma_db * math.sqrt(2 / self.K)                                  # [E]
         sh = amp[:, None] * torch.cos(torch.einsum("erc,ekc->erk", pos[..., :2], self.k)

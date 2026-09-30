@@ -6,13 +6,15 @@ Mirrors isaaclab_net/examples/fleet_task.py (FleetEnv, task T1) inside Isaac Lab
     the send choice is the third action channel bucketed at -1/3 and +1/3
   - hazards spawn near a random robot, grow, last 10 s; a frame detects with p = 0.6 / 1.0 within
     25 / 50 m; when a detecting frame is DELIVERED the whole fleet learns the hazard location
-  - obs per robot (12, same layout as env.py): pos, goal offset, known-hazard offset and radius,
-    siren, queued frames, age of information, SNR, known flag
+  - obs per robot: 9 task values (pos, goal offset, known-hazard offset and radius, siren, known flag) followed by
+    the network features selected by IsaacNetCfg.obs_features (default queued frames, age of information, SNR:
+    12 values per robot); make_cfg sizes the spaces with IsaacNetCfg.obs_dim
 Network levels: "off" (ideal: detections known the same step, no network features) or any make_engine level
 ("L0", "L0DR", "L1", "L2-legacy", "L2"), on any backend the level has ("reference", "eager", "graph", "compile",
 "triton" for L1 / L2-legacy; the NR engine "L2" has "reference" only). For scale use L2-legacy on triton.
 The network is wired through isaaclab_net.isaac.NetEnvMixin (net_setup / net_step / net_reset / net_obs) and
-configured by one NRConfig (message sizes, frame buffer, timeout, control step).
+configured by one NRConfig (message sizes, frame buffer, timeout, control step; net_config()) plus an IsaacNetCfg
+(fleet_isaac_cfg(): poses read from the "robots" collection, gNB on a 6 m mast at the arena corner).
 
 Physics: PhysX via Isaac Sim, dt = 1/50 s, decimation 5 -> 0.1 s control step (K = 40 UL slots).
 Spheres have gravity disabled and float at z = 0.5 m, so velocity writes are not fought by friction.
@@ -35,6 +37,7 @@ from isaaclab_physx.physics import PhysxCfg
 from isaaclab_physx.sim.schemas import PhysxRigidBodyCfg
 
 from isaaclab_net import NRConfig
+from isaaclab_net.isaac import IsaacNetCfg
 from isaaclab_net.isaac.mixins import NetEnvMixin, rigid_positions_local
 
 ARENA = 150.0
@@ -48,7 +51,9 @@ SIZES = (4000.0, 30000.0)     # T1 small / large frame bytes
 H_R, H_GROW, H_LIFE, H_RATE, SIREN = 15.0, 0.3, 100, 1 / 80, 10
 RANGE = (25.0, 50.0)
 PDET = (0.6, 1.0)
-OBS_PER_ROBOT = 12
+TASK_OBS = 9                  # task values per robot; the network features follow
+FLEET_OBS = ("queue_len", "aoi", "sinr")
+OBS_PER_ROBOT = TASK_OBS + len(FLEET_OBS)     # 12 with the default network features
 
 
 def make_scene_cfg(num_robots: int, num_envs: int):
@@ -96,17 +101,29 @@ class NetFleetEnvCfg(DirectRLEnvCfg):
     state_space = 0
     net_level: str = "L2-legacy"                  # "off" | "L0" | "L0DR" | "L1" | "L2-legacy" | "L2"
     net_backend: str = "graph"                    # reference | eager | graph | compile | triton
-    pose_chunks: int = 4
+    net_nr: NRConfig | None = None                # None: net_config(step of the network)
+    net_isaac: IsaacNetCfg | None = None          # None: fleet_isaac_cfg()
     net_seed: int | None = None                   # engine and radio generators (reset draws); None = random
 
 
-def make_cfg(num_envs: int, num_robots: int, level: str, device: str = "cuda:0",
-             backend: str = "graph") -> NetFleetEnvCfg:
+def fleet_isaac_cfg(**kw) -> IsaacNetCfg:
+    """Isaac-side network settings of the task: poses of the "robots" collection shifted into the [0,150]^2 radio
+    frame, gNB on a 6 m mast at the arena corner, network features FLEET_OBS. kw overrides IsaacNetCfg fields."""
+    base = dict(pose_asset="robots", pose_offset_m=(HALF, HALF, 0.0), gnb_pos=((0.0, 0.0, 6.0),),
+                obs_features=FLEET_OBS)
+    return IsaacNetCfg(**{**base, **kw})
+
+
+def make_cfg(num_envs: int, num_robots: int, level: str, device: str = "cuda:0", backend: str = "graph",
+             isaac: IsaacNetCfg | None = None, nr: NRConfig | None = None) -> NetFleetEnvCfg:
     cfg = NetFleetEnvCfg()
     cfg.scene = make_scene_cfg(num_robots, num_envs)
     cfg.num_robots = num_robots
+    cfg.net_isaac = isaac or fleet_isaac_cfg()
+    cfg.net_nr = nr
+    per_robot = TASK_OBS + cfg.net_isaac.obs_dim(nr or net_config(0.1))
     cfg.action_space = num_robots * 3
-    cfg.observation_space = num_robots * OBS_PER_ROBOT
+    cfg.observation_space = num_robots * per_robot
     cfg.net_level = level
     cfg.sim.device = device
     cfg.net_backend = backend
@@ -114,7 +131,8 @@ def make_cfg(num_envs: int, num_robots: int, level: str, device: str = "cuda:0",
 
 
 def net_config(step_dt: float) -> NRConfig:
-    """The network configuration of the task: T1 frame sizes, 16-frame buffer, 2 s timeout, one gNB."""
+    """The network configuration of the task: T1 frame sizes, 16-frame buffer, 2 s timeout, one gNB. step_dt is
+    the network control step."""
     return NRConfig(msg_sizes=SIZES, frame_buffer=F_DEPTH, timeout_steps=TIMEOUT, control_step_ms=step_dt * 1000.0)
 
 
@@ -126,10 +144,10 @@ class NetFleetEnv(NetEnvMixin, DirectRLEnv):
         E, R, dev = self.scene.num_envs, self.cfg.num_robots, self.device
         self.R = R
         self.robots: RigidObjectCollection = self.scene["robots"]
-        step_dt = self.cfg.sim.dt * self.cfg.decimation
-        # gNB on a 6 m mast at the arena corner (radio coordinates (0, 0))
-        self.net_setup(self.cfg.net_level, R, net_config(step_dt), self.cfg.net_backend,
-                       pose_chunks=self.cfg.pose_chunks, gnb_pos=((0.0, 0.0, 6.0),), seed=self.cfg.net_seed)
+        isaac = self.cfg.net_isaac or fleet_isaac_cfg()
+        step_dt = self.cfg.sim.dt * self.cfg.decimation * isaac.net_decimation / isaac.net_substeps   # network step
+        self.net_setup(self.cfg.net_level, R, self.cfg.net_nr or net_config(step_dt), self.cfg.net_backend,
+                       isaac=isaac, seed=self.cfg.net_seed)
         self._rng = torch.tensor(RANGE, device=dev)
         self._pdet = torch.tensor(PDET, device=dev)
         self.tt = torch.zeros(E, dtype=torch.long, device=dev)            # per-env control-step clock
@@ -194,11 +212,10 @@ class NetFleetEnv(NetEnvMixin, DirectRLEnv):
             det_env = det.any(-1)                                          # ideal network
         else:
             tag = torch.where(det, self.h_id[:, None].expand(E, R), torch.full_like(send, -1))
-            pos_end = self._pos_radio()
-            p3 = torch.cat([pos_end, torch.full_like(pos_end[..., :1], 0.5)], -1)
-            # network step: poses at the end of this control step, interpolated internally
+            # network step: end-of-step poses read from the "robots" collection (IsaacNetCfg.pose_asset),
+            # interpolated internally
             cur = torch.where(self.h_on, self.h_id, torch.full_like(self.h_id, -1))
-            out = self.net_step(p3, send, tag, cur_tag=cur)
+            out = self.net_step(None, send, tag, cur_tag=cur)
             det_env = out["tag_delivered"]
             self.ep_stats["dlv"] += out["delivered"].float().mean(-1)
         self.known |= det_env & self.h_on
@@ -257,8 +274,6 @@ class NetFleetEnv(NetEnvMixin, DirectRLEnv):
         hrel = (self.h_pos[:, None, :] - pos) / L * kf[..., None]
         hr = self._radius()[:, None] / L * kf
         siren = (self.h_on & (self.tt - self.h_start < SIREN)).float()[:, None].expand(-1, R)
-        f = self.net_obs()                                                  # [E,R,4]: AoI, SNR, queue, delivered
-        aoi, snr, qf = f[..., 0], f[..., 1], f[..., 2]
-        obs = torch.cat([pos / L, (self.goal - pos) / L, hrel] +
-                        [x[..., None] for x in (hr, siren, qf, aoi, snr, kf)], -1)
-        return {"policy": obs.reshape(E, R * OBS_PER_ROBOT)}
+        net = self.net_obs()                                               # [E,R,obs_dim]: IsaacNetCfg.obs_features
+        obs = torch.cat([pos / L, (self.goal - pos) / L, hrel] + [x[..., None] for x in (hr, siren, kf)] + [net], -1)
+        return {"policy": obs.reshape(E, -1)}

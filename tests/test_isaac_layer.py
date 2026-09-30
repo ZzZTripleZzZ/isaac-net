@@ -7,8 +7,8 @@
 2. graph (bitwise, injected draws) and triton (invariants) through NetModule on the GPU, with partial resets.
 3. The radio: the engine radio's SNR for the same shadowing field; pose-chunk interpolation; blockage; DR
    parameters that survive a reset.
-4. MessageHistory delivers the first capture of an episode; the mixin, mdp terms and NetConfig alias work
-   without Isaac Lab.
+4. MessageHistory delivers the first capture of an episode; the mixin, mdp terms and the deprecated NetConfig
+   alias work without Isaac Lab. Observation selection and IsaacNetCfg plumbing: tests/test_isaac_config.py.
 """
 import math
 
@@ -240,9 +240,15 @@ def test_mixin_mdp_and_netconfig_need_no_isaac(seeded):
     assert env.net_step(torch.zeros(3, 2, 3), torch.ones(3, 2, dtype=torch.long)) is None
     env.R = 2
     assert torch.equal(env.net_obs(), torch.zeros(3, 2, 4))
-    # the demo's NetConfig: rung "L2" is the slot-level NetSlot, i.e. level "L2-legacy"
-    m = NetModule(NetConfig(num_envs=3, num_robots=2, device="cpu", rung="L2", backend="eager", pose_chunks=1,
-                            msg_sizes=SIZES))
-    assert m.level == "L2-legacy" and m.config.msg_sizes == SIZES and m.gnb.tolist() == [[0.0, 0.0, 6.0]]
+    # the deprecated NetConfig: rung "L2" is the slot-level NetSlot, i.e. level "L2-legacy"; no defaults of its own
+    with pytest.warns(DeprecationWarning):
+        nc = NetConfig(num_envs=3, num_robots=2, device="cpu", rung="L2", backend="eager", pose_chunks=1,
+                       msg_sizes=(1500.0, 12000.0), gnb_pos=((0.0, 0.0, 6.0),))
+    m = NetModule(nc)
+    assert m.level == "L2-legacy" and m.config.msg_sizes == (1500.0, 12000.0) and m.gnb.tolist() == [[0.0, 0.0, 6.0]]
+    with pytest.warns(DeprecationWarning):
+        m = NetModule(NetConfig(num_envs=3, num_robots=2, device="cpu"))
+    assert m.level == "L2-legacy" and m.backend == "reference" and m.config == NRConfig()
+    assert m.pose_chunks == 4 and m.gnb.tolist() == [[0.0, 0.0, 0.0]]
     with pytest.raises(ValueError):
         NetModule("L2-legacy", 2, 2, "cpu", NRConfig(n_cells=3, cell_layout="hex"))
