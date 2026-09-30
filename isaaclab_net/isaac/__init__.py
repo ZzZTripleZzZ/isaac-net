@@ -7,7 +7,7 @@
     mixins.py       NetEnvMixin for DirectRLEnv (net_setup / net_step / net_reset / net_obs)
     mdp/            randomize_network EventTerm (network domain randomization)
     netmodule.py    compatibility module: the demo's registry engine was retired, its names now come from here
-    isaac_env_skeleton.py, maniskill_adapter_skeleton.py   design skeletons (import Isaac Lab / ManiSkill)
+    maniskill_adapter_skeleton.py   design sketch of the same module in ManiSkill3 (not run)
 """
 from .net_module import (BACKENDS, FAST_BACKENDS, MessageHistory, NetConfig, NetModule, TrafficRequest,  # noqa: F401
                          net_features)

@@ -230,7 +230,7 @@ def test_mixin_mdp_and_netconfig_need_no_isaac(seeded):
         episode_length_buf = torch.ones(3, dtype=torch.long)
 
     env = Env()
-    for level, backend in [("L1", "reference"), ("L2-legacy", "eager"), ("L2", "reference")]:
+    for level, backend in [("L1", "reference"), ("L2-legacy", "eager"), ("L2", "reference"), ("ORACLE", "reference")]:
         env.net_setup(level, 2, NRConfig(), backend, pose_chunks=1)
         out = env.net_step(torch.rand(3, 2, 3) * 50, torch.ones(3, 2, dtype=torch.long))
         assert out["queue_len"].shape == (3, 2) and env.net_obs().shape == (3, 2, 4)

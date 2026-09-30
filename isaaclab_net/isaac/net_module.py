@@ -7,7 +7,9 @@
 
 Levels and backends are those of make_engine(level, E, R, device, config, backend): L0, L0DR, L05 / L05Q (with
 fitted params), L1 and L2-legacy on "reference" / "eager" / "graph" / "compile" (and "triton" for L1 and
-L2-legacy), and L2 (the configurable NR engine) on "reference". The engine keeps a per-env episode clock, so t
+L2-legacy), L2 (the configurable NR engine) on "reference", the fitted surrogates TR / GE / QA / NN (params = a
+fit file) and the ORACLE / NOCOMM bounds. L0 / L0DR / L1 take their parameters from the NRConfig unless params
+is given. The engine keeps a per-env episode clock, so t
 arguments are accepted for compatibility with the demo signature and ignored: every env is always at its own
 clock, and outputs are in that clock (an env that reset sees capture steps 0, 1, ...).
 
@@ -35,7 +37,6 @@ Adapter fixes carried over from isaac/demo (2026-09-29)
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -49,7 +50,6 @@ from .radio import RADIO_PARAMS, IsaacRadio, ParamRanges
 
 FAST_BACKENDS = ("eager", "graph", "compile", "triton")
 BACKENDS = ("reference",) + FAST_BACKENDS
-L0_DEFAULT_PARAMS = {"mu": math.log(0.05), "sig": 0.5, "p": 0.0}   # L0: lognormal delay in control steps, loss
 
 
 @dataclass
@@ -87,8 +87,6 @@ class NetModule:
         self.F = cfg.frame_buffer
         self.step_dt = cfg.control_step_ms / 1000.0
         self.pose_chunks = int(pose_chunks)
-        if level == "L0" and params is None:
-            params = L0_DEFAULT_PARAMS
         if radio == "isaac" and cfg.n_cells > 1:
             raise ValueError("a multi-cell config needs the engine's radio (cells, interference, handover): "
                              "pass radio='engine'")
@@ -319,4 +317,4 @@ def net_features(out: dict, step_dt: float, depth: int = 16) -> torch.Tensor:
 
 
 __all__ = ["NetModule", "NetConfig", "TrafficRequest", "ParamRanges", "MessageHistory", "net_features",
-           "FAST_BACKENDS", "BACKENDS", "RADIO_PARAMS", "L0_DEFAULT_PARAMS"]
+           "FAST_BACKENDS", "BACKENDS", "RADIO_PARAMS"]

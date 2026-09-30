@@ -16,7 +16,8 @@ from isaaclab.app import add_launcher_args, launch_simulation
 parser = argparse.ArgumentParser(conflict_handler="resolve")
 parser.add_argument("--num_envs", type=int, default=1024)
 parser.add_argument("--num_robots", type=int, default=16)
-parser.add_argument("--level", default="L2-legacy", choices=["off", "L0", "L0DR", "L1", "L2-legacy", "L2"])
+parser.add_argument("--level", default="L2-legacy", help="off, or a make_engine level (L0, L0DR, L1, L2-legacy, L2, "
+                    "ORACLE, NOCOMM, ...; TR / GE / QA / NN and L05 / L05Q need fitted params, not wired here)")
 parser.add_argument("--backend", default="triton")
 parser.add_argument("--iters", type=int, default=30)
 add_launcher_args(parser)
