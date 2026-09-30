@@ -13,7 +13,7 @@ _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import torch
 
 import netsim
-from netsim import UL_PER_STEP, S, F
+from netsim import UL_PER_STEP, S
 
 SIZES = (4000.0, 30000.0)
 L0_PARAMS = {"mu": math.log(0.3), "sig": 0.8, "p": 0.05}

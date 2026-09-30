@@ -438,7 +438,6 @@ class NetFast:
             put_slot(self.dlv, idx, new, dl)
 
     def _step_region(self):
-        E, R, d = self.E, self.R, self.dev
         t = self._t
         finvals = (t.double()[:, None] + self._kfrac[None, :]).float()        # [E,40]
         if self.rung == "L2":
