@@ -78,7 +78,7 @@ for _ in range(300):                                # one control step = 100 ms 
 
 ## Isaac Lab quick start
 
-Tested natively on Windows 11 with an RTX 4090 (driver 617.14; the CUDA 13.0 build of PyTorch needs 580.88 or newer):
+Tested natively on Windows 11 with an RTX 4090 (driver 617.14; the CUDA 13.0 build of PyTorch needs 580.88 or newer). For Linux, including clusters without root or with a glibc older than 2.35, see [docs/isaac-lab-linux.md](docs/isaac-lab-linux.md): kit-less Isaac Lab 3.0 on Newton or OV PhysX, where `ISAACLAB_NET_PHYSICS=newton` (or `ovphysx`) selects the fleet env's physics backend.
 
 | Component | Version |
 |:---|:---|
@@ -309,7 +309,7 @@ isaaclab-net/
 
 ## Documentation
 
-Collaborator documentation lives in [`docs/`](docs/README.md): the [project status](docs/STATUS.md) with open items and starter tasks, the [5G-LENA validation](docs/validation-5g-lena.md), the [public-data calibration](docs/calibration-public-data.md), the [real-network measurement protocol](docs/measurement-protocol.md) with its parsers and calibration hooks in `isaaclab_net/tools/measure/`, [performance](docs/performance.md) with the backend equivalence methodology, the [Isaac Lab integration](docs/isaac-lab.md), the [MuJoCo Playground / MJX backend](docs/backends-mjx.md), [multi-cell networks](docs/multicell.md) and the [ns-3 bridges](docs/bridges.md).
+Collaborator documentation lives in [`docs/`](docs/README.md): the [project status](docs/STATUS.md) with open items and starter tasks, the [5G-LENA validation](docs/validation-5g-lena.md), the [public-data calibration](docs/calibration-public-data.md), the [real-network measurement protocol](docs/measurement-protocol.md) with its parsers and calibration hooks in `isaaclab_net/tools/measure/`, [performance](docs/performance.md) with the backend equivalence methodology, the [Isaac Lab integration](docs/isaac-lab.md) and its [Linux / HPC recipe](docs/isaac-lab-linux.md), the [MuJoCo Playground / MJX backend](docs/backends-mjx.md), [multi-cell networks](docs/multicell.md) and the [ns-3 bridges](docs/bridges.md).
 
 ## Contributing
 

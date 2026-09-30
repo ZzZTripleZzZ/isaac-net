@@ -1,7 +1,7 @@
 """Throughput benchmark for NetFleetEnv: one (E, R, level, backend) configuration per process.
 
 Usage (from the repository root with the Isaac venv active):
-    python benchmarks\isaac\bench.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton --steps 300
+    python benchmarks/isaac/bench.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton --steps 300
 Network options (isaaclab_net/examples/fleet_args.py): --obs (observation features), --env_decimation,
 --net_decimation, --net_substeps, --dr (network domain randomization).
 Random actions (uniform in [-1,1]), so about 1/3 of robot-steps send nothing, 1/3 small, 1/3 large.
@@ -87,6 +87,7 @@ def main():
                backend=args.backend if args.level != "off" else "-", obs=list(cfg.net_isaac.obs_features),
                env_decimation=args.env_decimation, net_decimation=args.net_decimation,
                net_substeps=args.net_substeps, dr=bool(args.dr),
+               physics=type(cfg.sim.physics).__name__,
                gpu_util_before=u_before, gpu_mem_before_mib=m_before)
     with launch_simulation(cfg, args):
         t0 = time.time()
@@ -130,6 +131,8 @@ def main():
             mean_reward=float(rsum) / n,
             obs_shape=list(obs["policy"].shape),
             obs_finite=bool(torch.isfinite(obs["policy"]).all()),
+            robot_z_min_max=[float(env.robots.data.body_link_pos_w[..., 2].min()),   # spheres should stay at 0.5 m
+                             float(env.robots.data.body_link_pos_w[..., 2].max())],
         )
         if env.net is not None:
             # isolated network cost: submit + step on the live module (state keeps evolving; harmless at the end)

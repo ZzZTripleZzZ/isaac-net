@@ -14,6 +14,7 @@ These pages are for collaborators joining the project. The top-level [README](..
 | [calibration-public-data.md](calibration-public-data.md) | Public datasets and their licenses, the data problems found, fitted parameters, the `lena_match` / `srsran_like` / `oai_like` presets, and what public data cannot validate |
 | [performance.md](performance.md) | Backend equivalence methodology, per-level and per-backend benchmarks, Isaac Lab scale results, and the ns-3 CPU co-simulation cost comparison |
 | [isaac-lab.md](isaac-lab.md) | Windows-native Isaac Sim 6.1 / Isaac Lab 3.0 install, running CUDA jobs with nobody logged in, the demo env, the 1,048,576-robot scale table and the adapter fixes |
+| [isaac-lab-linux.md](isaac-lab-linux.md) | Linux / HPC recipe (tested on RHEL 9 with Slurm and Apptainer): core GPU tests, kit-less Isaac Lab 3.0 on Newton and OV PhysX, offline asset mirror, sbatch templates, dedicated-GPU timings, failure modes |
 | [backends-mjx.md](backends-mjx.md) | The second simulator backend: MuJoCo Playground / MJX (JAX) versions, the zero-copy `buffer_callback` interop, the MJX fleet env, bitwise validation against a direct replay, Brax PPO and throughput |
 | [multicell.md](multicell.md) | Multi-cell design, interference timing, handover, the power-control default and the sweep findings |
 | [bridges.md](bridges.md) | The ns-3 co-simulation bridges (lockstep, process pool, offline replay, real time), their correctness checks, costs and known limits |

@@ -63,6 +63,7 @@ nav:
       - Public-data calibration: calibration-public-data.md
       - Performance: performance.md
       - Isaac Lab on Windows: isaac-lab.md
+      - Isaac Lab on Linux (HPC): isaac-lab-linux.md
       - "Second backend: MuJoCo Playground / MJX": backends-mjx.md
       - Multi-cell networks: multicell.md
       - Channel models: channels.md

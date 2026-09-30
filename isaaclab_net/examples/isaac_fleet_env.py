@@ -16,13 +16,17 @@ The network is wired through isaaclab_net.isaac.NetEnvMixin (net_setup / net_ste
 configured by one NRConfig (message sizes, frame buffer, timeout, control step; net_config()) plus an IsaacNetCfg
 (fleet_isaac_cfg(): poses read from the "robots" collection, gNB on a 6 m mast at the arena corner).
 
-Physics: PhysX via Isaac Sim, dt = 1/50 s, decimation 5 -> 0.1 s control step (K = 40 UL slots).
+Physics: PhysX via Isaac Sim by default, dt = 1/50 s, decimation 5 -> 0.1 s control step (K = 40 UL slots).
+make_cfg(physics=...) or the ISAACLAB_NET_PHYSICS environment variable selects another Isaac Lab 3.0 backend:
+"isaacsim_physx" (default, needs Isaac Sim), "ovphysx" (PhysX without Isaac Sim) or "newton" (Newton + MuJoCo-Warp,
+no Isaac Sim). The last two run in Isaac Lab's kit-less install (docs/isaac-lab-linux.md).
 Spheres have gravity disabled and float at z = 0.5 m, so velocity writes are not fought by friction.
 Robot-robot contacts stay enabled.
 """
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Sequence
 
 import torch
@@ -114,9 +118,32 @@ def fleet_isaac_cfg(**kw) -> IsaacNetCfg:
     return IsaacNetCfg(**{**base, **kw})
 
 
+PHYSICS = ("isaacsim_physx", "ovphysx", "newton")
+
+
+def physics_cfg(name: str):
+    """Isaac Lab 3.0 physics backend config by name (see PHYSICS). Only the default needs Isaac Sim."""
+    if name == "isaacsim_physx":
+        return PhysxCfg()
+    if name == "ovphysx":
+        from isaaclab_ov.physics import OvPhysxCfg
+        return OvPhysxCfg()
+    if name == "newton":
+        from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
+        return NewtonCfg(solver_cfg=MJWarpSolverCfg(), num_substeps=1, debug_mode=False, use_cuda_graph=True)
+    raise ValueError(f"unknown physics backend {name!r}, expected one of {PHYSICS}")
+
+
 def make_cfg(num_envs: int, num_robots: int, level: str, device: str = "cuda:0", backend: str = "graph",
-             isaac: IsaacNetCfg | None = None, nr: NRConfig | None = None) -> NetFleetEnvCfg:
+             isaac: IsaacNetCfg | None = None, nr: NRConfig | None = None,
+             physics: str | None = None) -> NetFleetEnvCfg:
     cfg = NetFleetEnvCfg()
+    physics = physics or os.environ.get("ISAACLAB_NET_PHYSICS", "isaacsim_physx")
+    cfg.sim.physics = physics_cfg(physics)
+    if physics != "isaacsim_physx":
+        # Newton ignores the per-body PhysX flag disable_gravity (the spheres sank to the ground on Hazel); the
+        # ground is static and every sphere has gravity disabled, so zero world gravity is the same scene.
+        cfg.sim.gravity = (0.0, 0.0, 0.0)
     cfg.scene = make_scene_cfg(num_robots, num_envs)
     cfg.num_robots = num_robots
     cfg.net_isaac = isaac or fleet_isaac_cfg()
