@@ -116,32 +116,37 @@ python benchmarks\isaac\train_ppo.py --num_envs 256 --num_robots 16 --level L2-l
 
 Isaac Lab 3.0 runs headless by default. The Isaac tests launch one Isaac Sim process per case and take about 1 minute each. On a machine where nobody is logged on at the console, CUDA is available only to jobs that run as SYSTEM: `scripts\windows\systask.ps1` runs a script as a one-shot SYSTEM task, and `scripts\windows\wait.ps1` waits for it and removes the task.
 
-**Add the network to your DirectRLEnv.** `NetEnvMixin` wires a `NetModule` into four hooks. Frames are captured at the start-of-step pose, and the network step takes the end-of-step poses:
+**Add the network to your DirectRLEnv.** `NetEnvMixin` wires a `NetModule` into four hooks. The network is configured by the same `NRConfig` that `make_engine` takes, and a small `IsaacNetCfg` adds the Isaac-side settings: where the poses come from, the network rate, blockage, domain randomization and the observation features. Frames are captured at the start-of-step pose, and the network step takes the end-of-step poses:
 
 ```python
 from isaaclab.envs import DirectRLEnv
 from isaaclab_net import NRConfig
-from isaaclab_net.isaac import NetEnvMixin, rigid_positions_local
+from isaaclab_net.isaac import IsaacNetCfg, NetEnvMixin
+
+NR = NRConfig(msg_sizes=(4000.0, 30000.0))                  # the network: one config, as for make_engine
+ISAAC = IsaacNetCfg(pose_asset="robots",                     # poses from the scene's "robots" collection
+                    obs_features=("aoi", "sinr", "queue_len", "delay_history"),
+                    dr_ranges={"noise_dbm": (-95.0, -85.0), "shadow_sigma_db": (3.0, 9.0)})
+# env cfg: observation_space = R * (task features + ISAAC.obs_dim(NR))
 
 class MyFleetEnv(NetEnvMixin, DirectRLEnv):
     def _setup_scene(self):
-        ...                                                  # self.robots: a RigidObjectCollection of R robots
-        self.net_setup("L2-legacy", R, NRConfig(msg_sizes=(4000.0, 30000.0)), backend="triton")
+        ...                                                  # self.scene["robots"]: a RigidObjectCollection of R robots
+        self.net_setup("L2-legacy", R, NR, "triton", isaac=ISAAC)
     def _pre_physics_step(self, actions):
         ...                                                  # read the start-of-step pose, decide what to send
         self.send = choose_messages(actions)                 # [E,R] long: 0 nothing, 1 small, 2 large message
     def _get_dones(self):
-        pos = rigid_positions_local(self.robots, self.scene.env_origins)         # end-of-step poses [E,R,3]
-        out = self.net_step(pos, self.send)                  # newest_cap, aoi_s, queue_len, delivered, ... per robot
+        out = self.net_step(None, self.send)                 # end-of-step poses from "robots"; newest_cap, aoi_s, ...
         ...
     def _reset_idx(self, env_ids):
-        super()._reset_idx(env_ids); ...; self.net_reset(env_ids)
+        super()._reset_idx(env_ids); ...; self.net_reset(env_ids)   # also redraws the dr_ranges of env_ids
     def _get_observations(self):
-        net = self.net_obs()                                 # [E,R,4]: AoI, SNR, queued frames, delivered
+        net = self.net_obs()                                 # [E,R,ISAAC.obs_dim(NR)] normalized network features
         ...
 ```
 
-`net_setup` takes any level of `make_engine` (`"off"` for an ideal link), an `NRConfig`, a backend, and the radio options (`gnb_pos`, `pose_chunks`, `ranges`). `net_step(pos, send, tag, cur_tag)` also carries a per-message tag, such as the id of the hazard a frame captured, and returns `tag_delivered` per env. `isaaclab_net.isaac.mdp.randomize_network` is an EventTerm that redraws per-env radio parameters (path-loss exponent, shadowing, noise, transmit power) for network domain randomization. [`isaac_fleet_env.py`](isaaclab_net/examples/isaac_fleet_env.py) is the complete example: E envs × R robots in a 150 m arena, with hazards that the whole fleet learns about only when a detection frame is delivered.
+`net_setup` takes any level of `make_engine` (`"off"` for an ideal link), an `NRConfig`, a backend and an `IsaacNetCfg`. The observation features are chosen from the delivered mask and the delay of each message slot, age of information, queue length and bytes, SINR and RSRP, the serving cell, a last-delivery flag, the delays of the last k delivered messages, and a blockage flag, all with one normalization. The domain-randomization ranges cover the radio (transmit power, noise floor, path loss, shadowing sigma, blockage loss), the gNB placement, and the delay and loss of L0 and L0DR, and `dr_support(level)` tells which of them a level honors. `net_decimation` and `net_substeps` run the network slower or faster than the env step. `net_step(pos, send, tag, cur_tag)` also carries a per-message tag, such as the id of the hazard a frame captured, and returns `tag_delivered` per env. The fields, the feature table and the randomization table are in [docs/isaac-lab.md](docs/isaac-lab.md#configuring-the-network). The earlier `NetConfig` is a deprecated alias. [`isaac_fleet_env.py`](isaaclab_net/examples/isaac_fleet_env.py) is the complete example: E envs × R robots in a 150 m arena, with hazards that the whole fleet learns about only when a detection frame is delivered.
 
 **Scale.** These numbers come from the fleet env with random actions, which saturate the uplink from 16 robots per env. They were measured on 2026-09-29, before the Isaac layer was rebuilt on `make_engine`, with the same L2-legacy model and Triton kernel. The RTX 4090 was shared with other jobs that kept it 98–99% busy the whole time. Treat the absolute rates as lower bounds, and trust the ratios of network on to network off:
 

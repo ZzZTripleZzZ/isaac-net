@@ -86,12 +86,72 @@ The port of the slot-level engine itself was correct and bitwise equal to the re
 
 ## Rebuilt layer on make_engine
 
-`isaaclab_net.isaac.NetModule(level, E, R, device, NRConfig, backend)` builds its engine with `make_engine`, so every level is available inside Isaac Lab: L0, L0DR, L1 and L2-legacy on the reference and fast backends (`triton` for L1 and L2-legacy), the NR engine L2 on the reference backend, the surrogates with a fit file, and the ORACLE / NOCOMM bounds. The module adds only the Isaac radio (`isaac/radio.py`: per-env radio parameters for domain randomization, several gNBs, line-of-sight blockage, SNR averaged over 4 poses interpolated across the step), the per-message tag, and the freshness outputs (`last_cap`, `aoi_s`). Multi-cell configurations use the engine's own radio (`radio="engine"`). The demo's `NetConfig` remains as a thin alias, in which `rung="L2"` means `L2-legacy`. The demo's registry engine was retired, so its per-env `bg_load` and per-env L0 parameters are gone; `L0DR` covers randomized delay.
+`isaaclab_net.isaac.NetModule(level, E, R, device, NRConfig, backend)` builds its engine with `make_engine`, so every level is available inside Isaac Lab: L0, L0DR, L1 and L2-legacy on the reference and fast backends (`triton` for L1 and L2-legacy), the NR engine L2 on the reference backend, the surrogates with a fit file, and the ORACLE / NOCOMM bounds. The module adds only the Isaac radio (`isaac/radio.py`: per-env radio parameters for domain randomization, several gNBs, line-of-sight blockage, SNR averaged over 4 poses interpolated across the step), the per-message tag, and the freshness outputs (`last_cap`, `aoi_s`). Multi-cell configurations use the engine's own radio (`radio="engine"`). The demo's `NetConfig` remains as a deprecated alias without defaults of its own (see [Configuring the network](#configuring-the-network)), in which `rung="L2"` means `L2-legacy`. The demo's registry engine was retired, so its per-env `bg_load` and per-env L0 parameters are gone; `L0DR` covers randomized delay.
 
 Tests, validated on 2026-09-29 on WSL and on the Windows install (GPU jobs as SYSTEM tasks):
 - `tests/test_isaac_layer.py`: the module equals the reference engine driven directly, bitwise, at L0, L0DR, L1, L2-legacy (eager) and L2 (NR), through a mid-run partial reset, on CPU and GPU; `graph` is bitwise equal with injected draws; `graph` and `triton` keep other envs untouched on a partial reset.
 - `tests/test_isaac_env.py` (marker `isaac`): inside Isaac Lab, the fleet env's network equals a reference-backend replay of the recorded PhysX poses, sends, tags and RNG stream with zero difference, through partial resets that DirectRLEnv makes itself, at L2-legacy, L1 and L0DR; every level and backend steps the fleet env. All 9 cases pass.
 - The README quick start, run verbatim as a SYSTEM task, exits 0 on every command. Its benchmark row (256 × 16, L2-legacy `triton`) gave 4.18 control steps/s and 17 ms of network per step under 99% GPU contention, against 5.03 and 13 ms in the demo, within the ±40% run-to-run noise. A 5-iteration PPO smoke run took 38.5 s.
+
+## Configuring the network
+
+**One configuration.** The network in the loop is configured by the same `NRConfig` that `make_engine` takes: message sizes, frame buffer, timeout, control step, radio and cell layout, MAC, PHY, and the L0 and L0DR delay parameters. The level and the backend are the `make_engine` arguments. The Isaac layer adds only a small `IsaacNetCfg` for what an Isaac Lab task needs on top:
+
+```python
+from isaaclab_net import NRConfig
+from isaaclab_net.isaac import IsaacNetCfg, NetEnvMixin
+
+nr = NRConfig(msg_sizes=(4000.0, 30000.0), control_step_ms=100.0)
+isaac = IsaacNetCfg(pose_asset="robots", gnb_pos=((0.0, 0.0, 6.0),),
+                    obs_features=("aoi", "sinr", "queue_len", "delay_history"), obs_history=4,
+                    dr_ranges={"noise_dbm": (-95.0, -85.0), "shadow_sigma_db": (3.0, 9.0),
+                               "gnb_offset_m": (-10.0, 10.0)})
+observation_space = R * (TASK_OBS + isaac.obs_dim(nr))       # in the env cfg
+self.net_setup("L2-legacy", R, nr, "triton", isaac=isaac)     # in _setup_scene
+```
+
+| Field group | Fields | What it does |
+|:---|:---|:---|
+| Pose source | `radio`, `pose_asset`, `pose_body_ids`, `pose_offset_m`, `gnb_pos`, `gnb_height_m`, `pose_chunks` | `radio="isaac"` computes the SNR from poses with the Isaac radio, and `"engine"` passes the poses to the engine's own radio (needed for `n_cells > 1`). With `pose_asset` set, `net_step(None, send, ...)` reads the end-of-step poses from that scene entity (`RigidObjectCollection`, `Articulation` or `RigidObject`). Without `gnb_pos`, the gNBs are at `NRConfig.gnb_xy()` at height `gnb_height_m`. |
+| Multi-rate | `net_decimation`, `net_substeps` | `net_decimation = k` steps the network every k env steps and merges the messages of the window into one per robot. `net_substeps = m` runs m network steps per env step. `net_setup` checks that the env step times k / m equals `NRConfig.control_step_ms`. |
+| Blockage | `blockage`, `robot_blockers`, `blocker_radius_m`, `blockage_db` | `blockage=False` switches blockage loss off and ignores `blocked_fn`. `robot_blockers=True` lets the robots of an env block each other's line of sight as spheres. |
+| Domain randomization | `dr_ranges`, `dr_mode`, `dr_interval_steps`, `dr_strict` | per-env uniform draws, redrawn at every reset (`"reset"`), every U[lo, hi] network steps (`"interval"`), or never (`"off"`) |
+| Observation | `obs_features`, `obs_history`, `obs_time_scale_s` | the network features `net_obs()` returns, sized by `obs_dim(nr)` |
+
+The Isaac radio takes its nominal parameters from the `NRConfig` (`ue_tx_dbm`, the noise floor, `pl_const_db`, `pathloss_exp`, `shadow_sigma_db`, `shadow_modes`). With the Isaac radio the engine sees only the SNR, so L1, L2-legacy and QA get the legacy cell fields and stay on their fast backends whatever radio fields the `NRConfig` sets. `NetModule(..., strict=True)` raises when the `NRConfig` sets fields the level ignores (`NRConfig.unused_fields`). The keyword arguments `pose_chunks`, `gnb_pos` and `radio` of `NetModule` and `net_setup` still work as shortcuts for the `IsaacNetCfg` fields.
+
+**Deprecated `NetConfig`.** `NetConfig` warns on construction and has no defaults of its own: every field left at `None` comes from the `NRConfig` or from `IsaacNetCfg`. Two defaults therefore changed for code that relied on them. The message sizes are the `NRConfig` default (4,000 and 30,000 bytes) instead of 1,500 and 12,000, and the gNB is at the origin at height 0 instead of on a 6 m mast. The level defaults to `L2-legacy` and the backend to `reference`.
+
+**Observation features.** `obs_features` picks among the features below, in the order given. Every feature uses one normalization: times are divided by the time scale (`obs_time_scale_s`, default 50 control steps, which is 5 s at 100 ms) and clamped to [0, 1], queue length is divided by the frame buffer, queue bytes by the frame buffer times the largest message size, dB quantities by 40 dB, and flags and one-hot codes are 0 or 1. An env that has not stepped since its reset observes zeros. The earlier `net_features` and the fleet env's own scaling are replaced by this one, and `net_features` remains as a deprecated wrapper for the default selection.
+
+| Feature | Width | Value |
+|:---|---:|:---|
+| `delivered_mask` | F | message slot delivered this step (FIFO slots as queued before the step) |
+| `msg_delay` | F | delay of each delivered slot / time scale; 0 where not delivered |
+| `aoi` | 1 | age of information / time scale |
+| `queue_len` | 1 | queued messages / frame buffer |
+| `queue_bytes` | 1 | queued bytes / (frame buffer × largest message size) |
+| `sinr` | 1 | SINR in dB / 40 |
+| `rsrp` | 1 | (received power − nominal noise floor of the `NRConfig`) in dB / 40; with the Isaac radio this is the SNR plus the env's noise-floor offset |
+| `serving_cell` | G | one-hot serving cell, G = number of gNBs |
+| `last_delivered` | 1 | at least one message of the robot was delivered this step |
+| `delay_history` | k | delays of the last k delivered messages / time scale, newest first (`obs_history = k`) |
+| `blocked` | 1 | line of sight to the serving gNB blocked in the last pose chunk |
+
+The default selection is `aoi`, `sinr`, `queue_len` and `last_delivered`, which is the earlier `[E,R,4]` observation. `isaaclab_net.isaac.obs_dim(features, nr, n_cells, history)` gives the width without building a module.
+
+**Network domain randomization.** `dr_ranges` maps a key to a `(lo, hi)` range. The radio keys `p_tx_dbm`, `noise_dbm`, `pl_const_db`, `pl_exp`, `shadow_sigma_db`, `blockage_db` and `gnb_offset_m` (cell placement: a per-env x and y offset of every gNB) are per-env parameters of the Isaac radio. The delay keys `delay_median_steps`, `delay_log_sigma` and `loss` are written into the `NRConfig`: into `dr_delay_median_steps`, `dr_delay_log_sigma` and `dr_loss` at L0DR, whose engine draws them per env at every reset, and into the `l0_*` fields at L0, which takes fixed values only (lo = hi). `dr_support(level, nr, isaac)` reports per key whether a level honors it. For the delay keys it uses the field groups behind `NRConfig.unused_fields`. A key the level does not honor warns, or raises with `dr_strict=True`:
+
+| Level | Radio keys (Isaac radio) | Delay keys |
+|:---|:---|:---|
+| L0 | no | yes, fixed values |
+| L0DR | no | yes, per env at reset |
+| L05, L05Q, L1, L2-legacy, L2, QA, NN | yes | no |
+| TR, GE, ORACLE, NOCOMM | no | no |
+
+With `radio="engine"` no radio key is honored, because the engine radio has one parameter set per config. The delay keys are redrawn only at reset, also with `dr_mode="interval"`. `mdp.randomize_network` remains as an EventTerm for tasks that keep all randomization in their event manager. With `ranges=None` it draws the module's `dr_ranges`.
+
+**Command-line options.** `benchmarks/isaac/bench.py`, `train_ppo.py` and `tests/scripts/isaac_fleet_check.py` take `--obs` (a comma-separated feature list or `all`), `--env_decimation`, `--net_decimation`, `--net_substeps` and `--dr` (noise, shadowing, path-loss exponent and gNB placement per env), defined in `isaaclab_net/examples/fleet_args.py`.
 
 ## Next steps
 
