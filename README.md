@@ -254,7 +254,7 @@ The reference simulator is ns-3.48 with 5G-LENA NR v5.1, used unmodified except 
 - [x] Configurable NR: numerology, TDD patterns, 3GPP MCS/TBS and BLER tables, multiple HARQ processes, downlink
 - [ ] `graph` / `triton` backends for the NR engine
 - [x] Multi-cell interference and handover (legacy L2)
-- [ ] Multi-cell MAC in the NR engine
+- [x] Multi-cell MAC in the NR engine (per-cell schedulers and HARQ, uplink and downlink interference, power control, handover)
 - [x] Isaac Lab 3.0 integration on the engine API: DirectRLEnv mixin, network domain randomization, fleet demo env, PPO
 - [ ] Uncontended Isaac Lab scaling benchmarks and more demo tasks
 - [ ] Validation against ns-3 5G-LENA and public measurement traces
