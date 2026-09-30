@@ -150,7 +150,7 @@ Every constructor also takes `tag` (default: 1 + the model's position in the lis
 
 **Limits.** Uplink only. `priority` is carried and reported, but the MAC serves each robot's queue in FIFO order. `deadline_ms` is reported as `deadline_miss` and does not drop messages. Traffic models work with one cell and with several NR cells (`n_cells > 1`). The engine gates arrivals through four hooks on its `UlMac` instance (`sr_step`, `slot`, `end_step`, and `handover`, so that a `ho_rlc="flush"` handover spares messages that arrive later in the step). If a future `NRNet` stops calling the first three, `step()` raises instead of silently mis-timing.
 
-Example: [`isaaclab_net/examples/traffic_models.py`](../isaaclab_net/examples/traffic_models.py).
+Example: [`isaaclab_net/examples/traffic_models.py`](https://github.com/ZzZTripleZzZ/isaaclab-net/blob/main/isaaclab_net/examples/traffic_models.py).
 
 ## Proposed modes and switches
 

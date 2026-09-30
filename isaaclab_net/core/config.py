@@ -349,8 +349,12 @@ class NRConfig:
                 f"cell_layout='custom' needs one position per cell ({self.n_cells}); use cell_layout='hex' or "
                 "'grid', or the multicell() preset")
         assert len(self.msg_sizes) >= 1
-        from .traffic import normalize_traffic
-        self.traffic = normalize_traffic(self.traffic)
+        try:
+            from .traffic import normalize_traffic
+        except ImportError:  # config.py loaded as a standalone module (the docs hook, no package, no torch)
+            normalize_traffic = None
+        if normalize_traffic is not None:
+            self.traffic = normalize_traffic(self.traffic)
         assert 0 < self.dr_delay_median_steps[0] <= self.dr_delay_median_steps[1]
         assert self.dr_delay_log_sigma[0] <= self.dr_delay_log_sigma[1] and 0 <= self.dr_loss[0] <= self.dr_loss[1] <= 1
         assert self.l0_delay_median_steps > 0 and 0 <= self.l0_loss <= 1 and self.l1_eta > 0

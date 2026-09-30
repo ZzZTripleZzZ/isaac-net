@@ -59,11 +59,13 @@ nav:
   - Project notes:
       - Status: STATUS.md
       - 5G-LENA validation: validation-5g-lena.md
+      - Fidelity vs 5G-LENA (formal study): fidelity-vs-lena.md
       - Public-data calibration: calibration-public-data.md
       - Performance: performance.md
       - Isaac Lab on Windows: isaac-lab.md
       - "Second backend: MuJoCo Playground / MJX": backends-mjx.md
       - Multi-cell networks: multicell.md
+      - Channel models: channels.md
       - ns-3 bridges in depth: bridges.md
       - Configurability: configurability.md
       - Feature matrix sources: feature-matrix-sources.md
