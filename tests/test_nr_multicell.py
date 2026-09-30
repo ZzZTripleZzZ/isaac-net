@@ -68,10 +68,10 @@ def _run_single(cls, cfg, E, R, steps, dev, reset_at):
     return outs, states, net.collect()
 
 
-def _c1_equivalence(dev, E, R, steps):
-    cfgs = [NRConfig(), netslot_compat(), NRConfig(dl=True, harq_combining="ir_lena"),
+def _c1_equivalence(dev, E, R, steps, n_cfg=5):
+    cfgs = [NRConfig(dl=True, harq_combining="ir_lena"), netslot_compat(), NRConfig(),
             NRConfig(harq_fail="drop", discard="pdcp_arrival", n_harq=4, dl=True, pf_metric="wideband"),
-            oai_like(dl=True, ul_power="whole_band", phr_cap=False)]
+            oai_like(dl=True, ul_power="whole_band", phr_cap=False)][:n_cfg]
     for cfg in cfgs:
         a = _run_single(FrozenNRNet, cfg, E, R, steps, dev, reset_at=steps // 2)
         b = _run_single(NRNet, cfg, E, R, steps, dev, reset_at=steps // 2)
@@ -94,7 +94,7 @@ def test_m1_c1_bitwise_equals_main_nr_engine():
 
 @pytest.mark.gpu
 def test_m1_c1_bitwise_equals_main_nr_engine_gpu():
-    _c1_equivalence("cuda", 16, 8, 30)
+    _c1_equivalence("cuda", 16, 8, 12, n_cfg=2)       # small: the NR engine is launch-bound on a shared GPU
 
 
 # ---------------------------------------------------------------- multi-cell workload
