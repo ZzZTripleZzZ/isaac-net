@@ -21,3 +21,6 @@ lena_src/
 bin/
 obj/
 *.so
+# docs site build output, and the requirements file the CI docs job writes
+site/
+docs-requirements.txt

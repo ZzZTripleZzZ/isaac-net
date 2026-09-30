@@ -142,24 +142,25 @@ print("downlink queue length:\n", out["dl_queue_len"])
 # ## Multiple cells
 #
 # `multicell(n)` places `n` gNBs in a hexagonal cluster at 100 m inter-site distance, with thermal noise,
-# same-slot uplink interference between cells, fractional uplink power control and A3 handover. Multi-cell
-# configurations currently run on level `L2-legacy`, and the step output adds `serving_cell [E, R]`.
+# same-slot uplink interference between cells, fractional uplink power control and A3 handover. Both slot-level
+# engines run it: the NR engine `L2` with up to 7 cells (one PF scheduler and one set of HARQ processes per
+# cell), and `L2-legacy`. Uplink power control is on by default whenever `n_cells > 1`, because without it
+# full-power robots next to their own gNB dominate the interference. With several cells, `step` needs robot
+# positions (not an SNR), and the output's `serving_cell [E, R]` says which cell serves each robot.
 
 # %%
 mc = multicell(3)
 print("gNB positions (m):", [(round(x, 1), round(y, 1)) for x, y in mc.gnb_xy()])
-torch.manual_seed(0)
-net = make_engine("L2-legacy", E, R, dev, mc, seed=0)
+print("uplink power control on:", mc.ul_pc_on, "| same default for any n_cells > 1:",
+      NRConfig(n_cells=3, cell_layout="hex").ul_pc_on)
 arena_pos = 150 * torch.rand(E, R, 2, generator=g)
-for _ in range(5):
-    net.submit(None, Requests(sends[0]))
-    out = net.step(None, arena_pos)
-print("serving cell per robot:\n", out["serving_cell"])
-
-try:
-    make_engine("L2", E, R, dev, mc)
-except NotImplementedError as err:
-    print("L2 with 3 cells:", err)
+for level in ("L2", "L2-legacy"):
+    torch.manual_seed(0)
+    net = make_engine(level, E, R, dev, mc, seed=0)
+    for _ in range(5):
+        net.submit(None, Requests(sends[0]))
+        out = net.step(None, arena_pos)
+    print(f"{level}: serving cell per robot\n", out["serving_cell"])
 
 # %% [markdown]
 # ## Strict mode

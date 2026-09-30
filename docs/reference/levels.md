@@ -8,8 +8,8 @@ Every level comes from `make_engine(level, E, R, device, config, backend)` and h
 | `L0DR` | `L0` whose median delay, spread and loss are redrawn per environment at every reset | `dr_*` ranges from the config | domain randomization over delay |
 | `L05`, `L05Q` | delay and drop looked up in tables fitted offline from `L2` rollouts, per cell of backlogged robots × SNR × class (`L05Q` also by the robot's own queue) | `params={"q", "pdrop"}` (required) | cheap state-conditioned delay |
 | `L1` | fluid slot model: robots with queued data share each uplink slot equally, FIFO queues | `l1_eta` (goodput factor) | contention without MAC detail |
-| `L2` | configurable NR MAC and PHY: 3GPP MCS/TBS and BLER tables, multiple HARQ processes, optional downlink | the whole `NRConfig` | the fidelity model |
-| `L2-legacy` | the prototype slot-level MAC and PHY, frozen; runs several cells with a multi-cell config | application fields; the cell block for multi-cell | reproducing earlier prototype runs, and speed at scale |
+| `L2` | configurable NR MAC and PHY: 3GPP MCS/TBS and BLER tables, multiple HARQ processes, optional downlink, 1 to 7 cells with interference, power control and handover | the whole `NRConfig` | the fidelity model |
+| `L2-legacy` | the prototype slot-level MAC and PHY, frozen; also runs 1 to 7 cells with a multi-cell config | application fields; the cell block for multi-cell | reproducing earlier prototype runs, and speed at scale |
 | `TR` | trace replay: each environment replays one recorded `L2` or `L2-legacy` env-episode, open loop | fit file (required) | the replayed-trace baseline |
 | `GE` | three-state Markov-modulated delay and loss, one chain per environment | fit file (required) | a Gilbert–Elliott-style baseline |
 | `QA` | analytic processor-sharing queue per control step, FIFO service, scheduling-request delay | fit file, or an uncalibrated default | contention without slot simulation |
@@ -20,7 +20,7 @@ Every level comes from `make_engine(level, E, R, device, config, backend)` and h
 ## Semantics shared by the levels
 
 - **Message model.** Every level uses the same per-robot FIFO of `F = 16` message slots, the same 20-step (2 s) application deadline and the same output dict. The prototype levels, the surrogates and the bounds are compiled around these constants and a 100 ms control step, so `make_engine` refuses a config that asks for other values. The NR engine `L2` reads `frame_buffer`, `timeout_steps` and `control_step_ms` from the config.
-- **Radio.** `L0` to `L1`, the surrogates and the bounds use the fixed legacy radio (one gNB at the origin, log-distance path loss with correlated shadowing, a −90 dBm noise floor). `L1` and `QA` refuse any other cell setting. `L2` and multi-cell `L2-legacy` build their radio from the config.
+- **Radio.** `L0` to `L1`, the surrogates and the bounds use the fixed legacy radio (one gNB at the origin, log-distance path loss with correlated shadowing, a −90 dBm noise floor). `L1` and `QA` refuse any other cell setting. `L2` and multi-cell `L2-legacy` build their radio from the config, and only they accept `n_cells > 1` (up to 7, with uplink power control on by default).
 - **Config fields.** Each level reads only some `NRConfig` fields. `NRConfig.unused_fields(level)` lists the non-default fields a level ignores, and `make_engine(..., strict=True)` raises on them (see [Configuration](config.md#strict-mode)).
 - **Resets.** Every level keeps per-env clocks and exact partial resets. The surrogates draw their reset state (the replayed trace of `TR`, the initial state of `GE`) from the engine generator.
 
@@ -31,7 +31,7 @@ Every level comes from `make_engine(level, E, R, device, config, backend)` and h
 | `L0`, `L0DR`, `L05`, `L05Q` | ✓ | ✓ | ✓ | ✓ | |
 | `L1`, `L2-legacy` (one cell) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `L2-legacy` (multi-cell) | ✓ | | | | |
-| `L2` | ✓ | | | | |
+| `L2` (one or several cells) | ✓ | | | | |
 | `TR`, `GE`, `QA`, `NN`, `ORACLE`, `NOCOMM` | ✓ | ✓ | ✓ | | |
 
 For the surrogates and bounds, `reference` and `eager` run the same graph-safe code, and `graph` captures it. The fast backends of the prototype levels need a CUDA GPU.

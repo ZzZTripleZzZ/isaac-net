@@ -65,6 +65,8 @@ nav:
       - Multi-cell networks: multicell.md
       - ns-3 bridges in depth: bridges.md
       - Configurability: configurability.md
+      - Feature matrix sources: feature-matrix-sources.md
+      - gNB measurement protocol: measurement-protocol.md
   - Licensing: licensing.md
 
 markdown_extensions:

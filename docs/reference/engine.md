@@ -47,7 +47,7 @@ Some engines add entries:
 
 | Key | Engines | Meaning |
 |:---|:---|:---|
-| `serving_cell` | `L2`, multi-cell `L2-legacy` | serving cell of each robot `[E, R]` |
+| `serving_cell` | `L2`, multi-cell `L2-legacy` | serving cell of each robot `[E, R]` (0 with one cell) |
 | `dropped` | `L2` | `[E, R, F]` messages lost under RLC unacknowledged mode (`harq_fail="drop"`) and resolved this step |
 | `dl_newest`, `dl_queue_len` | `L2` with `NRConfig(dl=True)` | downlink counterparts of `newest` and `queue_len` |
 

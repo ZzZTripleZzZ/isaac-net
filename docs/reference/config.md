@@ -22,7 +22,7 @@ Each preset returns an `NRConfig` and takes keyword overrides, for example `nets
 | `lena_like()` (alias `lena_match`) | the ns-3 5G-LENA reference scenario as far as the model allows; needs the locally generated 5G-LENA BLER tables |
 | `lena_validation()` | `lena_like()` in the geometry of the 5G-LENA validation sweep (fading off, whole-band UE power, per-UE link budgets) |
 | `srsran_like()`, `oai_like()` | uplink latency fitted to public srsRAN and OAI measurements (see [Public-data calibration](../calibration-public-data.md)) |
-| `multicell(n)` | a hexagonal cluster of `n` cells at 100 m spacing, thermal noise, same-slot interference, uplink power control and A3 handover; runs on `L2-legacy` |
+| `multicell(n)` | a hexagonal cluster of `n` cells at 100 m spacing, thermal noise, same-slot interference, uplink power control and A3 handover; runs on `L2` (up to 7 cells) and on `L2-legacy` |
 
 ## Strict mode
 
