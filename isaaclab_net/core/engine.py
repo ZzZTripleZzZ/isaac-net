@@ -106,6 +106,48 @@ def _edge_wrapped(factory):
     return make
 
 
+def _bgenergy_wrapped(factory):
+    """make_engine adds BackgroundLoop (NRConfig.background, innermost, below EdgeLoop) and EnergyLoop
+    (NRConfig.energy, outermost) when the config sets them; see core/background.py and core/energy.py."""
+    import functools
+    import inspect
+    sig = inspect.signature(factory)
+
+    @functools.wraps(factory)
+    def make(*args, **kw):
+        a = sig.bind(*args, **kw)
+        a.apply_defaults()
+        p = dict(a.arguments)
+        cfg = p["config"] if p["config"] is not None else NRConfig()
+        bg, en = getattr(cfg, "background", None), getattr(cfg, "energy", None)
+        if bg is None and en is None:
+            return factory(*args, **kw)
+        if p["sizes"] is not None:
+            cfg = cfg.with_(msg_sizes=tuple(float(s) for s in p["sizes"]))
+        seed = p["seed"] if p["seed"] is not None else cfg.seed
+        if seed is None:
+            seed = int(torch.randint(0, 2 ** 62, ()).item())
+        rest = {k: p[k] for k in ("sizes", "params", "inject", "strict")}
+        if bg is not None and bg.n_background > 0:
+            from .background import BackgroundLoop
+            if cfg.edge is not None and cfg.edge.return_path == "nr_dl":
+                raise ValueError("EdgeConfig(return_path='nr_dl') cannot be combined with background users")
+            inner = BackgroundLoop.build(p["level"], p["E"], p["R"], p["device"], cfg.with_(energy=None),
+                                         p["backend"], factory, seed=seed, **rest)
+            if cfg.edge is not None:
+                from .edge import EdgeLoop
+                inner = EdgeLoop(inner, cfg.edge)
+        else:
+            inner = factory(p["level"], p["E"], p["R"], p["device"], cfg.with_(background=None, energy=None),
+                            p["backend"], seed=seed, **rest)
+        if en is None:
+            return inner
+        from .energy import EnergyLoop
+        return EnergyLoop(inner, en, seed=seed, config=cfg)
+    return make
+
+
+@_bgenergy_wrapped
 @_edge_wrapped
 def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backend="reference", *, sizes=None,
                 params=None, seed=None, inject=False, strict=False):

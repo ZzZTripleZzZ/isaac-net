@@ -67,6 +67,7 @@ nav:
       - "Second backend: MuJoCo Playground / MJX": backends-mjx.md
       - Multi-cell networks: multicell.md
       - Differentiable network models: differentiable.md
+      - Background users, energy and sharding: background-energy-sharding.md
       - Channel models: channels.md
       - ns-3 bridges in depth: bridges.md
       - Configurability: configurability.md

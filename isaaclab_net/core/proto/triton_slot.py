@@ -27,7 +27,7 @@ def _se(x, SE_MIN: tl.constexpr, SE_MAX: tl.constexpr):
 
 @triton.jit
 def slot_loop_kernel(rem_ptr, bsr_ptr, srt_ptr, avg_ptr, olla_ptr, wait_ptr, hcnt_ptr, h_ptr,
-                     snr_ptr, fin_ptr, nz_ptr, u_ptr, t_ptr, seed_ptr, ep_ptr, ctr_ptr, s0, chs, st_n, st_u, E, R,
+                     snr_ptr, fin_ptr, nz_ptr, u_ptr, t_ptr, seed_ptr, ep_ptr, ctr_ptr, s0, chs, st_n, st_u, E, R, env0,
                      RB: tl.constexpr, FB: tl.constexpr, F_: tl.constexpr, SB: tl.constexpr, S_: tl.constexpr,
                      K: tl.constexpr, RNG: tl.constexpr,
                      RHO: tl.constexpr, C1: tl.constexpr, SQ2: tl.constexpr, BYTES: tl.constexpr,
@@ -48,7 +48,7 @@ def slot_loop_kernel(rem_ptr, bsr_ptr, srt_ptr, avg_ptr, olla_ptr, wait_ptr, hcn
     if RNG == 2:
         ep = _rt.u32(tl.load(ep_ptr + e))
         ctr = _rt.u32(tl.load(ctr_ptr + e))
-        env = _rt.u32(e)
+        env = _rt.u32(e + env0)                             # global env id (env0 = shard offset)
         base_n = _rt.key(_rt.u32(s0), env, ep, _rt.u32(chs), ctr, _rt.u32(st_n))
         base_u = _rt.key(_rt.u32(s0), env, ep, _rt.u32(chs), ctr, _rt.u32(st_u))
         i_rs = (r[:, None] * S_ + s[None, :]) * 2          # within-env index of (r, s, re) in [K,R,S,2]
@@ -170,10 +170,11 @@ def launch(net, inject):
     ep = net.rng.episode if mode == 2 else net.sr_t
     ctr = net.rng.ctr[_rng.STEP] if mode == 2 else net.sr_t
     s0 = net.rng.s0 if mode == 2 else 0
+    env0 = net.rng.env_offset if mode == 2 else 0
     slot_loop_kernel[(E,)](
         net.rem, net.bsr, net.sr_t, net.avg, net.olla, net.wait, net.hcnt, net.h,
         net._snr, net._fin, net._nz if inject else dummy, net._u if inject else dummy,
-        net._t, net._seed, ep, ctr, s0, _rng.salt(_rng.STEP), _rng.salt(0), _rng.salt(1), E, R,
+        net._t, net._seed, ep, ctr, s0, _rng.salt(_rng.STEP), _rng.salt(0), _rng.salt(1), E, R, env0,
         RB=RB, FB=ns.next_pow2(net.F), F_=net.F, SB=8, S_=ns.S, K=net.K, RNG=mode,
         RHO=ns.RHO, C1=math.sqrt(1 - ns.RHO ** 2), SQ2=math.sqrt(2), BYTES=ns.BYTES_PER_SE,
         SE_MIN=ns.SE_MIN, SE_MAX=ns.SE_MAX, SR_DELAY=ns.SR_DELAY, HARQ_RTT=ns.HARQ_RTT,

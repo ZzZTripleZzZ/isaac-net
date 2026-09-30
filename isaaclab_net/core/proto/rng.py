@@ -75,7 +75,8 @@ class CounterRNG:
         self.seed = int(seed)
         self.E, self.dev = E, torch.device(device)
         self.s0 = seed_key(self.seed)
-        self.env = torch.arange(E, dtype=torch.long, device=self.dev)
+        self.env = torch.arange(E, dtype=torch.long, device=self.dev)     # env ids of the rows (key of the draws)
+        self.env_offset = 0
         self.episode = torch.full((E,), -1, dtype=torch.long, device=self.dev)
         self.ctr = {SUBMIT: torch.zeros(E, dtype=torch.long, device=self.dev),
                     STEP: torch.zeros(E, dtype=torch.long, device=self.dev)}
@@ -94,6 +95,14 @@ class CounterRNG:
             self.episode.index_add_(0, ids, torch.ones_like(ids))
             for c in self.ctr.values():
                 c.index_fill_(0, ids, 0)
+
+    def set_env_offset(self, offset):
+        """Key row i by env id offset + i instead of i (in place, so captured graphs stay valid). A shard of a
+        larger batch (core/sharded.py) sets the global id of its first env, so an env draws the same numbers
+        whichever shard holds it."""
+        offset = int(offset)
+        self.env.add_(offset - self.env_offset)
+        self.env_offset = offset
 
     def tick(self, channel):
         """One more call of `channel` (SUBMIT / STEP) for every env. Run it outside captured graphs."""
@@ -119,7 +128,7 @@ class CounterRNG:
     def _rows(self, ids):
         if ids is None:
             return self.env, self.episode, self._zero
-        return ids, self.episode.index_select(0, ids), torch.zeros_like(ids)
+        return self.env.index_select(0, ids), self.episode.index_select(0, ids), torch.zeros_like(ids)
 
     def _draw(self, env, ep, ctr, channel, stream, tail, normal):
         n = 1

@@ -78,6 +78,7 @@ FIELD_GROUPS = {
                   "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc"),
     "nr_multicell": ("dl_interference",),      # read by the NR engine only (NetSlotMC has no downlink)
     "traffic": ("traffic",),
+    "wrappers": ("background", "energy"),      # make_engine wrappers (core/background.py, core/energy.py)
 }
 
 CHANNELS = ("log_distance", "tr38901", "radio_map")
@@ -94,7 +95,7 @@ def fields_read_by(level, cfg=None):
         level, ("app", "proto"))
     if level == "L2-legacy" and cfg is not None and not cfg.is_legacy_cell():
         groups = ("app", "proto", "frame", "link", "radio", "multicell")        # NetSlotMC
-    read = {f for g in groups for f in FIELD_GROUPS[g]}
+    read = {f for g in groups for f in FIELD_GROUPS[g]} | set(FIELD_GROUPS["wrappers"])
     if cfg is not None and cfg.traffic is not None and not any(m.generates for m in cfg.traffic):
         read.add("traffic")            # policy() only: the submit() path every level has
     return read
@@ -328,6 +329,8 @@ class NRConfig:
                                                  # None = control_step_ms / 2.5 ms (the legacy DDDSU UL spacing)
     # ---- edge-computing loop (core/edge.py): make_engine wraps any level in EdgeLoop when set ----
     edge: EdgeConfig | None = None
+    background: object = None            # core.background.BackgroundConfig: non-robot UEs sharing each cell
+    energy: object = None                # core.energy.EnergyConfig: per-robot radio energy and battery
 
     # ---------------- derived ----------------
     def __post_init__(self):
