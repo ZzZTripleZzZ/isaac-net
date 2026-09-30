@@ -481,6 +481,7 @@ def test_gpu_graph_mode_equals_eager_mode(cheap, cb, xb, layout):
     resets = {k: torch.tensor([(3 * k) % E, (5 * k + 1) % E], device=dev) for k in range(2, 45, 3)}
     resets[20] = None
     kw = dict(cheap_backend=cb, expensive_backend=xb, **_switchy(cheap), **layout)
+    kw["decision_period"] = 2 if cheap == "L1" else 1          # two captured steps, with and without switching
 
     def run(graph):
         net = _adaptive(E, R, _fid(cheap, "L2-legacy", graph=graph, **kw), dev=dev)

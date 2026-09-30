@@ -32,28 +32,30 @@ Layouts (FidelityConfig.layout / active_budget)
 Handoff (between two control steps, after the step whose indicator triggered it)
   queues      the FIFO rows move exactly (capture step, class, detection tag, remaining bytes, lookup features):
               every level stores frames in the same compacted F-slot FIFO.
-  L2-legacy   entered with steady-state MAC defaults: BSR = queued bytes (the gNB knows the buffer, no SR), no
-              pending SR, no HARQ process in flight, PF average = the robot's PF-average estimate (floor PF_AVG_MIN:
-              its actual PF average when it last left the level, continued as an EWMA with the PF time constant of
-              the bytes the cheap level served; delivered bytes on delay levels), fading drawn from its stationary distribution CN(0, 1), OLLA offset = the robot's own offset
-              when it last left the level in this episode, else the mean of its env's remembered offsets, else
-              OLLA_PRIOR (per env only, so envs stay independent). Leaving it,
-              the queue keeps the bytes of undecoded HARQ transmissions (NetSlot removes bytes only on success).
+  L2-legacy   entered with steady-state MAC values: BSR = queued bytes (the gNB knows the buffer, no SR pending),
+              no HARQ process in flight, fading drawn from its stationary distribution CN(0, 1), OLLA offset = the
+              robot's own offset when it last left the level in this episode, else the mean of its env's remembered
+              offsets, else OLLA_PRIOR, and PF average = the robot's PF-average estimate: its actual PF average when
+              it last left the level (the level's reset value after a reset), continued as an EWMA with the PF time
+              constant of the bytes the cheap level served (delivered bytes on delay levels), floor PF_AVG_MIN. All of
+              it is per env, so envs stay independent. Leaving it, the queue keeps the bytes of undecoded HARQ
+              transmissions (NetSlot removes bytes only on success).
   L0 ... L05Q frames entering a delay level get a delivery time drawn from the level's delay distribution conditioned
               on the time already waited (delay > now - capture), and a loss with the matching conditional
               probability p / (p + (1 - p) (1 - F(waited))).
   L1          has no state beyond the FIFO.
   L2 (NR)     the FIFO is laid out on a fresh byte stream (air bytes = remaining payload x air(size) / size), MAC state
-              from its reset values with BSR = queued bytes, CSI = the gain of a stationary fading draw and PF average
-              = delivered bytes per UL data slot; leaving it, a frame keeps the payload share of its air bytes above
-              the RLC in-order pointer (at least 1 byte).
+              from its reset values with BSR = queued air bytes, CSI = the gain of a stationary fading draw, and OLLA
+              and PF average as for L2-legacy (per UL data slot); leaving it, a frame keeps the payload share of its
+              air bytes above the RLC in-order pointer (at least 1 byte).
 Resets start an env on the level its mode assigns at zero load, with that level's exact reset state.
 
 Randomness. make_adaptive requires rng="engine" (NRConfig.rng default): both instances use the same seed, so an env's
 draws on either level are the ones a plain engine of that level draws for it (keyed by env id, episode and call
 count). The NR engine (L2) draws its stepping randomness from the global RNG, so it matches a plain L2 engine only
-under the same global seed and layout. In the subbatch layout each slot's stream keys are set to its env's, so for the reference / eager / graph
-backends the subbatch layout is bitwise equal to the mask layout. The triton kernel of L2-legacy keys its draws by
+under the same global seed and layout. In the subbatch layout each slot's stream keys are set to its env's, so for
+the reference / eager / graph backends the subbatch layout is bitwise equal to the mask layout (on the CPU for
+M = E; see docs/adaptive-fidelity.md). The triton kernel of L2-legacy keys its draws by
 row index: there a slot run by another env gets an independent stream (hashed episode key) instead.
 
 Graph mode (FidelityConfig.graph, "auto" = CUDA and fast backends on both levels): after two eager calls, submit, step
@@ -86,9 +88,9 @@ EXPENSIVE_LEVELS = ("L1", "L2-legacy", "L2")
 MODES = ("static", "load", "cheap", "expensive")
 INDICATORS = ("backlog", "contention", "offered")
 INF = float("inf")
-# OLLA offset (dB) of a robot entering the expensive level before any robot has been on it: the steady-state mean
-# measured on L2-legacy (about -3.1 dB, std 1.5-2 dB, nearly independent of load; benchmarks/adaptive); 0 = the NR
-# engine's reset value
+# OLLA offset (dB) of a robot entering the expensive level when neither it nor its env has a remembered offset: the
+# steady-state mean measured on L2-legacy (about -3.1 dB, std 1.5-2 dB, nearly independent of load; see
+# docs/adaptive-fidelity.md); 0 = the NR engine's reset value
 OLLA_PRIOR = {"L2-legacy": -3.0, "L2": 0.0}
 
 
@@ -111,11 +113,13 @@ class FidelityConfig:
       layout                 "mask", "subbatch" or "auto" (static: subbatch sized to the static set; otherwise
                              subbatch if active_budget is set, else mask)
       active_budget          subbatch rows M: an int, or a float in (0, 1] = share of E (rounded up)
-      decision_period        evaluate switches every this many steps (1 = every step)
-      olla_prior_db          OLLA offset of robots entering the expensive level before any robot has been on it
-                             (None = OLLA_PRIOR of the level: -3 dB for L2-legacy, 0 for L2)
-      graph                  capture submit and step (both levels and the switching) in one CUDA graph each after
-                             two eager calls; "auto" = on when the device is CUDA and both levels use a fast backend
+      decision_period        evaluate switches every this many steps (1 = every step); the switching work runs only
+                             on those steps (graph mode captures a step with and a step without it)
+      olla_prior_db          OLLA offset of a robot entering the expensive level without a remembered offset in
+                             its env (None = OLLA_PRIOR of the level: -3 dB for L2-legacy, 0 for L2)
+      graph                  capture submit, step and reset (both levels and the routing) in one CUDA graph each
+                             after two eager calls; "auto" = on when the device is CUDA and both levels use a fast
+                             backend
                              (eager / graph / compile / triton). Calls with an explicit t or cur_hid run eagerly.
     """
 
@@ -277,12 +281,15 @@ class _Level:
             a = qf.gather(-1, lo[..., None]).squeeze(-1)
             b = qf.gather(-1, (lo + 1)[..., None]).squeeze(-1)
             frac = torch.where(b > a, ((w - a) / (b - a).clamp(min=1e-30)).clamp(0, 1), torch.ones_like(w))
-            Fw = torch.where(idx <= 0, torch.zeros_like(w), torch.where(idx > 100, torch.ones_like(w), (lo + frac) / 100))
+            Fw = torch.where(idx > 100, torch.ones_like(w), (lo + frac) / 100)
+            Fw = torch.where(idx <= 0, torch.zeros_like(w), Fw)
             uu = (Fw + u * (1 - Fw)).clamp(max=1.0)
             x = uu * 100
             lo2 = x.floor().long().clamp(max=99)
             ww = x - lo2
-            d = qf.gather(-1, lo2[..., None]).squeeze(-1) * (1 - ww) + qf.gather(-1, (lo2 + 1)[..., None]).squeeze(-1) * ww
+            q_lo = qf.gather(-1, lo2[..., None]).squeeze(-1)
+            q_hi = qf.gather(-1, (lo2 + 1)[..., None]).squeeze(-1)
+            d = q_lo * (1 - ww) + q_hi * ww
         den = p + (1 - p) * (1 - Fw)
         pc = torch.where(den > 0, p / den.clamp(min=1e-30), torch.ones_like(Fw))
         lost = v < pc
@@ -512,7 +519,7 @@ class AdaptiveEngine:
         self.served.fill_(self.lx.pf_reset_served())
         self._served_a = 1.0 - (1.0 - 1.0 / _ns.PF_T) ** self.K
         self._last_snr = torch.zeros(E, R, device=d)
-        self._nstep = torch.zeros((), dtype=torch.long, device=d)   # steps taken (decision period)
+        self._nsteps = 0                                            # steps taken (host counter: decision period)
         # OLLA on entering the expensive level: the robot's own offset when it last left it in this episode (NaN =
         # none), else the mean of its env's remembered offsets, else the level's prior (env-local: no coupling)
         self.olla_mem = torch.full((E, R), math.nan, device=d)
@@ -569,7 +576,7 @@ class AdaptiveEngine:
 
     def _invalidate(self):
         """The captured step and reset bake in the mode (switching, level at reset): capture again after a change."""
-        for name in ("step", "reset"):
+        for name in ("step", "step_switch", "reset"):
             self._graphs.pop(name, None)
             self._calls[name] = 0
 
@@ -779,14 +786,18 @@ class AdaptiveEngine:
         """Advance [t, t+1) on both levels and merge per env. x: SNR [E,R] dB or poses [E,R,2|3] (through the cheap
         instance's radio, shared by both levels). Legacy form step(t, x, cur_hid) -> (newest, det_env)."""
         snr = self.cheap._snr_from(x)
+        self._nsteps += 1
+        switch = self.mode == "load" and self._nsteps % self.fid.decision_period == 0
         if cur_hid is not None:
-            out = self._step_body(snr, t, cur_hid)
+            out = self._step_body(snr, t, cur_hid, switch)
             return out["newest"], out["det_env"]
-        if self.graph and t is None:
-            return {k: v.clone() for k, v in self._replay("step", self._step_body, (snr,)).items()}
-        return self._step_body(snr, t)
+        if self.graph and t is None:          # two captured steps: with and without the switching logic
+            name = "step_switch" if switch else "step"
+            out = self._replay(name, lambda s: self._step_body(s, None, None, switch), (snr,))
+            return {k: v.clone() for k, v in out.items()}
+        return self._step_body(snr, t, None, switch)
 
-    def _step_body(self, snr, t=None, cur_hid=None):
+    def _step_body(self, snr, t=None, cur_hid=None, switch=False):
         tv = self.cheap._tvec(t)
         ch = self.cheap._last_hid if cur_hid is None else cur_hid
         rem_pre = self.cheap.rem.clone() if (self.lx.h_shape is not None and not self.lc.delay) else None
@@ -812,9 +823,8 @@ class AdaptiveEngine:
         out["fidelity"] = act.long()
         out["fidelity_indicator"] = self.ind.clone()
         self.dwell.add_(1)
-        self._nstep.add_(1)
-        if self.mode == "load":
-            self._transition(gate=self._nstep % self.fid.decision_period == 0)
+        if switch:
+            self._transition()
         return out
 
     # ------------------------------------------------------------------ graph mode
@@ -873,14 +883,11 @@ class AdaptiveEngine:
         v = self._hrng._draw(rows_env, ep, ctr, HANDOFF, 2, tail, False)
         return u, v
 
-    def _transition(self, force=False, gate=None):
-        """Move envs whose target level changed. Releases first (so their slots can be reused), then grants. gate
-        (device bool): switch only if it is true (decision_period, without a host sync)."""
+    def _transition(self, force=False):
+        """Move envs whose target level changed. Releases first (so their slots can be reused), then grants."""
         want = self._want(ignore_dwell=force)               # curriculum / set_mode: no dwell
         rel = self.active & ~want
         req = want & ~self.active
-        if gate is not None:
-            rel, req = rel & gate, req & gate
         now = self.cheap.clock
         olla = self.lx.olla()
         # ---- release: expensive rows -> cheap rows

@@ -24,13 +24,14 @@ def main(paths):
     rows = [json.loads(line) for p in paths for line in open(p) if line.strip()]
     by = defaultdict(list)
     for r in rows:
-        by[(r["scenario"], r["E"], r["R"], r.get("cheap", "L1"), r["backend"], r.get("exp_backend", r["backend"]),
-            r.get("expensive", "L2-legacy"))].append(r)
+        key = (r["scenario"], r["E"], r["R"], r.get("cheap", "L1"), r["backend"], r.get("exp_backend", r["backend"]),
+               r.get("expensive", "L2-legacy"))
+        by[key].append(r)
     for (sc, E, R, C, be, xb, X), rs in by.items():
         ref = next((r for r in rs if r["run"] == "ref"), None)
         print(f"\n### {sc}: {C} `{be}` and {X} `{xb}`, E = {E}, R = {R}\n")
-        print("| Run | expensive share | W1 (steps) | KS | drop | Δdrop | p50 / p95 / p99 (steps) | ms / step | vs ref | "
-              "ms / step, resets | switches up / down |")
+        print("| Run | expensive share | W1 (steps) | KS | drop | Δdrop | p50 / p95 / p99 (steps) | ms / step | "
+              "vs ref | ms / step, resets | switches up / down |")
         print("|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
         for r in rs:
             ms = r.get("ms")

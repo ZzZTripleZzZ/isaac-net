@@ -163,7 +163,7 @@ def main():
     ap.add_argument("--backend", default="triton", help="backend of both levels (see --exp_backend)")
     ap.add_argument("--exp_backend", default=None, help="backend of the expensive level (default --backend)")
     ap.add_argument("--expensive", default="L2-legacy", help="L2-legacy or L2 (NR engine, reference backend)")
-    ap.add_argument("--decision_period", type=int, default=1)
+    ap.add_argument("--decision_period", default="1", help="one or more (comma-separated) decision periods")
     ap.add_argument("--steps", type=int, default=400)
     ap.add_argument("--warm", type=int, default=50)
     ap.add_argument("--reps", type=int, default=5)
@@ -200,11 +200,12 @@ def main():
         wl = workload(E, R, nsteps, sc, dev, arena=arena)
         runs = [("ref", None, 7), ("ref-seed2", None, 8), (a.cheap, None, 7)]
         for thr in a.thresholds.split(","):
-            for b in a.budgets.split(","):
-                runs.append(("adaptive", dict(mode="load", indicator=a.indicator, up_threshold=float(thr),
-                                              layout="mask" if b == "mask" else "subbatch",
-                                              active_budget=None if b == "mask" else float(b),
-                                              decision_period=a.decision_period), 7))
+            for dp in (int(v) for v in str(a.decision_period).split(",")):
+                for b in a.budgets.split(","):
+                    runs.append(("adaptive", dict(mode="load", indicator=a.indicator, up_threshold=float(thr),
+                                                  layout="mask" if b == "mask" else "subbatch",
+                                                  active_budget=None if b == "mask" else float(b),
+                                                  decision_period=dp), 7))
         for f in (a.static.split(",") if a.static else []):
             runs.append(("static", dict(mode="static", fraction=float(f)), 7))
         ref = None
