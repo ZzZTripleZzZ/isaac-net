@@ -10,6 +10,7 @@ These pages are for collaborators joining the project. The top-level [README](..
 | [licensing.md](licensing.md) | What ships under which license, the locally generated 5G-LENA tables, GPL-bound bridge binaries, Isaac Sim and the Omniverse EULA, public datasets |
 | [STATUS.md](STATUS.md) | What is done (with commits), what is in progress on which branch, the prioritized open items, and suggested starter tasks |
 | [validation-5g-lena.md](validation-5g-lena.md) | The ns-3.48 + 5G-LENA v5.1 reference, the 186-run sweep, the model mismatch table and which side was changed, and the NR engine's replay of the sweep |
+| [fidelity-vs-lena.md](fidelity-vs-lena.md) | The formal NR-engine vs 5G-LENA comparison: per-run and sweep-level KS / W1 / quantile / drop / goodput / HARQ / PRB errors, the SR-delay fit and hold-out split, ablations, the legacy engine and fading arm, and speed |
 | [calibration-public-data.md](calibration-public-data.md) | Public datasets and their licenses, the data problems found, fitted parameters, the `lena_match` / `srsran_like` / `oai_like` presets, and what public data cannot validate |
 | [performance.md](performance.md) | Backend equivalence methodology, per-level and per-backend benchmarks, Isaac Lab scale results, and the ns-3 CPU co-simulation cost comparison |
 | [isaac-lab.md](isaac-lab.md) | Windows-native Isaac Sim 6.1 / Isaac Lab 3.0 install, running CUDA jobs with nobody logged in, the demo env, the 1,048,576-robot scale table and the adapter fixes |
