@@ -30,6 +30,12 @@ E, R = 8, 6
 SIZES = (4000.0, 30000.0)
 
 
+def drained(net):
+    """No frame is queued and no HARQ process is busy on any link: later steps cannot change the outcome."""
+    links = [lk for lk in (net.ul, net.dl) if lk is not None]
+    return all(int((lk.q.cap >= 0).sum()) == 0 and int((lk.h_state != 0).sum()) == 0 for lk in links)
+
+
 def run(cfg, T_send=40, T_drain=80, seed=1, dl=False, p_send=0.35, snr_hi=25.0, big=False):
     torch.manual_seed(seed)
     net = NRNet(E, R, dev, SIZES, cfg)
@@ -49,6 +55,8 @@ def run(cfg, T_send=40, T_drain=80, seed=1, dl=False, p_send=0.35, snr_hi=25.0, 
                                torch.zeros(E, dtype=torch.long, device=dev), snr)
         net.step(t, snr, torch.zeros(E, dtype=torch.long, device=dev))
         maxbusy = max(maxbusy, int((link.h_state != 0).sum(-1).max()))
+        if t >= T_send and drained(net):   # the drain phase is an upper bound; stop once the engine is idle
+            break
     return net, link, maxbusy
 
 
@@ -152,7 +160,8 @@ CFG_N = CFG_M.with_(timeout_steps=5, discard="none", bler_target=0.1, olla=True,
 
 @pytest.mark.slow
 def test_h8_discard_none_never_purges():
-    net_n, _, _ = run(CFG_N, T_send=30, T_drain=400, p_send=0.8, big=True)
+    net_n, _, _ = run(CFG_N, T_send=10, T_drain=400, p_send=0.8, big=True)
+    assert drained(net_n), "H8: the backlog must drain completely so that 'all are delivered' is checked"
     fr = frames_from(net_n, False)
     cnt = {s: sum(1 for x in fr if x[5] == s) for s in ("delivered", "timed", "dropped")}
     late = sum(1 for x in fr if x[5] == "delivered" and x[4] - x[6] >= 5)
@@ -203,6 +212,8 @@ def _h10(drain):
         return
     for t in range(15, 300):
         net_r.step(t, snr, z)
+        if drained(net_r):
+            break
     for lk in ("ul", "dl"):
         assert int((getattr(net_r, lk).q.cap >= 0).sum()) == 0 and int((getattr(net_r, lk).h_state == 1).sum()) == 0
 
