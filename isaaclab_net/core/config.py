@@ -50,8 +50,8 @@ def fading_rho_from_speed(speed_mps, carrier_ghz=3.5, anchor_ms=2.5):
 # NRConfig fields by the part of the package that reads them (see fields_read_by / unused_fields). The prototype
 # levels, the surrogates and the bounds read only APP and PROTO (and their own level block); their radio is the fixed
 # legacy one. The channel fields (radio group) are read by radio.RadioMC, which L2 and NetSlotMC use; per-robot Doppler
-# (fading_doppler) needs the NR engine's fading, so it sits in the NR group. The NR engine (L2) reads APP but not
-# PROTO (its step draws use the global RNG; its slots per step come from the numerology and TDD pattern).
+# (fading_doppler) needs the NR engine's fading, so it sits in the NR group. The NR engine (L2) reads APP and rng from
+# PROTO (its slots per step come from the numerology and TDD pattern, not proto_ul_slots_per_step).
 FIELD_GROUPS = {
     "app": ("control_step_ms", "frame_buffer", "timeout_steps", "msg_sizes", "edge", "seed"),
     "proto": ("rng", "proto_ul_slots_per_step"),
@@ -64,7 +64,7 @@ FIELD_GROUPS = {
            "sr_grant_delay_slots", "ul_harq_rtt_slots", "cqi_period_slots", "proactive_grant", "proc_offset_ms",
            "n_harq", "max_harq_tx", "harq_combining", "harq_fail", "rlc_retx_slots", "discard", "mcs_table",
            "eff_sinr", "bler_source", "tbs_mode", "lena_ref_sc_per_rb", "bler_target", "ul_mcs_max", "dl_mcs_max",
-           "olla", "olla_up_db", "pf_metric", "pf_window", "retx_priority", "ul_power", "phr_cap",
+           "olla", "olla_up_db", "scheduler", "pf_metric", "pf_window", "retx_priority", "ul_power", "phr_cap",
            "phr_min_db", "fading", "fading_rho_per_ms", "ue_speed_mps", "carrier_ghz", "fading_doppler",
            "doppler_min_speed_mps", "dl_snr_offset_db",
            "gnb_tx_dbm", "ue_nf_db", "tb_overhead_bytes", "pkt_payload_bytes", "pkt_overhead_bytes", "ul", "dl"),
@@ -97,6 +97,8 @@ def fields_read_by(level, cfg=None):
     if level == "L2-legacy" and cfg is not None and not cfg.is_legacy_cell():
         groups = ("app", "proto", "frame", "link", "radio", "multicell")        # NetSlotMC
     read = {f for g in groups for f in FIELD_GROUPS[g]} | set(FIELD_GROUPS["wrappers"])
+    if level == "L2":
+        read.add("rng")                # engine RNG of the NR engine (nr_rng.py)
     if cfg is not None and cfg.traffic is not None and not any(m.generates for m in cfg.traffic):
         read.add("traffic")            # policy() only: the submit() path every level has
     return read
@@ -224,6 +226,9 @@ class NRConfig:
     dl_mcs_max: int | None = None
     olla: bool = True
     olla_up_db: float = 0.05             # down step = up * (1 - target) / target
+    scheduler: str = "pf"                # "pf" proportional fair (metric from pf_metric), "pf_wideband" (= pf with
+                                         # pf_metric="wideband"), "maxci" (max rate, no fairness), "rr" (round robin:
+                                         # the robot served longest ago first, channel-blind)
     pf_metric: str = "subband"           # "subband" (frequency-selective) or "wideband" (5G-LENA OFDMA PF)
     pf_window: float = 100.0             # EWMA window in scheduled slots of that direction
     retx_priority: bool = True
@@ -322,7 +327,7 @@ class NRConfig:
     # ---- randomness and prototype timing ----
     seed: int | None = None              # engine seed (make_engine(seed=...) overrides it); None = drawn from the
                                          # global torch RNG at construction
-    rng: str = "engine"                  # prototype, surrogate and bound levels: "engine" = every draw from the
+    rng: str = "engine"                  # every level (the NR engine too): "engine" = every draw from the
                                          # engine's counter-based streams keyed by (seed, env, episode, call), so a
                                          # policy's use of the global RNG never changes the network; "global" = the
                                          # earlier behavior (stepping draws from the global torch RNG)
@@ -340,6 +345,8 @@ class NRConfig:
         assert set(self.tdd_pattern) <= set("DSU") and self.tdd_pattern
         assert self.harq_combining in ("cc", "ir_lena", "none") and self.harq_fail in ("rlc_am", "drop")
         assert self.eff_sinr in ("eesm", "mean_db") and self.pf_metric in ("subband", "wideband")
+        assert self.scheduler in ("pf", "pf_wideband", "maxci", "rr"), "scheduler: pf, pf_wideband, maxci or rr"
+        assert self.rng in ("engine", "global"), "rng must be 'engine' or 'global'"
         assert self.discard in ("purge", "none", "pdcp_arrival") and self.tbs_mode in ("38214", "lena")
         assert self.bler_source in ("pdsch", "lena", "sionna_label") and self.noise_model in ("fixed", "thermal")
         assert not (self.harq_combining == "ir_lena" and self.eff_sinr != "eesm")

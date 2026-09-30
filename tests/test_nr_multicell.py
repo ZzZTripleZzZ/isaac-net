@@ -2,6 +2,7 @@
 
   M1 n_cells = 1 is bitwise the single-cell engine of main 971fc12 (frozen copy in tests/nr_frozen/): outputs and
      every MAC / queue / fading state tensor after every step, UL and DL, several MAC configs, with a partial reset
+     (rng="global", the frozen engine's randomness)
   M2 partial reset at C = 3 (UL + DL, handovers): reset rows equal a fresh engine for every per-env state tensor,
      the other envs stay bitwise equal to a run without the reset
   M3 handover on a drive through three cells: two handovers, fire slot = first A3 slot + TTT, no transmission
@@ -73,6 +74,7 @@ def _c1_equivalence(dev, E, R, steps, n_cfg=5):
             NRConfig(harq_fail="drop", discard="pdcp_arrival", n_harq=4, dl=True, pf_metric="wideband"),
             oai_like(dl=True, ul_power="whole_band", phr_cap=False)][:n_cfg]
     for cfg in cfgs:
+        cfg = cfg.with_(rng="global")                 # the frozen engine draws from the global torch RNG
         a = _run_single(FrozenNRNet, cfg, E, R, steps, dev, reset_at=steps // 2)
         b = _run_single(NRNet, cfg, E, R, steps, dev, reset_at=steps // 2)
         for t, (oa, ob, sa, sb) in enumerate(zip(a[0], b[0], a[1], b[1])):

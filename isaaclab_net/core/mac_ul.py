@@ -20,7 +20,7 @@ class UlMac(MacLink):
     def sr_step(self, g):
         """SR on PUCCH at an SR opportunity (any UL-capable slot, PUSCH or not)."""
         need_sr = (self.unsent() > 0) & (self.bsr <= 0) & (self.sr_t < 0)
-        self.sr_t = torch.where(need_sr, torch.full_like(self.sr_t, g), self.sr_t)
+        self.sr_t = torch.where(need_sr, g, self.sr_t)
 
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
@@ -32,10 +32,10 @@ class UlMac(MacLink):
         P = len(cfg.tdd_pattern)
         self._pg_pos = next(p for p in range(P) if cfg.slot_symbols(p)[1] > 0)
 
-    def _pre_slot(self, g):
+    def _pre_slot(self, g, gh):
         cfg = self.cfg
         if cfg.proactive_grant == "every_ul_slot" or (
-                cfg.proactive_grant == "per_period" and g % len(cfg.tdd_pattern) == self._pg_pos):
+                cfg.proactive_grant == "per_period" and gh % len(cfg.tdd_pattern) == self._pg_pos):
             self.bsr = self.bsr.clamp(min=1)                    # grant without SR (unused grants not modelled)
         granted = (self.sr_t >= 0) & (g - self.sr_t >= self.cfg.sr_delay)
         self.bsr = torch.where(granted, self.bsr.clamp(min=1), self.bsr)

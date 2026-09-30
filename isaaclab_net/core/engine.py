@@ -15,10 +15,13 @@ Levels
                                       can give a task.
 
 Backends
-  "reference"                          the readable eager engine of the level (every level; the only NR backend)
+  "reference"                          the readable eager engine of the level (every level)
   "eager", "graph", "compile", "triton" prototype fast backends (graph = bitwise equal to reference; triton for
-                                      L1 / L2-legacy only). A graph/triton backend for the NR engine is a follow-up.
+                                      L1 / L2-legacy only).
                                       The surrogate and bound levels have "reference" (= "eager") and "graph".
+  L2 (NR engine)                      "reference" (= "eager"), "graph" (CUDA graphs of the reference step, bitwise
+                                      equal to it) and "triton" (fused UL slot kernel, equal to rounding); the fast
+                                      ones need CUDA and rng="engine" (the default). See nr_fast.py.
 
 Every engine returned here has the contract API of ARCHITECTURE.md:
   reset(env_ids=None)                 partial reset: None, index tensor, list or bool mask [E]
@@ -190,10 +193,17 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     if seed is None:
         seed = cfg.seed
     if level == "L2":
-        if backend != "reference":
-            raise NotImplementedError(f"backend {backend!r} is not available for the NR engine yet (follow-up); use "
-                                      "backend='reference', or level='L2-legacy' for the graph / triton backends")
-        return NREngine(E, R, device, cfg, seed=seed)
+        seed = seed if seed is not None else cfg.seed
+        if backend in ("reference", "eager"):
+            return NREngine(E, R, device, cfg, seed=seed)
+        if backend == "graph":
+            from .nr_fast import NRGraphEngine
+            return NRGraphEngine(E, R, device, cfg, seed=seed)
+        if backend == "triton":
+            from .nr_fast import NRTritonEngine
+            return NRTritonEngine(E, R, device, cfg, seed=seed)
+        raise NotImplementedError(f"backend {backend!r} is not available for the NR engine: 'reference' (= 'eager'), "
+                                  "'graph' (bitwise equal to the reference) or 'triton'")
     _check_proto_config(level, cfg)
     if level in SURROGATE_LEVELS + BOUND_LEVELS:
         if backend not in ("reference", "eager", "graph"):
@@ -239,7 +249,8 @@ class NREngine:
             seed = int(torch.randint(0, 2 ** 62, ()).item())
         self.gen = torch.Generator(device=self.dev)
         self.gen.manual_seed(seed)
-        self.net = NRNet(E, R, self.dev, cfg.msg_sizes, cfg, generator=self.gen)
+        self.seed = seed
+        self.net = NRNet(E, R, self.dev, cfg.msg_sizes, cfg, generator=self.gen, seed=seed)
         self.per_robot_doppler = cfg.fading_doppler == "per_robot"
         if self.per_robot_doppler:
             install_per_robot_fading(self.net)

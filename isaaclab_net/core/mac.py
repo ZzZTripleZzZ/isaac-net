@@ -16,12 +16,23 @@ to a free HARQ process, so new data proceeds on other processes while a failed T
 head-of-line blocking; n_harq = 1 restores it). The in-order pointer is the lowest byte still
 owned by an undecoded process (or `sent`). HARQ exhaustion: "rlc_am" resends the range after
 rlc_retx_slots; "drop" marks overlapping frames lost (RLC UM).
+
+Schedulers (cfg.scheduler): "pf" proportional fair on the per-RBG rate estimate over the EWMA throughput (wideband
+rate with pf_metric="wideband"), "pf_wideband" the same with the wideband rate, "maxci" the rate estimate alone, "rr"
+round robin (the robot whose last transmission is oldest first, channel-blind). Every scheduler keeps the same
+retransmission admission and the same greedy RBG-by-RBG filling up to the need or the power-headroom cap.
+
+Time: g (slot) and frac (completion time) are Python numbers in the reference, or 0-dim device tensors (long,
+float64) when the graph backend captures the step (nr_fast.py); gh is always the host slot index, used only for
+decisions that are fixed by the TDD pattern. Random draws: torch.rand_like (cfg.rng="global") or the engine's
+counter-based streams (self.rng, nr_rng.py).
 """
 from __future__ import annotations
 
 import torch
 
 from .config import NRConfig
+from .nr_rng import BLER
 from .phy import PHY
 from .queues import FrameQueue, env_mask, onehot, reset_where
 
@@ -43,6 +54,7 @@ class MacLink:
         "h_comb": (("P",), torch.float32, 0.0),             # chase: accumulated linear effective SINR
         "h_lexp": (("P",), torch.float32, -float("inf")),   # IR: log sum_w exp(-SINR / beta)
         "h_nrb": (("P",), torch.float32, 0.0),              # IR: PRBs over all transmissions
+        "last_tx": ((), torch.long, -1),                    # slot of the last transmission (round robin)
     }
     direction = None
 
@@ -64,6 +76,9 @@ class MacLink:
         self.member = None         # [E,C,R] serving-cell membership (multi-cell only)
         self.sched_ok = None       # [E,R] schedulable (outside a handover interruption; multi-cell only)
         self.n_cells = 1
+        self.rng = None            # nr_rng.NRRng (cfg.rng="engine"; set by NRNet)
+        self._bler_site = BLER[self.dir]
+        self._w_sum = float(self.sb_prb.sum())
         dims = {"P": self.P, "S": self.S}
         for n, (ex, dt, v) in self.STATE.items():
             setattr(self, n, torch.full((E, R) + tuple(dims[k] for k in ex), v, dtype=dt, device=device))
@@ -99,7 +114,7 @@ class MacLink:
         return torch.minimum(self.sent, lo.min(-1).values)
 
     # ---------------- direction hooks ----------------
-    def _pre_slot(self, g):
+    def _pre_slot(self, g, gh):
         pass
 
     def _need(self, unsent):
@@ -123,16 +138,18 @@ class MacLink:
         pass
 
     # ---------------- one data slot ----------------
-    def slot(self, g, frac, nsym, sinr_ref_db, gain_now, ack_slot=0):
+    def slot(self, g, frac, nsym, sinr_ref_db, gain_now, ack_slot=0, gh=None, rel=0):
         """Process one data slot at absolute slot g. sinr_ref_db [E,R,S] without fast fading (see the
         direction class), gain_now [E,R,S] fast-fading gain (dB), frac = completion time of this
-        slot in control steps, ack_slot = DL HARQ-ACK slot."""
+        slot in control steps, ack_slot = DL HARQ-ACK slot, gh = host slot index (default g), rel = slot index
+        inside the control step (engine RNG stream)."""
         cfg, E, R, S, P, d, phy = self.cfg, self.E, self.R, self.S, self.P, self.dev, self.phy
+        gh = g if gh is None else gh
         w = self.sb_prb
         unsent = self.unsent()
         # DL processes whose ACK has reached the gNB become free
         self.h_state = torch.where((self.h_state == 2) & (self.h_ready <= g), torch.zeros_like(self.h_state), self.h_state)
-        self._pre_slot(g)
+        self._pre_slot(g, gh)
         # ---- candidates: one TB per UE per slot, retransmissions first ----
         rx_el = (self.h_state == 1) & (self.h_ready <= g)
         rx_p = torch.where(rx_el, self.h_ready, torch.full_like(self.h_ready, BIG)).argmin(-1)
@@ -150,7 +167,8 @@ class MacLink:
         est, n_max = self._sched_estimate(sinr_ref_db)
         est_o = est + (self.olla[..., None] if cfg.olla else 0.0)
         re_prb = float(min(12 * nsym - cfg.dmrs_re_per_prb - cfg.overhead_re_per_prb, 156))
-        if cfg.pf_metric == "wideband":
+        sched = cfg.scheduler
+        if cfg.pf_metric == "wideband" or sched == "pf_wideband":
             allm = torch.ones(E, R, S, dtype=torch.bool, device=d)
             wb = phy.eff_sinr_all(est_o, allm, cfg.eff_sinr, w)                        # [E,R,M]
             ok = wb >= phy.thr_ref
@@ -158,7 +176,12 @@ class MacLink:
             rate_sb = (phy.se[m] * re_prb / 8)[..., None] * w
         else:
             rate_sb = phy.se_at(est_o) * re_prb * w / 8                                # bytes per RBG
-        metric_sb = rate_sb / self.avg[..., None]
+        if sched == "maxci":
+            metric_sb = rate_sb
+        elif sched == "rr":                    # age of the last transmission, the same on every RBG
+            metric_sb = (g - self.last_tx).float()[..., None].expand_as(rate_sb)
+        else:
+            metric_sb = rate_sb / self.avg[..., None]
         # retransmission admission: rank pending retx per cell (PF metric) and admit them while their
         # RBG counts fit the carrier, so no retx is left with a partial (unusable) allocation
         rkey = torch.where(has_rx, metric_sb.sum(-1), torch.full_like(metric_sb[..., 0], -1.0))
@@ -247,17 +270,18 @@ class MacLink:
             comb = g1(self.h_comb) + 10 ** (eff / 10) if cfg.harq_combining == "cc" else 10 ** (eff / 10)
             eff_used = 10 * torch.log10(comb.clamp(min=1e-9))
         p_err = phy.tb_error_prob(mcs, eff_used, tbs, mcs_eq)
-        ok = tx & (torch.rand_like(p_err) >= p_err)
+        u = torch.rand_like(p_err) if self.rng is None else self.rng.uniform(self._bler_site, rel, R)
+        ok = tx & (u >= p_err)
         fail = tx & ~ok
         exh = fail & (ntx >= cfg.max_harq_tx)
         # ---- HARQ state update ----
         ohp_ok, ohp_fail, ohp_exh = ohp & ok[..., None], ohp & fail[..., None], ohp & exh[..., None]
         st_ok, rdy_ok, rdy_fail = self._harq_times(g, ack_slot)
         self.h_state = torch.where(ohp_ok, torch.full_like(self.h_state, st_ok), self.h_state)
-        self.h_ready = torch.where(ohp_ok, torch.full_like(self.h_ready, rdy_ok), self.h_ready)
+        self.h_ready = torch.where(ohp_ok, rdy_ok, self.h_ready)
         self.h_ntx = torch.where(ohp, ntx[..., None], self.h_ntx)
         self.h_comb = torch.where(ohp, comb[..., None], self.h_comb)
-        self.h_ready = torch.where(ohp_fail, torch.full_like(self.h_ready, rdy_fail), self.h_ready)
+        self.h_ready = torch.where(ohp_fail, rdy_fail, self.h_ready)
         lo_tx, hi_tx = g1(self.h_lo), g1(self.h_hi)
         if self.trace is not None:
             self.trace.append((frac, tx.cpu(), ok.cpu(), lo_tx.cpu(), hi_tx.cpu(), exh.cpu()))
@@ -266,7 +290,7 @@ class MacLink:
             self.h_comb = torch.where(ohp_exh, torch.zeros_like(self.h_comb), self.h_comb)
             self.h_lexp = torch.where(ohp_exh, torch.full_like(self.h_lexp, -float("inf")), self.h_lexp)
             self.h_nrb = torch.where(ohp_exh, torch.zeros_like(self.h_nrb), self.h_nrb)
-            self.h_ready = torch.where(ohp_exh, torch.full_like(self.h_ready, g + cfg.rlc_retx_slots), self.h_ready)
+            self.h_ready = torch.where(ohp_exh, g + cfg.rlc_retx_slots, self.h_ready)
         else:
             self.h_state = torch.where(ohp_exh, torch.zeros_like(self.h_state), self.h_state)
             q = self.q
@@ -279,12 +303,14 @@ class MacLink:
         served = (hi_tx - lo_tx) * ok
         self._post_slot(tx, gain_now)
         self.avg = (1 - 1 / cfg.pf_window) * self.avg + (1 / cfg.pf_window) * served
+        if sched == "rr":
+            self.last_tx = torch.where(tx, g, self.last_tx)
         # ---- counters ----
         c = self.ctr
         c["tb_new"] += tx_new.sum(); c["tb_retx"] += tx_rx.sum(); c["tb_ok"] += ok.sum()
         c["tb_fail"] += fail.sum(); c["exhaust"] += exh.sum(); c["bytes_ok"] += served.sum()
         c["bytes_new"] += (byt_new * tx_new).sum(); c["new_while_pending"] += (tx_new & pending).sum()
-        c["prb_used"] += (n_prb * tx).sum(); c["prb_avail"] += float(w.sum()) * E * self.n_cells
+        c["prb_used"] += (n_prb * tx).sum(); c["prb_avail"] += self._w_sum * E * self.n_cells
         ohk = onehot(ntx.clamp(max=cfg.max_harq_tx), cfg.max_harq_tx + 1)
         self.ntx_hist += (ohk & ok[..., None]).sum((0, 1))
         self.rv_tx += (ohk & tx[..., None]).sum(1)
@@ -294,7 +320,7 @@ class MacLink:
         ack = self.ack_ptr()
         q = self.q
         done = (q.cap >= 0) & (q.end <= ack[..., None]) & ~q.lost & torch.isinf(q.fin)
-        q.fin = torch.where(done, torch.full_like(q.fin, frac + cfg.proc_offset_ms / cfg.control_step_ms), q.fin)
+        q.fin = torch.where(done, frac + cfg.proc_offset_ms / cfg.control_step_ms, q.fin)
 
     # ---------------- handover ----------------
     def handover(self, ho, flush=False):
@@ -329,7 +355,8 @@ class MacLink:
         """Masks of delivered, timed-out (purge mode only) and resolved-lost frames."""
         q = self.q
         valid = q.cap >= 0
-        delivered = valid & (q.fin <= t + 1 + 1e-9)          # completion + processing offset reached
+        lim = t + 1 + 1e-9 if not torch.is_tensor(t) else (t + 1).double() + 1e-9
+        delivered = valid & (q.fin <= lim)                   # completion + processing offset reached
         if self.cfg.discard == "purge":
             timed = valid & torch.isinf(q.fin) & ((t + 1 - q.cap) >= timeout)
         else:

@@ -38,6 +38,24 @@ TBS_TABLE = [24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 14
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "sionna_phy_tables.npz")
 
 
+_CONST = {}
+
+
+def _const(name, values, dtype, device):
+    """Device copy of a constant table, made once per device (no host-to-device copy inside a captured step)."""
+    key = (name, str(device), dtype)
+    if key not in _CONST:
+        _CONST[key] = torch.tensor(values, dtype=dtype, device=device)
+    return _CONST[key]
+
+
+def _f64(x, dev):
+    """float64 tensor of a tensor or a Python number (a fill kernel, not a host copy, so it can be captured)."""
+    if torch.is_tensor(x):
+        return x.to(dtype=torch.float64, device=dev)
+    return torch.full((), float(x), dtype=torch.float64, device=dev)
+
+
 def n_re_per_prb(nsym, dmrs, oh):
     """N'_RE (38.214 5.1.3.2 step 1), capped at 156."""
     return torch.clamp(12 * nsym - dmrs - oh, max=156)
@@ -48,14 +66,14 @@ def tbs_38214(qm, r, n_prb, nsym, dmrs=12, oh=0, layers=1):
     qm: modulation order, r: target code rate (float, R/1024 already divided), n_prb: allocated PRBs,
     nsym: allocated OFDM symbols (incl. DMRS symbols). Zero PRBs give TBS 0."""
     dev = n_prb.device if torch.is_tensor(n_prb) else (qm.device if torch.is_tensor(qm) else None)
-    f64 = lambda x: torch.as_tensor(x, dtype=torch.float64, device=dev)
+    f64 = lambda x: _f64(x, dev)
     qm, r, n_prb, nsym = f64(qm), f64(r), f64(n_prb), f64(nsym)
     n_re = n_re_per_prb(nsym, f64(dmrs), f64(oh)) * n_prb
     n_info = n_re * r * qm * layers
     # step 3: N_info <= 3824
     n = torch.clamp(torch.floor(torch.log2(n_info.clamp(min=1.0))) - 6, min=3)
     ninfo_q = torch.clamp(2 ** n * torch.floor(n_info / 2 ** n), min=24)
-    tab = torch.tensor(TBS_TABLE, dtype=torch.float64, device=dev)
+    tab = _const("tbs", TBS_TABLE, torch.float64, dev)
     idx = torch.searchsorted(tab, ninfo_q.contiguous(), right=False).clamp(max=len(TBS_TABLE) - 1)
     tbs_small = tab[idx]
     # step 4: N_info > 3824
@@ -76,7 +94,7 @@ def segment(tbs, r):
     """LDPC base graph + code-block segmentation (38.212 7.2.2 / 5.2.2).
     Returns (cb_size_bits incl. CRC, n_cb). Matches Sionna calculate_tb_size's cb_size."""
     tbs = tbs.double()
-    r = torch.as_tensor(r, dtype=torch.float64, device=tbs.device)
+    r = _f64(r, tbs.device)
     bg2 = (tbs <= 292) | ((tbs <= 3824) & (r <= 0.67)) | (r <= 0.25)
     kcb = torch.where(bg2, torch.full_like(tbs, 3840.0), torch.full_like(tbs, 8448.0))
     b = tbs + torch.where(tbs > 3824, torch.full_like(tbs, 24.0), torch.full_like(tbs, 16.0))
@@ -109,7 +127,7 @@ def tbs_lena(qm, r, n_prb, nsym, ref_sc=1):
     """5G-LENA v5.1 TB size in bits (NrAmc::CalculateTbSize behaviour, reimplemented): payload bytes
     P = floor((12 - ref_sc) * n_prb * nsym * Qm * R / 8), minus a 3-byte CRC, minus 3 bytes per code
     block when the TB exceeds the largest code block (1056 B for BG1, 480 B for BG2)."""
-    f64 = lambda x: torch.as_tensor(x, dtype=torch.float64, device=n_prb.device)
+    f64 = lambda x: _f64(x, n_prb.device)
     qm, r, n_prb = f64(qm), f64(r), f64(n_prb)
     p = torch.floor((12 - ref_sc) * n_prb * nsym * qm * r / 8)
     tb = torch.where(p >= 3, p - 3, p)
@@ -125,7 +143,7 @@ def segment_ldpc_k(tbs, r):
     """Code-block size K = Zc * Kb (38.212 5.2.2 / 5.3.2) as 5G-LENA's EESM model uses it for its
     table lookup, with B = TBS + 24. Returns (K, C, bg) with bg 0 = BG1, 1 = BG2."""
     tbs = tbs.double()
-    r = torch.as_tensor(r, dtype=torch.float64, device=tbs.device)
+    r = _f64(r, tbs.device)
     bg2 = (tbs <= 292) | (r <= 0.25) | ((tbs <= 3824) & (r <= 0.67))
     b = tbs + 24
     kcb = torch.where(bg2, torch.full_like(b, 3840.0), torch.full_like(b, 8448.0))
@@ -134,7 +152,7 @@ def segment_ldpc_k(tbs, r):
     k1 = torch.floor(b1 / c)
     kb2 = torch.where(b > 640, 10.0, torch.where(b > 560, 9.0, torch.where(b > 192, 8.0, 6.0)))
     kb = torch.where(bg2, kb2, torch.full_like(b, 22.0))
-    z = torch.tensor(LIFTING, dtype=torch.float64, device=tbs.device)
+    z = _const("lifting", LIFTING, torch.float64, tbs.device)
     zi = torch.searchsorted(z, (k1 / kb).contiguous(), right=False).clamp(max=len(LIFTING) - 1)
     zc = z[zi]
     k = zc * torch.where(bg2, torch.full_like(b, 10.0), torch.full_like(b, 22.0))

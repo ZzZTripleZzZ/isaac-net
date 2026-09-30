@@ -26,6 +26,14 @@ hysteresis and time-to-trigger (in slots); a handover fires at its exact slot, m
 (MacLink.handover) and blocks scheduling for the interruption. Fading is per link [E,R,C,S,2] and shared by UL
 and DL (TDD reciprocity). Shapes are fixed; the only Python loops are the constant slot and RBG loops. At
 C = 1 none of this code runs and NRNet is bitwise the single-cell engine.
+
+Randomness (cfg.rng): "engine" draws the fading innovations, the TB decodes and the reset fading from the engine's
+counter-based streams (nr_rng.NRRng, keyed by seed, env, episode, step and slot); "global" draws the step noise from
+the global torch RNG and the reset fading from `generator` (the behavior before the engine RNG).
+
+Capture (nr_fast.py): with self._tdev set to a 0-dim long device tensor holding t, every time-dependent value of the
+step is computed on the device from it, and host decisions depend only on t through the TDD / SR / CQI schedule key
+and the fading step of the first slot, so one captured graph per (key, first fading step) serves every control step.
 """
 from __future__ import annotations
 
@@ -36,6 +44,7 @@ import torch
 from .config import NRConfig
 from .mac_dl import DlMac
 from .mac_ul import UlMac
+from .nr_rng import FADING, H0, make_rng
 from .queues import env_mask, onehot, reset_where
 from .radio import CellAssociation, pick
 
@@ -45,10 +54,12 @@ class NRNet:
 
     FEATS = ["cls", "f_nact", "f_snr", "f_own"]
 
-    def __init__(self, E, R, device, sizes, cfg: NRConfig | None = None, generator=None):
+    def __init__(self, E, R, device, sizes, cfg: NRConfig | None = None, generator=None, seed=None):
         self.cfg = cfg or NRConfig()
         self.C = self.cfg.n_cells
-        self.gen = generator       # draws of reset() (fading state); stepping uses the global RNG
+        self.gen = generator       # rng="global": draws of reset() (fading state); stepping uses the global RNG
+        self.rng = make_rng(self.cfg, E, device, seed)     # rng="engine": every draw (nr_rng.py)
+        self._tdev = None          # graph capture: 0-dim long device tensor holding t (see the module docstring)
         self.E, self.R, self.dev = E, R, device
         self.sizes = torch.tensor(sizes, device=device, dtype=torch.float32)
         self.S = self.cfg.n_subbands
@@ -56,6 +67,9 @@ class NRNet:
                 ("f_snr", torch.float32), ("f_own", torch.long)]
         self.ul = UlMac(self.cfg, E, R, device, meta)
         self.dl = DlMac(self.cfg, E, R, device, [("cls", torch.long)]) if self.cfg.dl else None
+        for link in (self.ul, self.dl):
+            if link is not None:
+                link.rng = self.rng
         self.log_stats = False
         self.log_cap_max = 10 ** 9
         self._sched_cache = {}
@@ -109,7 +123,11 @@ class NRNet:
         if self.dl is not None:
             self.dl.reset(env_ids)
         cdim = () if self.C == 1 else (self.C,)
-        h0 = torch.randn(E, R, *cdim, S, 2, device=d, generator=self.gen) / math.sqrt(2)
+        if self.rng is None:
+            h0 = torch.randn(E, R, *cdim, S, 2, device=d, generator=self.gen) / math.sqrt(2)
+        else:              # new episode for the reset envs, then their draws (rows of other envs are discarded)
+            self.rng.reset(None if env_ids is None else env_mask(E, env_ids, d))
+            h0 = self.rng.reset_normal(H0, R * math.prod(cdim) * S * 2).view(E, R, *cdim, S, 2) / math.sqrt(2)
         if env_ids is None:
             self.h = h0
             self.last_g = None
@@ -221,14 +239,29 @@ class NRNet:
             self._sched_cache[key] = out
         return self._sched_cache[key]
 
-    def _evolve(self, g):
+    def _evolve(self, g, rel=0):
+        """AR(1) fading step to slot g (host int); rel = slot index inside the control step (engine RNG stream)."""
         if not self.cfg.fading:
             return
         dt = 1 if self.last_g is None else g - self.last_g
         if dt > 0:
             rho = self.cfg.fading_rho_per_ms ** (dt * self.cfg.slot_ms)
-            self.h = rho * self.h + math.sqrt(1 - rho ** 2) * torch.randn_like(self.h) / math.sqrt(2)
+            if self.rng is None:
+                z = torch.randn_like(self.h)
+            else:
+                z = self.rng.normal(FADING, rel, self.h[0].numel()).view(self.h.shape)
+            self.h = rho * self.h + math.sqrt(1 - rho ** 2) * z / math.sqrt(2)
         self.last_g = g
+
+    def _times(self, t):
+        """(t as used by device ops, t as float64 or float) for the step at control step t (host int)."""
+        tv = t if self._tdev is None else self._tdev
+        return tv, (tv if self._tdev is None else tv.double())
+
+    @staticmethod
+    def _frac(tf, rel, N):
+        """Completion time of slot rel of the step, in control steps (float64 on the device when captured)."""
+        return tf + (rel + 1) / N
 
     def _gain(self):
         if not self.cfg.fading:
@@ -267,6 +300,8 @@ class NRNet:
         N = cfg.slots_per_step
         g0 = t * N
         assert self.C == 1, "several cells: use step_cells(t, pathgain [E,R,C]) (or poses through NREngine)"
+        tv, tf = self._times(t)
+        g0v = tv * N
         ul_ref = snr_db if snr_db.dim() == 3 else snr_db[..., None].expand(-1, -1, self.S)
         if cfg.ul_pc_on:           # one cell with ul_pc=True: path loss from the input SNR
             self.ul.pc_backoff = self._pc_backoff(ul_ref.mean(-1) + cfg.subband_noise_dbm)
@@ -274,19 +309,19 @@ class NRNet:
             dref = dl_snr_db if dl_snr_db is not None else snr_db + cfg.dl_snr_offset_db
             dl_ref = dref if dref.dim() == 3 else dref[..., None].expand(-1, -1, self.S)
         for rel, dls, uls, sr, cqi, ack in self._schedule(g0):
-            g = g0 + rel
-            self._evolve(g)
+            g, gv = g0 + rel, g0v + rel
+            self._evolve(g, rel)
             gain = self._gain()
-            frac = t + (rel + 1) / N
+            frac = self._frac(tf, rel, N)
             if cqi:
                 self.dl.cqi_report(dl_ref, gain)
             if dls:
-                self.dl.slot(g, frac, dls, dl_ref, gain, g0 + ack)
+                self.dl.slot(gv, frac, dls, dl_ref, gain, g0v + ack, gh=g, rel=rel)
             if sr:
-                self.ul.sr_step(g)
+                self.ul.sr_step(gv)
             if uls:
-                self.ul.slot(g, frac, uls, ul_ref, gain, 0)
-        return self._finish(t, cur_hid, full)
+                self.ul.slot(gv, frac, uls, ul_ref, gain, 0, gh=g, rel=rel)
+        return self._finish(tv, cur_hid, full)
 
     # ---- several cells ----
     def _pc_backoff(self, rx_serv):
@@ -318,39 +353,41 @@ class NRNet:
         cfg, C, S = self.cfg, self.C, self.S
         N = cfg.slots_per_step
         g0 = t * N
+        tv, tf = self._times(t)
+        g0v = tv * N
         self._pg = pathgain_db
         rx = pathgain_db + cfg.ue_tx_dbm                      # RSRP up to a constant: full UE power, no fading
         asc = self.assoc
         asc.associate(rx)
         k_ho, tgt = asc.plan(rx)
-        g_ho = g0 + k_ho
+        g_ho = g0v + k_ho
         fired = torch.zeros(self.E, self.R, dtype=torch.bool, device=self.dev)
         links = [x for x in (self.ul, self.dl) if x is not None]
         for rel, dls, uls, sr, cqi, ack in self._schedule(g0):
-            g = g0 + rel
+            g, gv = g0 + rel, g0v + rel
             ho = (k_ho >= 0) & (k_ho <= rel) & ~fired          # A3 triggers up to this slot switch now
             self._handover(ho, tgt, g_ho)
             fired = fired | ho
-            self._evolve(g)
+            self._evolve(g, rel)
             gain_c = self._gain()                             # [E,R,C,S]
             self._gain_c = gain_c
             serv = asc.serv
             gain = pick(gain_c, serv)
             member = onehot(serv, C).permute(0, 2, 1)         # [E,C,R]
-            ok = asc.schedulable(g)
+            ok = asc.schedulable(gv)
             for link in links:
                 link.member, link.sched_ok = member, ok
             pg_s = pick(pathgain_db, serv)[..., None]
-            frac = t + (rel + 1) / N
+            frac = self._frac(tf, rel, N)
             if cqi or dls:
                 self._ni_la_dl = 10 * torch.log10(self.ni_dl)
                 dl_ref = self.dl_psd_db + pg_s - self._ni_la_dl
             if cqi:
                 self.dl.cqi_report(dl_ref, gain)
             if dls:
-                self.dl.slot(g, frac, dls, dl_ref, gain, g0 + ack)
+                self.dl.slot(gv, frac, dls, dl_ref, gain, g0v + ack, gh=g, rel=rel)
             if sr:
-                self.ul.sr_step(g)
+                self.ul.sr_step(gv)
             if uls:
                 self._ni_la_ul = 10 * torch.log10(self.ni_ul.gather(1, serv[..., None].expand(-1, -1, S)))
                 ul_ref = cfg.ue_tx_dbm - self.ref_db + pg_s - self._ni_la_ul
@@ -358,10 +395,10 @@ class NRNet:
                 self.ul.phr_snr = rx_s - cfg.subband_noise_dbm
                 if cfg.ul_pc_on:
                     self.ul.pc_backoff = self._pc_backoff(rx_s)
-                self.ul.slot(g, frac, uls, ul_ref, gain, 0)
+                self.ul.slot(gv, frac, uls, ul_ref, gain, 0, gh=g, rel=rel)
         late = (k_ho >= 0) & ~fired                           # triggers after the last active slot of the step
         self._handover(late, tgt, g_ho)
-        out = self._finish(t, cur_hid, full)
+        out = self._finish(tv, cur_hid, full)
         if full:
             out["serving_cell"] = asc.serv.clone()
         return out
@@ -423,6 +460,8 @@ class NRNet:
         cfg = self.cfg
         u = self.ul
         q = u.q
+        if self.rng is not None:
+            self.rng.tick()
         delivered, timed, dropped = u.end_step(t, cfg.timeout_steps)
         capd = torch.where(delivered, q.cap, torch.full_like(q.cap, -1))
         newest = capd.max(-1).values
@@ -431,19 +470,7 @@ class NRNet:
         else:
             det_env = (delivered & q.det & (q.hid == cur_hid[:, None, None])).flatten(1).any(-1)
         if self.log_stats:
-            st = self.stats
-            keep = q.cap <= self.log_cap_max
-            dk, tk = delivered & keep, (timed | dropped) & keep
-            delay = (q.fin - q.cap.double()).float()
-            st["delay"].append(delay[dk].cpu())
-            eidx = torch.arange(self.E, device=self.dev)[:, None, None].expand_as(q.cap)
-            st["d_env"].append(eidx[dk].cpu())
-            st["x_env"].append(eidx[tk].cpu())
-            st["dropped"] += int(dropped.sum())
-            st["late"] += int((dk & (delay >= cfg.timeout_steps)).sum())
-            for f in self.FEATS:
-                st["d_" + f].append(getattr(q, f)[dk].cpu())
-                st["x_" + f].append(getattr(q, f)[tk].cpu())
+            self._log_ul(q, delivered, timed, dropped)
         if self.trace_frames is not None:
             self.trace_frames.append(tuple(x.cpu() for x in (q.cap, q.start, q.end, q.fin, delivered, timed, dropped)))
         if full:
@@ -460,7 +487,7 @@ class NRNet:
                 self.trace_frames_dl.append(tuple(x.cpu() for x in (dq.cap, dq.start, dq.end, dq.fin, dd, dt_, dr)))
             self.dl_newest = torch.where(dd, dq.cap, torch.full_like(dq.cap, -1)).max(-1).values
             if self.log_stats:
-                self.stats["dl_delay"].append((dq.fin - dq.cap.double()).float()[dd].cpu())
+                self._log_dl(dq, dd)
             self.dl.compact(dd | dt_ | dr)
         if not full:
             return newest, det_env
@@ -470,6 +497,25 @@ class NRNet:
             out["dl_newest"] = self.dl_newest.clone()
             out["dl_queue_len"] = self.dl.q.count()
         return out
+
+    def _log_ul(self, q, delivered, timed, dropped):
+        """Statistics of the UL frames resolved this step (host copies; q = the queue before compaction)."""
+        st, cfg = self.stats, self.cfg
+        keep = q.cap <= self.log_cap_max
+        dk, tk = delivered & keep, (timed | dropped) & keep
+        delay = (q.fin - q.cap.double()).float()
+        st["delay"].append(delay[dk].cpu())
+        eidx = torch.arange(self.E, device=self.dev)[:, None, None].expand_as(q.cap)
+        st["d_env"].append(eidx[dk].cpu())
+        st["x_env"].append(eidx[tk].cpu())
+        st["dropped"] += int(dropped.sum())
+        st["late"] += int((dk & (delay >= cfg.timeout_steps)).sum())
+        for f in self.FEATS:
+            st["d_" + f].append(getattr(q, f)[dk].cpu())
+            st["x_" + f].append(getattr(q, f)[tk].cpu())
+
+    def _log_dl(self, dq, dd):
+        self.stats["dl_delay"].append((dq.fin - dq.cap.double()).float()[dd].cpu())
 
     def collect(self):
         st = self.stats
