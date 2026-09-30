@@ -6,11 +6,6 @@ adaptation, TB binding to HARQ processes, decoding with EESM + HARQ combining, H
 updates, and the RLC in-order pointer. Direction-specific pieces (SR/BSR, power split, CSI,
 feedback timing) are the hooks overridden in mac_ul.UlMac and mac_dl.DlMac.
 
-Multi-cell (set by nr_engine.NRNet when n_cells > 1; all None at one cell, which leaves the single-cell code
-path untouched): `member` [E,C,R] makes retransmission admission and PF allocation run one scheduler per cell
-over the same RBGs, `sched_ok` [E,R] masks robots inside a handover interruption, and handover() moves a robot's
-MAC state to a new cell.
-
 Byte-stream model: a new TB takes stream bytes [sent, sent + TBS/8 - tb_overhead) and binds them
 to a free HARQ process, so new data proceeds on other processes while a failed TB waits (no MAC
 head-of-line blocking; n_harq = 1 restores it). The in-order pointer is the lowest byte still
@@ -21,9 +16,9 @@ from __future__ import annotations
 
 import torch
 
-from .config import NRConfig
-from .phy import PHY
-from .queues import FrameQueue, env_mask, onehot, reset_where
+from isaaclab_net.core.config import NRConfig
+from isaaclab_net.core.phy import PHY
+from isaaclab_net.core.queues import FrameQueue, env_mask, onehot, reset_where
 
 BIG = 2 ** 62
 
@@ -60,10 +55,7 @@ class MacLink:
         self.q = FrameQueue(E, R, cfg.frame_buffer, device, meta)
         self.olla_dn = cfg.olla_up_db * (1 - cfg.bler_target) / cfg.bler_target
         self.trace = None          # debug: list of per-slot (frac, tx, ok, lo, hi, exhausted) host copies
-        self.sinr_hook = None      # same-slot inter-cell interference, see slot()
-        self.member = None         # [E,C,R] serving-cell membership (multi-cell only)
-        self.sched_ok = None       # [E,R] schedulable (outside a handover interruption; multi-cell only)
-        self.n_cells = 1
+        self.sinr_hook = None      # multicell merge point, see slot()
         dims = {"P": self.P, "S": self.S}
         for n, (ex, dt, v) in self.STATE.items():
             setattr(self, n, torch.full((E, R) + tuple(dims[k] for k in ex), v, dtype=dt, device=device))
@@ -141,9 +133,6 @@ class MacLink:
         p_new = free.long().argmax(-1)
         need = self._need(unsent)
         new_el = free.any(-1) & (need > 0) & ~has_rx
-        if self.sched_ok is not None:
-            has_rx = has_rx & self.sched_ok
-            new_el = new_el & self.sched_ok
         pending = (self.h_state == 1).any(-1)
         rx_nsb = self.h_nsb.gather(-1, rx_p[..., None]).squeeze(-1)
         # ---- scheduler's per-RBG estimate, with OLLA ----
@@ -162,19 +151,10 @@ class MacLink:
         # retransmission admission: rank pending retx per cell (PF metric) and admit them while their
         # RBG counts fit the carrier, so no retx is left with a partial (unusable) allocation
         rkey = torch.where(has_rx, metric_sb.sum(-1), torch.full_like(metric_sb[..., 0], -1.0))
-        M = self.member
-        if M is None:
-            order = rkey.argsort(-1, descending=True)
-            cum = (rx_nsb * has_rx).gather(-1, order).cumsum(-1)
-            adm_sorted = has_rx.gather(-1, order) & (cum <= S)
-            admitted = torch.zeros_like(has_rx).scatter(-1, order, adm_sorted)
-        else:                   # the same ranking inside every cell: [E,C,R], then back to [E,R]
-            rx_c = has_rx[:, None, :] & M
-            order = torch.where(rx_c, rkey[:, None, :], torch.full_like(M, -1.0, dtype=rkey.dtype)).argsort(
-                -1, descending=True)
-            cum = (rx_nsb[:, None, :] * rx_c).gather(-1, order).cumsum(-1)
-            adm_sorted = rx_c.gather(-1, order) & (cum <= S)
-            admitted = torch.zeros_like(rx_c).scatter(-1, order, adm_sorted).any(1)
+        order = rkey.argsort(-1, descending=True)
+        cum = (rx_nsb * has_rx).gather(-1, order).cumsum(-1)
+        adm_sorted = has_rx.gather(-1, order) & (cum <= S)
+        admitted = torch.zeros_like(has_rx).scatter(-1, order, adm_sorted)
         has_rx = admitted
         want_cnt = torch.where(has_rx, rx_nsb, torch.where(new_el, n_max, torch.zeros_like(n_max)))
         prio = (1e9 if cfg.retx_priority else 0.0) * has_rx.float()
@@ -185,12 +165,8 @@ class MacLink:
         for s in range(S):
             want = (cnt < want_cnt) & (has_rx | (left > 0))
             m = torch.where(want, metric_sb[..., s] + prio, torch.full_like(left, -1.0))
-            if M is None:
-                best, wi = m.max(-1)
-                oh = onehot(wi, R) & (best >= 0)[:, None]
-            else:               # one PF scheduler per cell on RBG s
-                best, wi = torch.where(M, m[:, None, :], torch.full_like(m[:, None, :], -1.0)).max(-1)   # [E,C]
-                oh = (onehot(wi, R) & (best >= 0)[..., None]).any(1)
+            best, wi = m.max(-1)
+            oh = onehot(wi, R) & (best >= 0)[:, None]
             cols.append(oh)
             cnt = cnt + oh.long()
             left = left - rate_sb[..., s] * oh * ~has_rx
@@ -228,9 +204,9 @@ class MacLink:
         # ---- decoding on the actual channel ----
         act = self._rx_sinr(sinr_ref_db, n_prb, gain_now)
         if self.sinr_hook is not None:
-            # same-slot inter-cell interference given this slot's transmissions (won [E,R,S] of the robots
-            # that transmit, n_prb [E,R]); returns the per-subband SINR used for decoding
-            act = self.sinr_hook(g, self.dir, won & tx[..., None], n_prb, act)
+            # multicell merge point: add same-slot inter-cell interference given this slot's
+            # allocation (won [E,R,S], n_prb [E,R]); returns the per-subband SINR used for decoding
+            act = self.sinr_hook(g, self.dir, won, n_prb, act)
         mcs_eq = None
         if cfg.harq_combining == "ir_lena":
             lse, _ = phy.eesm_lse(act, won, mcs, w)
@@ -284,7 +260,7 @@ class MacLink:
         c["tb_new"] += tx_new.sum(); c["tb_retx"] += tx_rx.sum(); c["tb_ok"] += ok.sum()
         c["tb_fail"] += fail.sum(); c["exhaust"] += exh.sum(); c["bytes_ok"] += served.sum()
         c["bytes_new"] += (byt_new * tx_new).sum(); c["new_while_pending"] += (tx_new & pending).sum()
-        c["prb_used"] += (n_prb * tx).sum(); c["prb_avail"] += float(w.sum()) * E * self.n_cells
+        c["prb_used"] += (n_prb * tx).sum(); c["prb_avail"] += float(w.sum()) * E
         ohk = onehot(ntx.clamp(max=cfg.max_harq_tx), cfg.max_harq_tx + 1)
         self.ntx_hist += (ohk & ok[..., None]).sum((0, 1))
         self.rv_tx += (ohk & tx[..., None]).sum(1)
@@ -295,34 +271,6 @@ class MacLink:
         q = self.q
         done = (q.cap >= 0) & (q.end <= ack[..., None]) & ~q.lost & torch.isinf(q.fin)
         q.fin = torch.where(done, torch.full_like(q.fin, frac + cfg.proc_offset_ms / cfg.control_step_ms), q.fin)
-
-    # ---------------- handover ----------------
-    def handover(self, ho, flush=False):
-        """Robots ho [E,R] move to a new cell. The target starts OLLA, the PF average and the CSI afresh. HARQ
-        processes that own undecoded bytes restart their combining at the target (the TB is sent again from its
-        first transmission); under RLC UM (harq_fail="drop") or flush=True (ho_rlc="flush") they are lost
-        instead, and flush also drops every queued frame not yet completed (the unsent bytes are skipped)."""
-        cfg, q = self.cfg, self.q
-        hp = ho[..., None]
-        own = (self.h_state == 1) & hp
-        if cfg.harq_fail == "drop" or flush:
-            valid = (q.cap >= 0) & torch.isinf(q.fin) & ~q.lost
-            ov = (own[..., None, :] & (q.start[..., None] < self.h_hi[..., None, :])
-                  & (q.end[..., None] > self.h_lo[..., None, :])).any(-1) & valid
-            if flush:
-                ov = ov | (valid & ho[..., None])
-                self.sent = torch.where(ho, q.enq, self.sent)
-            self.ctr["lost_frames"] += ov.sum()
-            q.lost = q.lost | ov
-            self.h_state = torch.where(own, torch.zeros_like(self.h_state), self.h_state)
-        else:
-            self.h_ntx = torch.where(own, torch.zeros_like(self.h_ntx), self.h_ntx)
-            self.h_comb = torch.where(own, torch.zeros_like(self.h_comb), self.h_comb)
-            self.h_lexp = torch.where(own, torch.full_like(self.h_lexp, -float("inf")), self.h_lexp)
-            self.h_nrb = torch.where(own, torch.zeros_like(self.h_nrb), self.h_nrb)
-        for n in ("olla", "avg", "csi"):
-            x, v = getattr(self, n), self.STATE[n][2]
-            setattr(self, n, torch.where(ho.view(*ho.shape, *([1] * (x.dim() - 2))), torch.full_like(x, v), x))
 
     # ---------------- end of control step ----------------
     def end_step(self, t, timeout):

@@ -9,8 +9,8 @@
     Radio            the prototype single-cell radio (gNB at the origin), used by the prototype levels.
 
 Both classes are configured by NRConfig (cells and radio blocks), keep fixed-shape state and support partial
-reset(env_ids) without host syncs. The NR engine uses RadioMC at C = 1 to turn poses into path gains; the
-multi-cell legacy engine (proto/netsim_mc.py) uses both classes.
+reset(env_ids) without host syncs. The NR engine (nr_engine.py) and the multi-cell legacy engine
+(proto/netsim_mc.py) use both classes.
 """
 from __future__ import annotations
 
@@ -88,12 +88,20 @@ class CellAssociation:
     ttt_slots. RSRP changes once per control step, so plan() evaluates the condition once per step and
     returns the exact slot inside the step at which the HO fires (at slot k the condition has held
     cnt + k + 1 slots, so k = ttt - cnt - 1). After a HO the robot cannot be scheduled for ho_int_slots.
+
+    Slot unit: UL slots (NetSlotMC, cfg.ttt_slots / ho_int_slots) by default; slot_ms counts every slot
+    of that duration instead (the NR engine passes cfg.slot_ms and slots_per_step).
     """
 
     INIT = {"serv": 0, "pending": True, "a3_cand": -1, "a3_cnt": 0, "ho_end": 0, "n_ho": 0}
 
-    def __init__(self, cfg: NRConfig, E, R, C, device, slots_per_step):
+    def __init__(self, cfg: NRConfig, E, R, C, device, slots_per_step, slot_ms=None):
         self.cfg, self.E, self.R, self.C, self.dev, self.K = cfg, E, R, C, device, slots_per_step
+        if slot_ms is None:
+            self.ttt, self.ho_int = cfg.ttt_slots, cfg.ho_int_slots
+        else:
+            self.ttt = int(round(cfg.a3_ttt_ms / slot_ms))
+            self.ho_int = int(round(cfg.ho_interruption_ms / slot_ms))
         z = lambda dt, v: torch.full((E, R), v, dtype=dt, device=device)
         self.serv = z(torch.long, 0)
         self.pending = torch.ones(E, dtype=torch.bool, device=device)      # needs initial association
@@ -126,15 +134,16 @@ class CellAssociation:
         best, bc = rx.masked_fill(onehot(self.serv, self.C), -float("inf")).max(-1)
         cond = best > rs + cfg.a3_offset_db + cfg.a3_hyst_db
         cnt = torch.where(cond & (bc == self.a3_cand), self.a3_cnt, torch.zeros_like(self.a3_cnt))
-        k_fire = (cfg.ttt_slots - cnt - 1).clamp(min=0)
+        k_fire = (self.ttt - cnt - 1).clamp(min=0)
         fire = cond & (k_fire < self.K)
         self.a3_cnt = torch.where(cond & ~fire, cnt + self.K, torch.zeros_like(cnt))
         self.a3_cand = torch.where(cond & ~fire, bc, torch.full_like(bc, -1))
         return torch.where(fire, k_fire, torch.full_like(k_fire, -1)), bc
 
     def switch(self, ho, target, g):
+        """g: slot of the switch (int, [E,1] or [E,R])."""
         self.serv = torch.where(ho, target, self.serv)
-        self.ho_end = torch.where(ho, g + self.cfg.ho_int_slots, self.ho_end)
+        self.ho_end = torch.where(ho, g + self.ho_int, self.ho_end)
         self.n_ho = self.n_ho + ho.long()
 
     def schedulable(self, g):

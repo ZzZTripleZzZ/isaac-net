@@ -25,10 +25,6 @@ class UlMac(MacLink):
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
         cfg = self.cfg
-        self.pc_backoff = None     # [E,R] fractional power control: min backoff (dB) from full power over
-                                   # snr_ref_prbs PRBs, ue_tx - (P0 + alpha PL); set per slot by NRNet
-        self.phr_snr = None        # [E,R] SNR against noise only for the PHR cap (several cells: power headroom
-                                   # does not depend on interference); None = sinr_ref.mean(-1)
         P = len(cfg.tdd_pattern)
         self._pg_pos = next(p for p in range(P) if cfg.slot_symbols(p)[1] > 0)
 
@@ -46,30 +42,21 @@ class UlMac(MacLink):
 
     def _sched_estimate(self, sinr_ref):
         cfg, w, S = self.cfg, self.sb_prb, self.S
-        pc = self.pc_backoff
         if cfg.ul_power == "whole_band":       # PSD fixed: same per-PRB SINR whatever the grant size
-            wb = 10 * math.log10(cfg.nprb / cfg.snr_ref_prbs)
-            est = sinr_ref - (wb if pc is None else pc.clamp(min=wb)[..., None]) + self.csi
+            est = sinr_ref - 10 * math.log10(cfg.nprb / cfg.snr_ref_prbs) + self.csi
             return est, torch.full((self.E, self.R), S, dtype=torch.long, device=self.dev)
-        if pc is None:
-            est = sinr_ref - 10 * torch.log10(w / cfg.snr_ref_prbs) + self.csi     # one RBG at full power
-        else:                                  # one RBG at the power-control PSD
-            est = sinr_ref - torch.maximum(10 * torch.log10(w / cfg.snr_ref_prbs), pc[..., None]) + self.csi
+        est = sinr_ref - 10 * torch.log10(w / cfg.snr_ref_prbs) + self.csi     # one RBG at full power
         if cfg.phr_cap:
-            ref = sinr_ref.mean(-1) if self.phr_snr is None else self.phr_snr
-            n_max_prb = cfg.snr_ref_prbs * 10 ** ((ref - cfg.phr_min_db) / 10)
+            n_max_prb = cfg.snr_ref_prbs * 10 ** ((sinr_ref.mean(-1) - cfg.phr_min_db) / 10)
             n_max = torch.floor(n_max_prb / w[0]).clamp(1, S).long()
         else:
             n_max = torch.full((self.E, self.R), S, dtype=torch.long, device=self.dev)
         return est, n_max
 
     def _split(self, n_prb):
-        """Per-PRB power backoff (dB) from the full UE power over snr_ref_prbs PRBs."""
         if self.cfg.ul_power == "whole_band":
-            sp = torch.full_like(n_prb, 10 * math.log10(self.cfg.nprb / self.cfg.snr_ref_prbs))
-        else:
-            sp = 10 * torch.log10((n_prb / self.cfg.snr_ref_prbs).clamp(min=1e-3))
-        return sp if self.pc_backoff is None else torch.maximum(sp, self.pc_backoff)
+            return torch.full_like(n_prb, 10 * math.log10(self.cfg.nprb / self.cfg.snr_ref_prbs))
+        return 10 * torch.log10((n_prb / self.cfg.snr_ref_prbs).clamp(min=1e-3))
 
     def _la_estimate(self, sinr_ref, n_prb, est):
         return sinr_ref - self._split(n_prb)[..., None] + self.csi
@@ -83,13 +70,6 @@ class UlMac(MacLink):
     def _post_slot(self, tx, gain_now):
         self.bsr = torch.where(tx, self.unsent(), self.bsr)     # BSR rides every PUSCH
         self.csi = gain_now                                     # PUSCH/SRS measurement for the next decision
-
-    def handover(self, ho, flush=False):
-        """As MacLink.handover; the buffer status reaches the target with the handover-complete message, and a
-        pending SR is dropped."""
-        super().handover(ho, flush)
-        self.sr_t = torch.where(ho, torch.full_like(self.sr_t, -1), self.sr_t)
-        self.bsr = torch.where(ho, self.unsent(), self.bsr)
 
     def compact(self, gone):
         super().compact(gone)

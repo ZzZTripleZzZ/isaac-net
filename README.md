@@ -37,7 +37,7 @@ flowchart LR
 
 Parallel robot learning runs thousands of environments on one GPU, but the network between robots and the edge is usually reduced to a fixed or random delay, if it is modeled at all. Packet-level simulators such as ns-3 capture scheduling, retransmissions and contention, but they run one scenario at a time on a CPU, far from the throughput an RL loop needs. `isaaclab-net` closes that gap. Every piece of network state, from each robot's channel and HARQ process to its queued messages, is a fixed-shape tensor with leading dimensions `[envs, robots]`. The engine advances all environments' uplinks slot by slot on the GPU, in lockstep with the physics. A policy therefore trains against queues that build up when the team transmits together, links that degrade as robots move, and retransmissions that stretch delay tails.
 
-**Status.** Early prototype, now packaged as `isaaclab_net`. The prototype levels and their fast backends are tested for bitwise equivalence, the configurable NR engine (3GPP MCS/TBS and BLER tables, multiple HARQ processes, downlink) and the multi-cell uplink are merged behind one engine factory, the Isaac Lab layer runs every level through the same factory, and the ns-3 bridges are in the package. The Isaac Lab fleet demo trains end to end with the network in the loop; its uncontended scaling benchmarks are still to be run. [ARCHITECTURE.md](ARCHITECTURE.md) lists the status of every module.
+**Status.** Early prototype, now packaged as `isaaclab_net`. The prototype levels and their fast backends are tested for bitwise equivalence, the configurable NR engine (3GPP MCS/TBS and BLER tables, multiple HARQ processes, downlink, multiple cells) and the legacy multi-cell uplink are merged behind one engine factory, the Isaac Lab layer runs every level through the same factory, and the ns-3 bridges are in the package. The Isaac Lab fleet demo trains end to end with the network in the loop; its uncontended scaling benchmarks are still to be run. [ARCHITECTURE.md](ARCHITECTURE.md) lists the status of every module.
 
 ## Install
 
@@ -166,10 +166,11 @@ cfg = NRConfig(mu=1, bandwidth_mhz=20, tdd_pattern="DDDSU", n_harq=16, mcs_table
 net = make_engine("L2", E, R, dev, cfg)             # 51 PRB in 13 RBGs, 16 HARQ processes, EESM, uplink + downlink
 net.add_dl_frames(None, torch.full((E, R), 3000.0, device=dev))  # downlink bytes per robot; see out["dl_newest"]
 net = make_engine("L2", E, R, dev, netslot_compat())                     # closest to the legacy NetSlot
-net = make_engine("L2-legacy", E, R, dev, multicell(3))                  # 3 cells with interference and handover
+net = make_engine("L2", E, R, dev, multicell(3, dl=True))               # 3 cells: UL + DL interference, handover
+out = net.step(None, pos)                           # several cells take poses (or pathgain_db=[E,R,C]); out["serving_cell"]
 ```
 
-Presets: `netslot_compat()` (the legacy L2 geometry and timing with the 3GPP PHY), `lena_like()` and `lena_validation()` (the ns-3 5G-LENA reference scenario), `srsran_like()` and `oai_like()` (latency fitted to public srsRAN and OAI measurements), and `multicell(n)` (hexagonal cells at 100 m spacing, thermal noise, uplink fractional power control on). Uplink power control is on by default whenever `n_cells > 1`: without it, full-power robots next to their own gNB dominate the interference, and three cells carry less than one. The NR engine runs on the `reference` backend, and multi-cell configurations run on `L2-legacy` until the NR engine gets its multi-cell MAC.
+Presets: `netslot_compat()` (the legacy L2 geometry and timing with the 3GPP PHY), `lena_like()` and `lena_validation()` (the ns-3 5G-LENA reference scenario), `srsran_like()` and `oai_like()` (latency fitted to public srsRAN and OAI measurements), and `multicell(n)` (hexagonal cells at 100 m spacing, thermal noise, uplink fractional power control on). Uplink power control is on by default whenever `n_cells > 1`: without it, full-power robots next to their own gNB dominate the interference, and three cells carry less than one. Multi-cell configurations run on `L2` (per-cell schedulers and HARQ, uplink and downlink interference) and on `L2-legacy` (NetSlotMC, uplink only). The NR engine runs on the `reference` backend.
 
 **PHY tables and licensing.** The BLER tables shipped in `isaaclab_net/core/data/` are exported from Sionna SYS 2.2.0 (Apache-2.0, license file alongside). The 5G-LENA tables used by `bler_source="lena"` (the `lena_like` presets) are GPL-2.0 data and are never shipped or committed. Generate them from your own 5G-LENA checkout; the script asks for its location if you omit it:
 
@@ -184,14 +185,14 @@ python -m isaaclab_net.tools.extract_lena_tables ~/src/nr   # writes ~/.cache/is
 
 | Layer | Configurable NR engine (`L2`) | Legacy slot-level model (`L2-legacy`) |
 |:---|:---|:---|
-| Radio | path loss, spatially correlated shadowing per env and cell, correlated Rayleigh fading per subband | the same, one cell at the arena corner |
+| Radio | path loss, spatially correlated shadowing per env and cell, correlated Rayleigh fading per subband and link | the same, one cell at the arena corner by default |
 | Frame structure | numerology 0 to 2, any bandwidth (38.101 N_RB), any TDD pattern and special slot, RBGs per 38.214 | TDD `DDDSU` at 30 kHz SCS, 40 uplink slots per 100 ms, 5 subbands of 10 PRBs |
 | Access | periodic SR, grant delay, BSR, optional proactive grants | scheduling request, grant delay, buffer status reports |
 | Scheduling | proportional fair per RBG (subband or wideband metric), retransmissions first | proportional fair over subbands, power split with a headroom cap |
 | Link | 3GPP MCS tables and exact TBS, EESM, BLER-target link adaptation, OLLA, MCS caps | OLLA, one transport block per robot per slot, logistic BLER on effective SINR |
 | Retransmission | multiple HARQ processes, chase or IR combining, RLC AM retry or UM loss | HARQ with a chase-combining gain and a retransmission limit |
 | Downlink | per-robot gNB queues, delayed and quantized CQI, K1 feedback | none |
-| Cells | one cell (multi-cell is next) | 1 to 7 cells, same-slot interference, fractional power control, A3 handover |
+| Cells | 1 to 7 cells, a PF scheduler and HARQ per cell, same-slot UL and DL interference, fractional UL power control, A3 handover with interruption | 1 to 7 cells, same-slot UL interference, fractional power control, A3 handover |
 | Application | per-robot FIFO, in-order completion, timeout or PDCP discard | per-robot FIFO of frames, in-order completion, 2 s application timeout |
 
 ## Fidelity levels
@@ -227,7 +228,7 @@ net = make_engine("NN", E, R, dev, params="~/.cache/isaaclab_net/levels/L2-legac
 
 ## Backends and speed
 
-Every prototype level (`L0` to `L1`, `L2-legacy`) has a readable eager reference in `isaaclab_net/core/proto/netsim.py` and graph-safe fast versions in `isaaclab_net/core/proto/netsim_fast.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference at every level (per-message outputs, every queue and MAC state, with random partial resets). `triton` (`L1`, `L2-legacy`) runs all 40 slots of a control step in one fused kernel and matches the reference to rounding: from an identical state every finish time agrees, and over long runs aggregate delivery and delay agree to three or four significant digits. `compile` (torch.compile + CUDA graph) also agrees to rounding. The NR engine (`L2`) and the multi-cell engine have only the `reference` backend so far. The surrogate and bound levels (`TR` to `NOCOMM`) are written once with graph-safe ops, so their `reference` backend runs the same operations as `graph`, which is bitwise identical to it. On a shared GPU the NR uplink costs about 2.6–3.9 times the legacy reference per step, and the multi-cell engine about 1.2 times.
+Every prototype level (`L0` to `L1`, `L2-legacy`) has a readable eager reference in `isaaclab_net/core/proto/netsim.py` and graph-safe fast versions in `isaaclab_net/core/proto/netsim_fast.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference at every level (per-message outputs, every queue and MAC state, with random partial resets). `triton` (`L1`, `L2-legacy`) runs all 40 slots of a control step in one fused kernel and matches the reference to rounding: from an identical state every finish time agrees, and over long runs aggregate delivery and delay agree to three or four significant digits. `compile` (torch.compile + CUDA graph) also agrees to rounding. The NR engine (`L2`, one or several cells) and the legacy multi-cell engine have only the `reference` backend so far. The surrogate and bound levels (`TR` to `NOCOMM`) are written once with graph-safe ops, so their `reference` backend runs the same operations as `graph`, which is bitwise identical to it. On a shared GPU the NR uplink costs about 2.6–3.9 times the legacy reference per step, and the multi-cell engine about 1.2 times.
 
 Network step time (`submit` + `step`, dict outputs) in ms, on an RTX 4090 that other jobs kept 98–99% busy, so absolute numbers are pessimistic:
 

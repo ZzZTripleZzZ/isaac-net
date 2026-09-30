@@ -1,7 +1,7 @@
 """NRConfig: the one configuration dataclass shared by every isaaclab_net module.
 
 It fixes the NR numerology, carrier, TDD pattern and MAC timing (NR engine, nr_engine.py and mac_*.py), the
-radio and cell layout (radio.py, and the multi-cell legacy engine proto/netsim_mc.py), and the application
+radio and cell layout (radio.py, the NR engine and the multi-cell legacy engine proto/netsim_mc.py), and the application
 fields (frame buffer, timeout, control step, message sizes) that every fidelity level reads. Every derived
 quantity is a plain Python value or a small CPU list so the batched engines can precompute their schedules.
 
@@ -164,8 +164,9 @@ class NRConfig:
     shadow_white_frac: float = 0.0       # carried for calibration (POWDER: ~0.5); radio.py does not read it yet
     # ---- cells: layout, uplink interference and power control, association and handover ----
     # Default: one gNB at the origin with the fixed noise floor, which is the legacy NetSlot geometry.
-    # multicell() gives the multi-cell preset. n_cells > 1 currently runs on level "L2-legacy" (NetSlotMC);
-    # the NR engine accepts n_cells = 1 only (multi-cell NR is the next merge, see ARCHITECTURE.md).
+    # multicell() gives the multi-cell preset. n_cells > 1 runs on level "L2" (NR engine, UL and DL
+    # interference) and on "L2-legacy" (NetSlotMC, UL only). TTT and interruption are in ms: NetSlotMC counts
+    # them in UL slots (ttt_slots, ho_int_slots), the NR engine in slots of slot_ms.
     n_cells: int = 1                     # 1..7
     cell_layout: str = "custom"          # "hex" | "grid" | "custom"
     cell_positions_m: tuple = ((0.0, 0.0),)   # custom: one (x, y) per cell, env-local metres
@@ -173,6 +174,7 @@ class NRConfig:
     cell_center_m: tuple = (75.0, 75.0)  # hex: cluster centroid
     cell_arena_m: float = 150.0          # grid: square arena tiled by ceil(sqrt(C)) columns
     ul_interference: bool = True         # thermal noise only: add same-slot other-cell UL interference
+    dl_interference: bool = True         # thermal noise only: same for the DL (NR engine)
     li_alpha: float = 1.0                # link adaptation uses an EWMA of the measured N+I; 1 = previous slot
     ul_pc: bool | None = None            # UL open-loop fractional power control P = min(Pmax - split, P0 + alpha PL)
                                          # per subband; None = ON when n_cells > 1, OFF for one cell (legacy)
@@ -455,7 +457,7 @@ def multicell(n_cells=3, **kw):
     A3 handover (3 dB hysteresis, 300 ms TTT, 40 ms interruption) and lossless RLC carry-over.
     Without power control, full-power robots near their own gNB dominate the interference and three cells
     at 60 m ISD carry less than one (multicell_report); keep ul_pc on or the ISD at 100 m or more.
-    Runs on level "L2-legacy" (NetSlotMC) until the NR engine gets its multi-cell MAC."""
+    Runs on level "L2" (NR engine, this MAC with 3GPP MCS/TBS/BLER) and on "L2-legacy" (NetSlotMC)."""
     base = dict(n_cells=n_cells, cell_layout="hex", cell_isd_m=100.0, cell_center_m=(75.0, 75.0),
                 noise_model="thermal", gnb_nf_db=5.0, ul_pc=True, ul_pc_p0_dbm=-88.0, ul_pc_alpha=1.0)
     base.update(kw)

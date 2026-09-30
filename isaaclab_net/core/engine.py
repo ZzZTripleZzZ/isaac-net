@@ -57,7 +57,7 @@ def _check_proto_config(level, cfg: NRConfig):
                          f"the config asks for {', '.join(f'{k}={v[0]}' for k, v in bad.items())}. "
                          "Use level 'L2' for a configurable engine.")
     if level != "L2-legacy" and cfg.n_cells != 1:
-        raise ValueError(f"level {level} is single-cell; multi-cell runs on 'L2-legacy'")
+        raise ValueError(f"level {level} is single-cell; multi-cell runs on 'L2' or 'L2-legacy'")
     if level in ("L1", "QA") and not cfg.is_legacy_cell():
         raise ValueError(f"level {level} has the fixed legacy radio (one gNB at the origin, -90 dBm noise floor); "
                          "use the default cell settings, or level 'L2' / 'L2-legacy'")
@@ -194,10 +194,10 @@ class NREngine:
         self.radio = radio
 
     def set_sinr_hook(self, fn, direction="ul"):
-        """Multi-cell merge point: fn(g, dir, won [E,R,S], n_prb [E,R], sinr [E,R,S]) -> sinr [E,R,S] is called
-        between allocation and decoding in every data slot of that direction (same-slot interference)."""
-        link = self.net.ul if direction == "ul" else self.net.dl
-        link.sinr_hook = fn
+        """fn(g, dir, won [E,R,S], n_prb [E,R], sinr [E,R,S]) -> sinr [E,R,S] is called between allocation and
+        decoding in every data slot of that direction (won: RBGs of the robots that transmit). With several cells
+        the engine's own inter-cell interference runs first and fn gets its result."""
+        self.net.set_sinr_hook(fn, direction)
 
     # ------------------------------------------------------------------ time
     def _now(self, t):
@@ -269,23 +269,39 @@ class NREngine:
     def _ul_input(self, x):
         """SNR [E,R] dB (full UE power over snr_ref_prbs PRBs), or poses [E,R,2|3] -> (pathgain or None, snr)."""
         if x.dim() == 3:
-            if self.radio is None:
-                self.radio = RadioMC(self.config, self.E, self.dev, generator=self.gen)
-            return self.radio.pathgain_db(x)[..., 0]
+            return self._pathgain(x)[..., 0]
         return None
 
-    def step(self, t, x=None, cur_hid=None, *, snr_db=None, dl_snr_db=None):
+    def _pathgain(self, pos):
+        if self.radio is None:
+            self.radio = RadioMC(self.config, self.E, self.dev, generator=self.gen)
+        return self.radio.pathgain_db(pos)
+
+    def step(self, t, x=None, cur_hid=None, *, snr_db=None, dl_snr_db=None, pathgain_db=None):
         """Advance [t, t+1). x: SNR [E,R] in dB, or poses [E,R,2|3] (through the engine's radio); snr_db=
-        takes a per-subband SNR [E,R,S]. Legacy form step(t, snr_db, cur_hid) returns (newest, det_env).
-        Without cur_hid it returns the dict of the module docstring plus, for this engine:
-          dropped [E,R,F] bool   lost under RLC UM (harq_fail="drop") and resolved this step
-          serving_cell [E,R]     serving cell (0; the multi-cell hook)
+        takes a per-subband SNR [E,R,S]. With several cells (config.n_cells > 1) x must be poses, or pass
+        pathgain_db= [E,R,C] (large-scale gain of every robot-cell link, dB). Legacy form step(t, x, cur_hid)
+        returns (newest, det_env). Without cur_hid it returns the dict of the module docstring plus, for this
+        engine:
+          dropped [E,R,F] bool   lost under RLC UM (harq_fail="drop"), or on a handover with ho_rlc="flush", and
+                                 resolved this step
+          serving_cell [E,R]     serving cell (0 with one cell)
           dl_newest, dl_queue_len [E,R]  when config.dl
+        With several cells sinr_db is the serving-link SINR against the gNB's latest N+I estimate.
         """
         T = self._now(t)
         legacy = cur_hid is not None
         hid = cur_hid if legacy else self._last_hid
-        if snr_db is None:
+        if self.net.C > 1:
+            if pathgain_db is None:
+                if x is None or x.dim() != 3:
+                    raise ValueError("several cells: pass poses [E,R,2|3] or pathgain_db=[E,R,C]")
+                pathgain_db = self._pathgain(x)
+            out = self.net.step_cells(T, pathgain_db, hid, full=True)
+            snr = self.net.serving_sinr_db()
+        elif pathgain_db is not None:
+            raise ValueError("pathgain_db= needs config.n_cells > 1; use x (poses or SNR) with one cell")
+        elif snr_db is None:
             pg = self._ul_input(x)
             if pg is not None:
                 out = self.net.step_rx(T, pg, hid, full=True)
@@ -307,6 +323,7 @@ class NREngine:
         if "dl_newest" in out:
             out["dl_newest"] = self._rel(out["dl_newest"])
         out["sinr_db"] = snr
-        out["serving_cell"] = torch.zeros(self.E, self.R, dtype=torch.long, device=self.dev)
+        if "serving_cell" not in out:
+            out["serving_cell"] = torch.zeros(self.E, self.R, dtype=torch.long, device=self.dev)
         out["t"] = (T - self.epoch).clone()
         return out

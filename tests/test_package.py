@@ -87,5 +87,8 @@ def test_make_engine_rejects_bad_requests():
         make_engine("L1", 2, 2, config=NRConfig(frame_buffer=32))
     with pytest.raises(ValueError):
         make_engine("L1", 2, 2, config=NRConfig(noise_model="thermal"))
-    with pytest.raises(NotImplementedError):
-        make_engine("L2", 2, 2, config=NRConfig(n_cells=3, cell_layout="hex"))
+    with pytest.raises(ValueError):
+        make_engine("L1", 2, 2, config=NRConfig(n_cells=3, cell_layout="hex"))
+    net = make_engine("L2", 2, 2, config=NRConfig(n_cells=3, cell_layout="hex"))     # multi-cell NR engine
+    with pytest.raises(ValueError):
+        net.step(None, torch.full((2, 2), 10.0))           # several cells need poses or per-link path gains

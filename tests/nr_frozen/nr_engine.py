@@ -9,23 +9,6 @@ and partial reset(env_ids). See mac.py for the byte-stream / HARQ model.
 Time is one global control-step clock t (a Python int) shared by all envs. engine.NREngine wraps NRNet
 in the contract API of ARCHITECTURE.md (submit / step -> dict, per-env episode clocks) and is what
 `make_engine("L2", ...)` returns.
-
-Multi-cell (cfg.n_cells = C > 1; the design of proto/netsim_mc.NetSlotMC on this MAC). Input: the large-scale
-path gain of every robot-cell link [E,R,C] (step_cells, or poses through the engine's RadioMC). Every cell runs
-its own PF scheduler (per RBG) and HARQ over the same carrier (MacLink.member), with a TDD pattern that is
-synchronous across cells. Same-slot interference goes through MacLink.sinr_hook: in every UL data slot gNB c
-sees the robots the other cells scheduled on the same RBG, at their transmit PSD (power split and fractional
-power control) and with the fading of that robot-gNB link; in every DL data slot a robot sees every other gNB
-that transmits on the RBG, at gnb_tx_dbm spread over the carrier. Link adaptation (scheduler estimate, MCS, PHR
-cap, DL CQI) uses the N+I measured in the previous data slot of that direction (EWMA li_alpha); decoding uses the
-actual same-slot N+I; OLLA absorbs the mismatch. The PHR cap on RBGs per UE uses the noise-only SNR (power headroom
-does not depend on interference; NetSlotMC uses the SINR there, which starves loaded cells of RBGs). Interference needs noise_model="thermal" (the fixed floor
-already contains it) and ul_interference / dl_interference. UL fractional power control (P0 + alpha PL) is on by
-default when C > 1. CellAssociation attaches robots at max RSRP after every reset and runs A3 with
-hysteresis and time-to-trigger (in slots); a handover fires at its exact slot, moves the robot's MAC state
-(MacLink.handover) and blocks scheduling for the interruption. Fading is per link [E,R,C,S,2] and shared by UL
-and DL (TDD reciprocity). Shapes are fixed; the only Python loops are the constant slot and RBG loops. At
-C = 1 none of this code runs and NRNet is bitwise the single-cell engine.
 """
 from __future__ import annotations
 
@@ -33,11 +16,10 @@ import math
 
 import torch
 
-from .config import NRConfig
+from isaaclab_net.core.config import NRConfig
 from .mac_dl import DlMac
 from .mac_ul import UlMac
-from .queues import env_mask, onehot, reset_where
-from .radio import CellAssociation, pick
+from isaaclab_net.core.queues import env_mask, reset_where
 
 class NRNet:
     """Drop-in replacement for netsim.NetSlot (same add_frames / step / queued / stats API) with an
@@ -47,7 +29,9 @@ class NRNet:
 
     def __init__(self, E, R, device, sizes, cfg: NRConfig | None = None, generator=None):
         self.cfg = cfg or NRConfig()
-        self.C = self.cfg.n_cells
+        if self.cfg.n_cells != 1:
+            raise NotImplementedError("the NR engine is single-cell for now (n_cells = 1); multi-cell runs on level "
+                                      "'L2-legacy' (NetSlotMC) until the NR multi-cell MAC is merged")
         self.gen = generator       # draws of reset() (fading state); stepping uses the global RNG
         self.E, self.R, self.dev = E, R, device
         self.sizes = torch.tensor(sizes, device=device, dtype=torch.float32)
@@ -61,40 +45,7 @@ class NRNet:
         self._sched_cache = {}
         self.trace_frames = None
         self.trace_frames_dl = None
-        self.log_sinr = False      # multi-cell: per-TB SINR samples in self.sinr_log (host copies; sweeps only)
-        if self.C > 1:
-            self._init_cells()
         self.reset()
-
-    def _init_cells(self):
-        cfg, C, d = self.cfg, self.C, self.dev
-        self.assoc = CellAssociation(cfg, self.E, self.R, C, d, cfg.slots_per_step, slot_ms=cfg.slot_ms)
-        thermal = cfg.noise_model == "thermal"
-        self.use_int = {"ul": thermal and cfg.ul_interference, "dl": thermal and cfg.dl_interference}
-        self.noise_mw = {"ul": 10 ** (cfg.noise_dbm_per_prb("gnb") / 10), "dl": 10 ** (cfg.noise_dbm_per_prb("ue") / 10)}
-        self.ref_db = 10 * math.log10(cfg.snr_ref_prbs)
-        self.dl_psd_db = cfg.gnb_tx_dbm - 10 * math.log10(cfg.nprb)      # gNB transmit power per PRB
-        self._ici = {"ul": self._ul_ici, "dl": self._dl_ici}
-        self._user_hook = {"ul": None, "dl": None}
-        for link in (self.ul, self.dl):
-            if link is not None:
-                link.n_cells = C
-                link.sinr_hook = self._ici[link.dir] if self.use_int[link.dir] else None
-        self.sinr_log = []
-
-    def set_sinr_hook(self, fn, direction="ul"):
-        """Install fn(g, dir, won, n_prb, sinr) -> sinr on that direction. With several cells it runs after the
-        engine's own inter-cell interference (fn=None removes it)."""
-        link = self.ul if direction == "ul" else self.dl
-        if self.C == 1:
-            link.sinr_hook = fn
-            return
-        self._user_hook[direction] = fn
-        own = self._ici[direction] if self.use_int[direction] else None
-        if own is None or fn is None:
-            link.sinr_hook = own or fn
-        else:
-            link.sinr_hook = lambda g, dr, won, n_prb, act: fn(g, dr, won, n_prb, own(g, dr, won, n_prb, act))
 
     @property
     def cap(self):
@@ -108,8 +59,7 @@ class NRNet:
         self.ul.reset(env_ids)
         if self.dl is not None:
             self.dl.reset(env_ids)
-        cdim = () if self.C == 1 else (self.C,)
-        h0 = torch.randn(E, R, *cdim, S, 2, device=d, generator=self.gen) / math.sqrt(2)
+        h0 = torch.randn(E, R, S, 2, device=d, generator=self.gen) / math.sqrt(2)
         if env_ids is None:
             self.h = h0
             self.last_g = None
@@ -118,29 +68,8 @@ class NRNet:
             m = env_mask(E, env_ids, d)
             self.h = reset_where(self.h, m, h0)
             self.dl_newest = reset_where(self.dl_newest, m, -1)
-        if self.C > 1:
-            self._reset_cells(env_ids)
         if not hasattr(self, "stats"):
             self.clear_stats()
-
-    # per-env multi-cell state (besides h and the association) and its reset value
-    CELL_INIT = {"ni_ul": "ul", "ni_dl": "dl"}
-
-    def _reset_cells(self, env_ids):
-        """Association (re-attach at the next step), measured N+I back to the noise floor; the interference
-        statistics are global and cleared only by a full reset."""
-        E, R, C, S, d = self.E, self.R, self.C, self.S, self.dev
-        self.assoc.reset(env_ids)
-        if env_ids is None:
-            self.ni_ul = torch.full((E, C, S), self.noise_mw["ul"], device=d)     # per PRB (mW) at each gNB
-            self.ni_dl = torch.full((E, R, S), self.noise_mw["dl"], device=d)     # per PRB (mW) at each robot
-            self.ioN = {k: torch.zeros(E, device=d) for k in ("ul", "dl")}        # sum of I/N over RBG-slots
-            self.ioN_n = {"ul": 0, "dl": 0}
-            self._pg = torch.zeros(E, R, C, device=d)
-        else:
-            m = env_mask(E, env_ids, d)
-            self.ni_ul = reset_where(self.ni_ul, m, self.noise_mw["ul"])
-            self.ni_dl = reset_where(self.ni_dl, m, self.noise_mw["dl"])
 
     def clear_stats(self):
         self.stats = {"delay": [], "overflow": 0, "dl_delay": [], "dropped": 0, "late": 0, "discarded": 0,
@@ -232,7 +161,7 @@ class NRNet:
 
     def _gain(self):
         if not self.cfg.fading:
-            return torch.zeros(self.h.shape[:-1], device=self.dev)
+            return torch.zeros(self.E, self.R, self.S, device=self.dev)
         return 10 * torch.log10((self.h ** 2).sum(-1).clamp(min=1e-6))
 
     def step_rx(self, t, pathgain_db, cur_hid=None, ul_interf_dbm_prb=None, dl_interf_dbm_prb=None,
@@ -266,10 +195,7 @@ class NRNet:
         cfg = self.cfg
         N = cfg.slots_per_step
         g0 = t * N
-        assert self.C == 1, "several cells: use step_cells(t, pathgain [E,R,C]) (or poses through NREngine)"
         ul_ref = snr_db if snr_db.dim() == 3 else snr_db[..., None].expand(-1, -1, self.S)
-        if cfg.ul_pc_on:           # one cell with ul_pc=True: path loss from the input SNR
-            self.ul.pc_backoff = self._pc_backoff(ul_ref.mean(-1) + cfg.subband_noise_dbm)
         if self.dl is not None:
             dref = dl_snr_db if dl_snr_db is not None else snr_db + cfg.dl_snr_offset_db
             dl_ref = dref if dref.dim() == 3 else dref[..., None].expand(-1, -1, self.S)
@@ -287,137 +213,6 @@ class NRNet:
             if uls:
                 self.ul.slot(g, frac, uls, ul_ref, gain, 0)
         return self._finish(t, cur_hid, full)
-
-    # ---- several cells ----
-    def _pc_backoff(self, rx_serv):
-        """Fractional UL power control: backoff (dB) from the full power over snr_ref_prbs PRBs so that this PSD
-        is P0 + alpha PL (P0 per snr_ref_prbs PRBs); rx_serv = serving RSRP at full power [E,R]."""
-        c = self.cfg
-        return c.ue_tx_dbm - (c.ul_pc_p0_dbm + c.ul_pc_alpha * (c.ue_tx_dbm - rx_serv))
-
-    def _handover(self, ho, target, g):
-        self.assoc.switch(ho, target, g)
-        flush = self.cfg.ho_rlc == "flush"
-        self.ul.handover(ho, flush)
-        if self.dl is not None:
-            self.dl.handover(ho, flush)
-
-    def serving_sinr_db(self):
-        """Full-power SINR over snr_ref_prbs PRBs on the serving link against the gNB's latest wideband N+I
-        estimate [E,R] (the multi-cell counterpart of the SNR input; observation and frame feature)."""
-        ni = self.ni_ul.gather(1, self.assoc.serv[..., None].expand(-1, -1, self.S)).mean(-1)
-        return pick(self._pg, self.assoc.serv) + self.cfg.ue_tx_dbm - self.ref_db - 10 * torch.log10(ni)
-
-    def geometry_db(self):
-        return self.assoc.geometry_db(self._pg)
-
-    def step_cells(self, t, pathgain_db, cur_hid=None, full=False):
-        """Advance [t, t+1) with several cells. pathgain_db [E,R,C]: large-scale gain of every robot-gNB link
-        (negative dB, incl. shadowing; reciprocal, so it serves UL and DL). Returns what step() returns; the
-        full dict adds serving_cell [E,R]."""
-        cfg, C, S = self.cfg, self.C, self.S
-        N = cfg.slots_per_step
-        g0 = t * N
-        self._pg = pathgain_db
-        rx = pathgain_db + cfg.ue_tx_dbm                      # RSRP up to a constant: full UE power, no fading
-        asc = self.assoc
-        asc.associate(rx)
-        k_ho, tgt = asc.plan(rx)
-        g_ho = g0 + k_ho
-        fired = torch.zeros(self.E, self.R, dtype=torch.bool, device=self.dev)
-        links = [x for x in (self.ul, self.dl) if x is not None]
-        for rel, dls, uls, sr, cqi, ack in self._schedule(g0):
-            g = g0 + rel
-            ho = (k_ho >= 0) & (k_ho <= rel) & ~fired          # A3 triggers up to this slot switch now
-            self._handover(ho, tgt, g_ho)
-            fired = fired | ho
-            self._evolve(g)
-            gain_c = self._gain()                             # [E,R,C,S]
-            self._gain_c = gain_c
-            serv = asc.serv
-            gain = pick(gain_c, serv)
-            member = onehot(serv, C).permute(0, 2, 1)         # [E,C,R]
-            ok = asc.schedulable(g)
-            for link in links:
-                link.member, link.sched_ok = member, ok
-            pg_s = pick(pathgain_db, serv)[..., None]
-            frac = t + (rel + 1) / N
-            if cqi or dls:
-                self._ni_la_dl = 10 * torch.log10(self.ni_dl)
-                dl_ref = self.dl_psd_db + pg_s - self._ni_la_dl
-            if cqi:
-                self.dl.cqi_report(dl_ref, gain)
-            if dls:
-                self.dl.slot(g, frac, dls, dl_ref, gain, g0 + ack)
-            if sr:
-                self.ul.sr_step(g)
-            if uls:
-                self._ni_la_ul = 10 * torch.log10(self.ni_ul.gather(1, serv[..., None].expand(-1, -1, S)))
-                ul_ref = cfg.ue_tx_dbm - self.ref_db + pg_s - self._ni_la_ul
-                rx_s = pg_s[..., 0] + cfg.ue_tx_dbm
-                self.ul.phr_snr = rx_s - cfg.subband_noise_dbm
-                if cfg.ul_pc_on:
-                    self.ul.pc_backoff = self._pc_backoff(rx_s)
-                self.ul.slot(g, frac, uls, ul_ref, gain, 0)
-        late = (k_ho >= 0) & ~fired                           # triggers after the last active slot of the step
-        self._handover(late, tgt, g_ho)
-        out = self._finish(t, cur_hid, full)
-        if full:
-            out["serving_cell"] = asc.serv.clone()
-        return out
-
-    def _log_sinr(self, d, won, act, i_db):
-        """Per-TB mean SINR with and without the inter-cell interference, and the RBG count (host copy)."""
-        n = won.sum(-1)
-        tx = n > 0
-        nf = n.clamp(min=1).float()
-        sinr = (act * won).sum(-1) / nf
-        snr = ((act + i_db) * won).sum(-1) / nf
-        self.sinr_log.append((d, torch.stack([sinr, snr, n.float(), self.geometry_db().clamp(max=99.0)], -1)[tx].cpu()))
-
-    def _ul_ici(self, g, d, won, n_prb, act):
-        """UL sinr_hook: interference at every gNB from the robots the other cells scheduled on the same RBG in
-        this slot (transmit PSD after power split and power control, fading of the robot-gNB link)."""
-        serv = self.assoc.serv
-        psd = (self._pg + self.cfg.ue_tx_dbm - self.ref_db)[..., None] - self.ul._split(n_prb)[..., None, None]
-        p_rx = 10 ** ((psd + self._gain_c) / 10) * won[:, :, None, :]                    # [E,R,C,S] mW per PRB
-        other = ~onehot(serv, self.C)                                                    # [E,R,C]
-        interf = (p_rx * other[..., None]).sum(1)                                        # [E,C,S]
-        ni_now = self.noise_mw["ul"] + interf
-        ni_act = 10 * torch.log10(ni_now.gather(1, serv[..., None].expand(-1, -1, self.S)))
-        a = self.cfg.li_alpha
-        self.ni_ul = ni_now if a == 1.0 else a * ni_now + (1 - a) * self.ni_ul
-        self.ioN["ul"] += (interf / self.noise_mw["ul"]).sum((1, 2))
-        self.ioN_n["ul"] += self.C * self.S
-        out = act - (ni_act - self._ni_la_ul)
-        if self.log_sinr:
-            self._log_sinr("ul", won, out, ni_act - 10 * math.log10(self.noise_mw["ul"]))
-        return out
-
-    def _dl_ici(self, g, d, won, n_prb, act):
-        """DL sinr_hook: interference at every robot from the other gNBs that transmit on the same RBG in this
-        slot (gnb_tx_dbm over the carrier, fading of the gNB-robot link)."""
-        serv = self.assoc.serv
-        member = onehot(serv, self.C)                                                    # [E,R,C]
-        active = (member[..., None] & won[:, :, None, :]).any(1)                         # [E,C,S]
-        p_rx = 10 ** ((self._pg[..., None] + self.dl_psd_db + self._gain_c) / 10)        # [E,R,C,S]
-        interf = (p_rx * (active[:, None] & ~member[..., None])).sum(2)                  # [E,R,S]
-        ni_now = self.noise_mw["dl"] + interf
-        a = self.cfg.li_alpha
-        self.ni_dl = ni_now if a == 1.0 else a * ni_now + (1 - a) * self.ni_dl
-        self.ioN["dl"] += (interf / self.noise_mw["dl"]).sum((1, 2)) / self.R
-        self.ioN_n["dl"] += self.S
-        ni_act = 10 * torch.log10(ni_now)
-        out = act - (ni_act - self._ni_la_dl)
-        if self.log_sinr:
-            self._log_sinr("dl", won, out, ni_act - 10 * math.log10(self.noise_mw["dl"]))
-        return out
-
-    def iot_db(self, direction="ul"):
-        """Mean interference over thermal (dB): UL per gNB-RBG-slot, DL per robot-RBG-slot, since the last full
-        reset [E]."""
-        n = max(self.ioN_n[direction], 1)
-        return 10 * torch.log10(1 + self.ioN[direction] / n)
 
     def _finish(self, t, cur_hid, full=False):
         cfg = self.cfg
