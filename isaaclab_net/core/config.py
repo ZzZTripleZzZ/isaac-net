@@ -49,7 +49,8 @@ def fading_rho_from_speed(speed_mps, carrier_ghz=3.5, anchor_ms=2.5):
 
 # NRConfig fields by the part of the package that reads them (see fields_read_by / unused_fields). The prototype
 # levels, the surrogates and the bounds read only APP (and their own level block); their radio is the fixed legacy
-# one. Fields no engine reads yet: shadow_dcorr_m, shadow_white_frac.
+# one. The channel fields (radio group) are read by radio.RadioMC, which L2 and NetSlotMC use; per-robot Doppler
+# (fading_doppler) needs the NR engine's fading, so it sits in the NR group.
 FIELD_GROUPS = {
     "app": ("control_step_ms", "frame_buffer", "timeout_steps", "msg_sizes"),
     "l0": ("l0_delay_median_steps", "l0_delay_log_sigma", "l0_loss"),
@@ -62,16 +63,25 @@ FIELD_GROUPS = {
            "n_harq", "max_harq_tx", "harq_combining", "harq_fail", "rlc_retx_slots", "discard", "mcs_table",
            "eff_sinr", "bler_source", "tbs_mode", "lena_ref_sc_per_rb", "bler_target", "ul_mcs_max", "dl_mcs_max",
            "olla", "olla_up_db", "pf_metric", "pf_window", "retx_priority", "ul_power", "phr_cap",
-           "phr_min_db", "fading", "fading_rho_per_ms", "ue_speed_mps", "carrier_ghz", "dl_snr_offset_db",
+           "phr_min_db", "fading", "fading_rho_per_ms", "ue_speed_mps", "carrier_ghz", "fading_doppler",
+           "doppler_min_speed_mps", "dl_snr_offset_db",
            "gnb_tx_dbm", "ue_nf_db", "tb_overhead_bytes", "pkt_payload_bytes", "pkt_overhead_bytes", "ul", "dl"),
     "link": ("snr_ref_prbs", "noise_model", "ni_fixed_dbm", "gnb_nf_db", "ue_tx_dbm"),
-    "radio": ("pl_const_db", "pathloss_exp", "shadow_sigma_db", "shadow_modes", "n_cells", "cell_layout",
-              "cell_positions_m", "cell_isd_m", "cell_center_m", "cell_arena_m"),
+    "radio": ("pl_const_db", "pathloss_exp", "shadow_sigma_db", "shadow_modes", "shadow_dcorr_m", "shadow_white_frac",
+              "shadow_acf", "shadow_white_dcorr_m", "channel", "tr38901_scenario", "tr38901_los", "gnb_height_m",
+              "ue_height_m", "o2i_indoor_frac", "o2i_model", "inf_clutter_density", "inf_clutter_size_m",
+              "inf_clutter_height_m", "radio_map_path", "blockage", "blockage_radius_m", "blockage_loss_db",
+              "n_cells", "cell_layout", "cell_positions_m", "cell_isd_m", "cell_center_m", "cell_arena_m"),
     "multicell": ("ul_interference", "li_alpha", "ul_pc", "ul_pc_p0_dbm", "ul_pc_alpha", "a3_offset_db",
                   "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc"),
     "nr_multicell": ("dl_interference",),      # read by the NR engine only (NetSlotMC has no downlink)
-    "unread": ("shadow_dcorr_m", "shadow_white_frac"),
 }
+
+CHANNELS = ("log_distance", "tr38901", "radio_map")
+# channel="tr38901_<scenario>" is shorthand for channel="tr38901", tr38901_scenario=<scenario>
+TR38901_SHORT = {"tr38901_rma": "RMa", "tr38901_uma": "UMa", "tr38901_umi": "UMi", "tr38901_inh": "InH",
+                 "tr38901_inf_sl": "InF-SL", "tr38901_inf_dl": "InF-DL", "tr38901_inf_sh": "InF-SH",
+                 "tr38901_inf_dh": "InF-DH"}
 
 
 def fields_read_by(level, cfg=None):
@@ -154,7 +164,11 @@ class NRConfig:
     fading: bool = True
     fading_rho_per_ms: float = 0.93 ** (1 / 2.5)   # AR(1) per-subband Rayleigh; 0.93 per 2.5 ms (35 Hz)
     ue_speed_mps: float | None = None    # set: fading_rho_per_ms = J0(2 pi f_D 2.5 ms)^(1/2.5), f_D = v f_c / c
-    carrier_ghz: float = 3.5             # carrier for the Doppler of ue_speed_mps (3 m/s at 3.5 GHz = 35 Hz)
+    carrier_ghz: float = 3.5             # carrier for the Doppler of ue_speed_mps (3 m/s at 3.5 GHz = 35 Hz) and of
+                                         # the tr38901 path loss
+    fading_doppler: str = "global"       # "global": one rho for all robots; "per_robot": rho from each robot's own
+                                         # speed (velocity input or consecutive poses), NR engine with pose input
+    doppler_min_speed_mps: float = 0.0   # per_robot: speed floor (0 = a still robot's fading is frozen)
     dl_snr_offset_db: float = 10.0       # step(): default DL per-PRB SNR = UL input SNR + offset
     # ---- link budget for step_rx() (shared with multicell/: pathgain + interference in, SINR out) ----
     noise_model: str = "fixed"           # "fixed": ni_fixed_dbm over snr_ref_prbs PRBs; "thermal": -174 dBm/Hz + NF
@@ -171,9 +185,29 @@ class NRConfig:
     pl_const_db: float = 40.0            # PL = pl_const_db + 10 pathloss_exp log10(d), d >= 1 m
     pathloss_exp: float = 3.5
     shadow_sigma_db: float = 6.0         # one spatially correlated field per (env, cell), sum of plane waves
-    shadow_modes: int = 8                # plane waves per field
-    shadow_dcorr_m: float = 10.3         # carried for calibration (POWDER fit: 20-40 m); radio.py does not read it yet
-    shadow_white_frac: float = 0.0       # carried for calibration (POWDER: ~0.5); radio.py does not read it yet
+    shadow_modes: int = 8                # plane waves per field (every channel model's fields)
+    shadow_dcorr_m: float = 10.3         # 1/e decorrelation distance of the log_distance shadowing (10.3 = the legacy
+                                         # 20-60 m wavelength band, bitwise; POWDER fit: 20-40 m)
+    shadow_acf: str = "sos"              # "sos": legacy band scaled to shadow_dcorr_m; "exp": exp(-r / shadow_dcorr_m)
+    shadow_white_frac: float = 0.0       # share of the shadowing variance in a component decorrelated within
+    shadow_white_dcorr_m: float = 1.0    # this distance (exp ACF); POWDER: about 0.5 of the variance
+    # ---- channel model (radio.py; see docs/channels.md) ----
+    channel: str = "log_distance"        # "log_distance" (above) | "tr38901" | "radio_map"; "tr38901_inf_sh" etc.
+                                         # is shorthand for channel="tr38901", tr38901_scenario="InF-SH"
+    tr38901_scenario: str = "InF-SH"     # RMa, UMa, UMi, InH (mixed office), InF-SL, InF-DL, InF-SH, InF-DH
+    tr38901_los: str = "stochastic"      # "stochastic" (Table 7.4.2-1, spatially consistent) | "los" | "nlos"
+    gnb_height_m: float | None = None    # None: the scenario default (tr38901), else 2-D geometry (other models)
+    ue_height_m: float = 1.5             # robot antenna height (tr38901 and blockage)
+    o2i_indoor_frac: float = 0.0         # tr38901 UMa / UMi / RMa: share of robots indoors (O2I penetration)
+    o2i_model: str = "low"               # "low" | "high" (Table 7.4.3-2; RMa allows only "low")
+    inf_clutter_density: float | None = None   # InF r, d_clutter, h_c; None = Table 7.8-7 values of the scenario
+    inf_clutter_size_m: float | None = None
+    inf_clutter_height_m: float | None = None
+    radio_map_path: str | None = None    # channel="radio_map": .npz / .pt with gain_db [C,H,W] and bounds (x0,y0,x1,y1);
+                                         # "synthetic" = the shipped 2-cell test map
+    blockage: bool = False               # add-on to every channel: other robots are spheres that block the link
+    blockage_radius_m: float = 0.3
+    blockage_loss_db: float = 20.0       # extra loss on a link blocked by at least one robot body
     # ---- cells: layout, uplink interference and power control, association and handover ----
     # Default: one gNB at the origin with the fixed noise floor, which is the legacy NetSlot geometry.
     # multicell() gives the multi-cell preset. n_cells > 1 runs on level "L2" (NR engine, UL and DL
@@ -238,6 +272,21 @@ class NRConfig:
         assert self.l0_delay_median_steps > 0 and 0 <= self.l0_loss <= 1 and self.l1_eta > 0
         if self.ue_speed_mps is not None:
             self.fading_rho_per_ms = fading_rho_from_speed(self.ue_speed_mps, self.carrier_ghz)
+        if self.channel in TR38901_SHORT:
+            self.channel, self.tr38901_scenario = "tr38901", TR38901_SHORT[self.channel]
+        assert self.channel in CHANNELS, f"channel must be one of {CHANNELS} or {tuple(TR38901_SHORT)}"
+        assert self.shadow_acf in ("sos", "exp") and 0.0 <= self.shadow_white_frac <= 1.0
+        assert self.shadow_dcorr_m > 0 and self.shadow_white_dcorr_m > 0 and self.shadow_modes >= 1
+        assert self.fading_doppler in ("global", "per_robot") and self.doppler_min_speed_mps >= 0
+        assert self.tr38901_los in ("stochastic", "los", "nlos") and self.o2i_model in ("low", "high")
+        assert 0.0 <= self.o2i_indoor_frac <= 1.0 and self.blockage_radius_m > 0
+        if self.channel == "tr38901":
+            from .channels.tr38901 import SCENARIOS, scenario_name
+            self.tr38901_scenario = scenario_name(self.tr38901_scenario)
+            if self.o2i_indoor_frac > 0:
+                allowed = SCENARIOS[self.tr38901_scenario].o2i
+                assert self.o2i_model in allowed, (
+                    f"O2I model {self.o2i_model!r} is not defined for {self.tr38901_scenario} (allowed: {allowed})")
 
     @property
     def scs_khz(self):
@@ -408,7 +457,9 @@ class NRConfig:
         """One gNB at the origin with the fixed -90 dBm noise floor: the geometry of the prototype levels."""
         return (self.n_cells == 1 and self.gnb_xy() == [(0.0, 0.0)] and self.noise_model == "fixed"
                 and self.ni_fixed_dbm == -90.0 and self.ue_tx_dbm == 23.0 and self.pl_const_db == 40.0
-                and self.pathloss_exp == 3.5 and self.shadow_sigma_db == 6.0 and self.shadow_modes == 8)
+                and self.pathloss_exp == 3.5 and self.shadow_sigma_db == 6.0 and self.shadow_modes == 8
+                and self.channel == "log_distance" and self.shadow_acf == "sos" and self.shadow_dcorr_m == 10.3
+                and self.shadow_white_frac == 0.0 and not self.blockage)
 
 
 def netslot_compat(**kw):

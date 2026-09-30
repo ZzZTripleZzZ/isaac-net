@@ -1,9 +1,12 @@
 """Radio: large-scale gain of every robot-cell link, cell association and handover (merged from multicell/).
 
     RadioMC          rx_dbm(pos [E,R,2|3]) -> [E,R,C] received power at every gNB with the full ue_tx_dbm on one
-                     subband, no fast fading (= RSRP up to a constant). Path loss per link plus one sum-of-plane-waves
-                     shadowing field per (env, cell). At C = 1 it draws the field in the prototype Radio's order, so
-                     the same generator state gives the same field, and rx - ni_fixed_dbm equals Radio.snr_db bitwise.
+                     subband, no fast fading (= RSRP up to a constant); pathgain_db(pos) = rx - ue_tx_dbm. The model is
+                     NRConfig.channel (channels/, docs/channels.md): log_distance (default: path loss per link plus
+                     one sum-of-plane-waves shadowing field per (env, cell); at C = 1 it draws the field in the
+                     prototype Radio's order, so the same generator state gives the same field, and rx - ni_fixed_dbm
+                     equals Radio.snr_db bitwise), tr38901 or radio_map, plus the optional blockage add-on.
+                     observe_motion(pos, vel) gives the per-robot speed for per-robot Doppler.
     CellAssociation  serving cell per robot: max-RSRP attach after every (partial) reset, A3 with hysteresis and
                      time-to-trigger (exact trigger slot), handover interruption window.
     Radio            the prototype single-cell radio (gNB at the origin), used by the prototype levels.
@@ -18,6 +21,8 @@ import math
 
 import torch
 
+from .channels import (PlaneWaveField, RadioMapChannel, TR38901Channel, blocked_links, draw_plane_waves,
+                       eval_plane_waves)
 from .config import NRConfig
 from .proto.netsim import Radio  # noqa: F401  (re-export: the prototype single-cell radio)
 from .queues import env_mask, onehot, reset_where
@@ -30,54 +35,132 @@ def pick(x, idx):
 
 
 class RadioMC:
-    """Per-link large-scale radio for C = cfg.n_cells gNBs at cfg.gnb_xy()."""
+    """Per-link large-scale radio for C = cfg.n_cells gNBs at cfg.gnb_xy(), channel model cfg.channel.
 
-    def __init__(self, cfg: NRConfig, E, device, generator=None):
+    R (robots per env) is optional: state that is per robot (O2I draws, previous poses for the speed) is allocated at
+    the first call otherwise. radio_map: a channels.RadioMap that overrides cfg.radio_map_path.
+    """
+
+    def __init__(self, cfg: NRConfig, E, device, generator=None, R=None, radio_map=None):
         self.cfg, self.E, self.dev, self.gen = cfg, E, device, generator
         self.gnb = torch.tensor(cfg.gnb_xy(), dtype=torch.float32, device=device)     # [C,2]
         self.C = self.gnb.shape[0]
-        self.amp = cfg.shadow_sigma_db * math.sqrt(2 / cfg.shadow_modes)
-        self.k, self.phi = self._draw(E)
+        self.model = cfg.channel
+        w = cfg.shadow_white_frac
+        K = cfg.shadow_modes
+        self.amp = cfg.shadow_sigma_db * math.sqrt(2 / K) if w == 0 else cfg.shadow_sigma_db * math.sqrt((1 - w) * 2 / K)
+        self.k = self.phi = self.white = self.ch = None
+        if self.model == "log_distance":
+            self.k, self.phi = self._draw(E)
+            if w > 0:
+                self.white = PlaneWaveField(E, self.C, K, device, generator, "exp", cfg.shadow_white_dcorr_m,
+                                            cfg.shadow_sigma_db * math.sqrt(w))
+        elif self.model == "tr38901":
+            self.ch = TR38901Channel(cfg, E, self.C, self.gnb, device, generator)
+        else:
+            self.ch = RadioMapChannel(cfg, self.gnb, device, radio_map)
+        # heights for blockage: tr38901 has them; the other models are 2-D unless gnb_height_m is set
+        h_ut = float(cfg.ue_height_m)
+        h_bs = self.ch.h_bs if self.model == "tr38901" else (
+            float(cfg.gnb_height_m) if cfg.gnb_height_m is not None else h_ut)
+        self.h_ut = h_ut
+        self.gnb3 = torch.cat([self.gnb, torch.full((self.C, 1), h_bs, device=device)], -1)       # [C,3]
+        self.R = None
+        self.speed = None
+        if R is not None:
+            self._alloc(R)
 
     def _draw(self, n):
-        K, C, d, g = self.cfg.shadow_modes, self.C, self.dev, self.gen
-        ang = torch.rand(n, C, K, device=d, generator=g) * 2 * math.pi
-        wl = 20 + 40 * torch.rand(n, C, K, device=d, generator=g)
-        k = torch.stack([torch.cos(ang), torch.sin(ang)], -1) * (2 * math.pi / wl)[..., None]
-        phi = torch.rand(n, C, K, device=d, generator=g) * 2 * math.pi
-        return k.permute(1, 0, 2, 3).contiguous(), phi.permute(1, 0, 2).contiguous()   # [C,E,K,2], [C,E,K]
+        cfg = self.cfg
+        return draw_plane_waves(n, self.C, cfg.shadow_modes, self.dev, self.gen, cfg.shadow_acf, cfg.shadow_dcorr_m)
+
+    def _alloc(self, R):
+        self.R = R
+        z = torch.zeros(self.E, R, device=self.dev)
+        self.prev_pos = torch.zeros(self.E, R, 2, device=self.dev)
+        self.has_prev = torch.zeros(self.E, R, dtype=torch.bool, device=self.dev)
+        self.speed = z + self.cfg.doppler_min_speed_mps
+        if self.ch is not None and hasattr(self.ch, "_alloc") and self.ch.R is None:
+            self.ch._alloc(R)
 
     def reset(self, env_ids=None):
-        """Redraw the shadowing fields of the given envs (fixed shape: draw all, keep masked rows)."""
+        """Redraw the shadowing / LOS fields and per-robot draws of the given envs (fixed shape: draw all, keep
+        masked rows) and forget their previous poses."""
         m = env_mask(self.E, env_ids, self.dev)
-        k, phi = self._draw(self.E)
-        self.k = torch.where(m.view(1, -1, 1, 1), k, self.k)
-        self.phi = torch.where(m.view(1, -1, 1), phi, self.phi)
+        if self.k is not None:
+            k, phi = self._draw(self.E)
+            self.k = torch.where(m.view(1, -1, 1, 1), k, self.k)
+            self.phi = torch.where(m.view(1, -1, 1), phi, self.phi)
+        if self.white is not None:
+            self.white.reset(m)
+        if self.ch is not None:
+            self.ch.reset(m)
+        if self.R is not None:
+            self.has_prev = self.has_prev & ~m[:, None]
+            self.speed = torch.where(m[:, None], torch.full_like(self.speed, self.cfg.doppler_min_speed_mps), self.speed)
 
     @classmethod
     def from_radio(cls, radio, cfg: NRConfig, device):
         """Wrap an existing single-cell prototype Radio (same shadowing field) as a C = 1 RadioMC."""
+        assert cfg.channel == "log_distance" and cfg.shadow_white_frac == 0 and not cfg.blockage
         obj = cls.__new__(cls)
         obj.cfg, obj.E, obj.dev, obj.gen = cfg, radio.k.shape[0], device, None
         obj.gnb = torch.tensor(cfg.gnb_xy(), dtype=torch.float32, device=device)
         assert obj.gnb.shape[0] == 1
-        obj.C, obj.amp = 1, radio.amp
+        obj.C, obj.amp, obj.model = 1, radio.amp, "log_distance"
         obj.k, obj.phi = radio.k[None].contiguous(), radio.phi[None].contiguous()
+        obj.white = obj.ch = obj.speed = obj.R = None
+        obj.h_ut = float(cfg.ue_height_m)
+        obj.gnb3 = torch.cat([obj.gnb, torch.full((1, 1), obj.h_ut, device=device)], -1)
         return obj
 
     def rx_dbm(self, pos):
         """pos [E,R,2] or [E,R,3] (z ignored) -> [E,R,C] dBm."""
-        cfg = self.cfg
         pos = pos[..., :2]
+        if self.model == "log_distance":
+            rx = self._log_distance_rx(pos)          # the legacy expression order (bitwise default)
+        else:
+            rx = self.cfg.ue_tx_dbm + self.ch.pathgain_db(pos)
+        if self.cfg.blockage:
+            rx = rx - self.cfg.blockage_loss_db * self.blocked(pos).float()
+        return rx
+
+    def _log_distance_rx(self, pos):
+        cfg = self.cfg
         d = (pos[:, :, None, :] - self.gnb).norm(dim=-1).clamp(min=1.0)                  # [E,R,C]
         pl = cfg.pl_const_db + (10 * cfg.pathloss_exp) * torch.log10(d)
-        arg = torch.einsum("erx,cekx->cerk", pos, self.k) + self.phi[:, :, None, :]       # [C,E,R,K]
-        sh = (self.amp * torch.cos(arg).sum(-1)).permute(1, 2, 0)                        # [E,R,C]
-        return cfg.ue_tx_dbm - pl - sh
+        sh = eval_plane_waves(pos, self.k, self.phi, self.amp)                           # [E,R,C]
+        rx = cfg.ue_tx_dbm - pl - sh
+        if self.white is not None:
+            rx = rx - self.white(pos)
+        return rx
 
     def pathgain_db(self, pos):
-        """Large-scale gain (negative dB, incl. shadowing) of every link [E,R,C]."""
+        """Large-scale gain (negative dB, incl. shadowing, LOS state, O2I and blockage) of every link [E,R,C]."""
         return self.rx_dbm(pos) - self.cfg.ue_tx_dbm
+
+    def blocked(self, pos):
+        """bool [E,R,C]: robot-gNB segment passes through another robot's sphere (blockage add-on)."""
+        pos = pos[..., :2]
+        pos3 = torch.cat([pos, torch.full_like(pos[..., :1], self.h_ut)], -1)
+        return blocked_links(pos3, self.gnb3, self.cfg.blockage_radius_m)
+
+    def observe_motion(self, pos, vel=None):
+        """Per-robot speed [E,R] (m/s) for this step: |vel| if given, else |pos - previous pos| / control step
+        (the floor doppler_min_speed_mps right after a reset). Updates the previous poses."""
+        pos = pos[..., :2]
+        if self.R is None:
+            self._alloc(pos.shape[1])
+        floor = self.cfg.doppler_min_speed_mps
+        if vel is not None:
+            v = vel[..., :2].norm(dim=-1)
+        else:
+            v = (pos - self.prev_pos).norm(dim=-1) / (self.cfg.control_step_ms * 1e-3)
+            v = torch.where(self.has_prev, v, torch.zeros_like(v))
+        self.speed = v.clamp(min=floor)
+        self.prev_pos = pos.detach().clone()
+        self.has_prev = torch.ones_like(self.has_prev)
+        return self.speed
 
 
 class CellAssociation:

@@ -34,6 +34,7 @@ import math
 
 import torch
 
+from .channels import install_per_robot_fading, rho_per_ms_from_speed
 from .config import NRConfig
 from .levels import BOUND_LEVELS, SURROGATE_LEVELS, make_level
 from .nr_engine import NRNet
@@ -154,6 +155,9 @@ class NREngine:
         self.gen = torch.Generator(device=self.dev)
         self.gen.manual_seed(seed)
         self.net = NRNet(E, R, self.dev, cfg.msg_sizes, cfg, generator=self.gen)
+        self.per_robot_doppler = cfg.fading_doppler == "per_robot"
+        if self.per_robot_doppler:
+            install_per_robot_fading(self.net)
         self.F = cfg.frame_buffer
         self.radio = None
         self.T = 0
@@ -266,21 +270,26 @@ class NREngine:
         """Downlink messages of nbytes [E,R] (0 = none) at t (needs config.dl)."""
         self.net.add_dl_frames(self._now(t), nbytes, cls)
 
-    def _ul_input(self, x):
+    def _ul_input(self, x, vel=None):
         """SNR [E,R] dB (full UE power over snr_ref_prbs PRBs), or poses [E,R,2|3] -> (pathgain or None, snr)."""
         if x.dim() == 3:
-            return self._pathgain(x)[..., 0]
+            return self._pathgain(x, vel)[..., 0]
         return None
 
-    def _pathgain(self, pos):
+    def _pathgain(self, pos, vel=None):
         if self.radio is None:
-            self.radio = RadioMC(self.config, self.E, self.dev, generator=self.gen)
-        return self.radio.pathgain_db(pos)
+            self.radio = RadioMC(self.config, self.E, self.dev, generator=self.gen, R=self.R)
+        pg = self.radio.pathgain_db(pos)
+        if self.per_robot_doppler:
+            speed = self.radio.observe_motion(pos, vel)
+            self.net.fading_rho_ms = rho_per_ms_from_speed(speed, self.config.carrier_ghz)
+        return pg
 
-    def step(self, t, x=None, cur_hid=None, *, snr_db=None, dl_snr_db=None, pathgain_db=None):
+    def step(self, t, x=None, cur_hid=None, *, snr_db=None, dl_snr_db=None, pathgain_db=None, vel=None):
         """Advance [t, t+1). x: SNR [E,R] in dB, or poses [E,R,2|3] (through the engine's radio); snr_db=
         takes a per-subband SNR [E,R,S]. With several cells (config.n_cells > 1) x must be poses, or pass
-        pathgain_db= [E,R,C] (large-scale gain of every robot-cell link, dB). Legacy form step(t, x, cur_hid)
+        pathgain_db= [E,R,C] (large-scale gain of every robot-cell link, dB). vel [E,R,2|3] (m/s): robot velocities
+        for config.fading_doppler="per_robot" (default: from consecutive poses). Legacy form step(t, x, cur_hid)
         returns (newest, det_env). Without cur_hid it returns the dict of the module docstring plus, for this
         engine:
           dropped [E,R,F] bool   lost under RLC UM (harq_fail="drop"), or on a handover with ho_rlc="flush", and
@@ -296,13 +305,13 @@ class NREngine:
             if pathgain_db is None:
                 if x is None or x.dim() != 3:
                     raise ValueError("several cells: pass poses [E,R,2|3] or pathgain_db=[E,R,C]")
-                pathgain_db = self._pathgain(x)
+                pathgain_db = self._pathgain(x, vel)
             out = self.net.step_cells(T, pathgain_db, hid, full=True)
             snr = self.net.serving_sinr_db()
         elif pathgain_db is not None:
             raise ValueError("pathgain_db= needs config.n_cells > 1; use x (poses or SNR) with one cell")
         elif snr_db is None:
-            pg = self._ul_input(x)
+            pg = self._ul_input(x, vel)
             if pg is not None:
                 out = self.net.step_rx(T, pg, hid, full=True)
                 c = self.config
