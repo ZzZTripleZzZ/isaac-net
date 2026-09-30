@@ -75,7 +75,7 @@ rtenv/bin/python isaaclab_net/tools/bake_radio_map_sionna.py --out warehouse.npz
     --gnb 15 20 6 --gnb 45 20 6 --fc 3.5 --cell 1.0 --samples 2000000 --depth 4 --variant llvm
 ```
 
-**From an Isaac Sim USD stage.** No USD-to-Sionna converter exists yet. The route that works is Blender's USD importer, then the Mitsuba-Blender add-on to export Mitsuba XML with PLY meshes, then assigning ITU radio materials (`itu-radio-material`, e.g. `concrete`, `metal`, `wood`) per object class, and finally `--scene scene.xml`. A direct `pxr.Usd` script that writes PLY meshes and the XML is also possible. This route is untested here. The robots' env-local frame must be the scene frame.
+**From an Isaac Sim USD stage.** `python -m isaaclab_net.tools.scene.bake --usd scene.usd ...` exports the stage with ITU radio materials and bakes the map, and `IsaacNetCfg(scene_map=...)` does the same at env creation from the running stage. See [scene-radio-map.md](scene-radio-map.md).
 
 ## Blockage
 

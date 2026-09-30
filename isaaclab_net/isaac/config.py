@@ -103,6 +103,7 @@ class IsaacNetCfg:
     gnb_pos: Optional[Sequence[Sequence[float]]] = None   # [G][3] env-local; None = NRConfig.gnb_xy() at gnb_height_m
     gnb_height_m: float = 0.0
     pose_chunks: int = 4                       # SNR averaged over this many poses interpolated across the step
+    scene_map: Optional[object] = None         # scene_map.SceneRadioMapCfg: radio map baked from the stage
     # ---- multi-rate (one of them > 1)
     net_decimation: int = 1                    # env control steps per network step
     net_substeps: int = 1                      # network steps per env control step

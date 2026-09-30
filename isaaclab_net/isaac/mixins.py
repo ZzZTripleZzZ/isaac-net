@@ -70,6 +70,10 @@ class NetEnvMixin:
         if level is None or level == "off":
             self.net = None
             return
+        if isaac is not None and getattr(isaac, "scene_map", None) is not None:
+            from .scene_map import resolve_scene_map        # radio map from the stage (docs/scene-radio-map.md)
+            config, isaac = resolve_scene_map(config, isaac)
+            self._net_cfg = config
         if isinstance(level, NetConfig):
             self.net = NetModule(level, kwargs.get("ranges"))
         else:
