@@ -66,6 +66,7 @@ nav:
       - Isaac Lab on Linux (HPC): isaac-lab-linux.md
       - "Second backend: MuJoCo Playground / MJX": backends-mjx.md
       - Multi-cell networks: multicell.md
+      - Differentiable network models: differentiable.md
       - Channel models: channels.md
       - ns-3 bridges in depth: bridges.md
       - Configurability: configurability.md

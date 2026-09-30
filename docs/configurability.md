@@ -110,6 +110,7 @@ The comparison was checked line by line against the official documentation of ns
 | Multi-cell / handover | 1–7 cells, per-cell PF and HARQ, A3 handover with interruption (`L2` and legacy) | multi-cell, X2 handover, hex wraparound | multi-cell hex layouts, wraparound; no handover | multi-cell, X2 handover, background cells | **partial**: no wraparound, no X2 data forwarding model |
 | Interference | same-slot UL and DL per RBG (`L2`), UL (legacy) | all co-channel transmitters, incl. DL–UL cross-link | inter-cell, in the post-equalization SINR | inter-cell DL and UL (configurable), background cells | **partial** |
 | Carrier aggregation / BWP | none | CA and BWPs | none | CA; BWPs not documented | **out of scope** for robot fleets on one carrier |
+| Differentiable KPIs | fluid relaxations L1D / QAD: gradients of delay, delivery, AoI and energy w.r.t. send probability, message size, transmit power and position ([differentiable.md](differentiable.md)) | not assessed | not assessed | not assessed | **partial (exploratory)**: fluid models only; the L2 scheduler and HARQ are not differentiated |
 
 ## Traffic models
 
