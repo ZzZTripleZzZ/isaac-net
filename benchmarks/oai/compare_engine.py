@@ -56,10 +56,13 @@ def main(argv=None):
     ap.add_argument("--max-s", type=float, default=15.0)
     ap.add_argument("--replicas", type=int, default=4)
     ap.add_argument("--configs", default="default,sr,pp", help="MAC configs (campaign_<name>) to replay")
+    ap.add_argument("--presets", default="oai_like,lena_match,oai_rfsim", help="which presets to replay")
     a = ap.parse_args(argv)
+    want = a.presets.split(",")
     lm, lm_name = lena_match_cfg()
     presets = [("oai_like", C.oai_like(fading=False)), (lm_name, lm)]
-    if a.preset:
+    presets = [p for p in presets if p[0].split(" ")[0] in want]
+    if a.preset and "oai_rfsim" in want:
         presets.append(("oai_rfsim", load_preset(a.preset, fading=False)))
     rows = []
     for cname in a.configs.split(","):

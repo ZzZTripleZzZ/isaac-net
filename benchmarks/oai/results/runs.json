@@ -1,0 +1,2265 @@
+[
+ {
+  "mac_config": "default",
+  "run_id": "a-00100B-010Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 10
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 58.31630897521973,
+   "virtual_s": 22.0,
+   "speed_median": 0.36566810158402946,
+   "frames_sent": 200,
+   "frames_done": 200
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "a-00100B-050Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 36.985639333724976,
+   "virtual_s": 22.0,
+   "speed_median": 0.6259830688506458,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "a-00100B-100Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 100
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 52.81960391998291,
+   "virtual_s": 22.0,
+   "speed_median": 0.43406513063500485,
+   "frames_sent": 2000,
+   "frames_done": 2000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "a-00100B-poisson20Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "poisson",
+   "size": 100,
+   "rate_hz": 20
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 54.55953621864319,
+   "virtual_s": 22.0,
+   "speed_median": 0.4054476206603703,
+   "frames_sent": 417,
+   "frames_done": 417
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "a-01000B-010Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 10
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 40.32290720939636,
+   "virtual_s": 22.0,
+   "speed_median": 0.5524630596872458,
+   "frames_sent": 200,
+   "frames_done": 200
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "a-01000B-050Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 34.77290916442871,
+   "virtual_s": 22.0,
+   "speed_median": 0.660105392426955,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "a-01000B-100Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 100
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 35.43179225921631,
+   "virtual_s": 22.0,
+   "speed_median": 0.6232224173115228,
+   "frames_sent": 2000,
+   "frames_done": 2000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "a-04000B-010Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 4000,
+   "rate_hz": 10
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 42.812180280685425,
+   "virtual_s": 22.0,
+   "speed_median": 0.5162873525421313,
+   "frames_sent": 200,
+   "frames_done": 200
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "a-04000B-050Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 4000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 52.34277939796448,
+   "virtual_s": 22.0,
+   "speed_median": 0.4514078309597903,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "a-30000B-005Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 30000,
+   "rate_hz": 5
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 62.327009439468384,
+   "virtual_s": 22.0,
+   "speed_median": 0.3518525493038741,
+   "frames_sent": 100,
+   "frames_done": 100
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "a-30000B-010Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 30000,
+   "rate_hz": 10
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 54.03270769119263,
+   "virtual_s": 22.0,
+   "speed_median": 0.42006102861362693,
+   "frames_sent": 200,
+   "frames_done": 200
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "b-10ue-light",
+  "experiment": "b",
+  "n_ue": 10,
+  "traffic": {
+   "profile": "cbr",
+   "size": 4000,
+   "rate_hz": 10,
+   "per_ue": true
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 496.3929557800293,
+   "virtual_s": 22.0,
+   "speed_median": 0.04676780713060111,
+   "frames_sent": 2000,
+   "frames_done": 1914
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "b-1ue-heavy",
+  "experiment": "b",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 30000,
+   "rate_hz": 10,
+   "per_ue": true
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 11.142723321914673,
+   "virtual_s": 22.0,
+   "speed_median": 2.008250805785598,
+   "frames_sent": 200,
+   "frames_done": 200
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "b-1ue-light",
+  "experiment": "b",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 4000,
+   "rate_hz": 10,
+   "per_ue": true
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 11.600713968276978,
+   "virtual_s": 22.0,
+   "speed_median": 1.9269122465547364,
+   "frames_sent": 200,
+   "frames_done": 200
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "b-2ue-heavy",
+  "experiment": "b",
+  "n_ue": 2,
+  "traffic": {
+   "profile": "cbr",
+   "size": 30000,
+   "rate_hz": 10,
+   "per_ue": true
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 15.695828914642334,
+   "virtual_s": 22.0,
+   "speed_median": 1.461262611265578,
+   "frames_sent": 400,
+   "frames_done": 400
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "b-2ue-light",
+  "experiment": "b",
+  "n_ue": 2,
+  "traffic": {
+   "profile": "cbr",
+   "size": 4000,
+   "rate_hz": 10,
+   "per_ue": true
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 16.79595184326172,
+   "virtual_s": 22.0,
+   "speed_median": 1.295001074850892,
+   "frames_sent": 400,
+   "frames_done": 400
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "b-3ue-heavy",
+  "experiment": "b",
+  "n_ue": 3,
+  "traffic": {
+   "profile": "cbr",
+   "size": 30000,
+   "rate_hz": 10,
+   "per_ue": true
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 21.899800539016724,
+   "virtual_s": 22.0,
+   "speed_median": 1.0104991200522524,
+   "frames_sent": 600,
+   "frames_done": 600
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "b-3ue-light",
+  "experiment": "b",
+  "n_ue": 3,
+  "traffic": {
+   "profile": "cbr",
+   "size": 4000,
+   "rate_hz": 10,
+   "per_ue": true
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 21.163885831832886,
+   "virtual_s": 22.0,
+   "speed_median": 1.0583355752826584,
+   "frames_sent": 600,
+   "frames_done": 600
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "b-4ue-heavy",
+  "experiment": "b",
+  "n_ue": 4,
+  "traffic": {
+   "profile": "cbr",
+   "size": 30000,
+   "rate_hz": 10,
+   "per_ue": true
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 28.009746074676514,
+   "virtual_s": 22.0,
+   "speed_median": 0.8075497052708486,
+   "frames_sent": 800,
+   "frames_done": 800
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "b-4ue-light",
+  "experiment": "b",
+  "n_ue": 4,
+  "traffic": {
+   "profile": "cbr",
+   "size": 4000,
+   "rate_hz": 10,
+   "per_ue": true
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 26.11363196372986,
+   "virtual_s": 22.0,
+   "speed_median": 0.8604796090119143,
+   "frames_sent": 800,
+   "frames_done": 800
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "b-6ue-light",
+  "experiment": "b",
+  "n_ue": 6,
+  "traffic": {
+   "profile": "cbr",
+   "size": 4000,
+   "rate_hz": 10,
+   "per_ue": true
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 44.67923378944397,
+   "virtual_s": 22.0,
+   "speed_median": 0.5123974863177863,
+   "frames_sent": 1200,
+   "frames_done": 1200
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "b-8ue-light",
+  "experiment": "b",
+  "n_ue": 8,
+  "traffic": {
+   "profile": "cbr",
+   "size": 4000,
+   "rate_hz": 10,
+   "per_ue": true
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 428.4615352153778,
+   "virtual_s": 22.0,
+   "speed_median": 0.054065860284453586,
+   "frames_sent": 1600,
+   "frames_done": 1572
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "c-att00.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.452325105667114,
+   "virtual_s": 22.0,
+   "speed_median": 1.7926156709591905,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "c-att10.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 10,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.148425817489624,
+   "virtual_s": 22.0,
+   "speed_median": 1.831253848158533,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "c-att15.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 15,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.323359727859497,
+   "virtual_s": 22.0,
+   "speed_median": 1.8117795322555579,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "c-att20.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 20,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.156350135803223,
+   "virtual_s": 22.0,
+   "speed_median": 1.8493420442950124,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "c-att23.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 23,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.169041156768799,
+   "virtual_s": 22.0,
+   "speed_median": 1.8333162086906178,
+   "frames_sent": 1000,
+   "frames_done": 999
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "c-att26.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 26,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.207368612289429,
+   "virtual_s": 22.0,
+   "speed_median": 1.8362427628338163,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "c-att29.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 29,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 11.612201452255249,
+   "virtual_s": 22.0,
+   "speed_median": 1.9261334497204028,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "c-att31.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 31,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.058571100234985,
+   "virtual_s": 22.0,
+   "speed_median": 1.89292929483325,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "c-att33.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 33,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 11.875617027282715,
+   "virtual_s": 22.0,
+   "speed_median": 1.8883570023414316,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "c-att35.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 1000,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 35,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.344765663146973,
+   "virtual_s": 22.0,
+   "speed_median": 1.7805644389271393,
+   "frames_sent": 1000,
+   "frames_done": 208
+  }
+ },
+ {
+  "mac_config": "default",
+  "run_id": "d-robot-1ue",
+  "experiment": "d",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "robot"
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 57.7988977432251,
+   "virtual_s": 22.0,
+   "speed_median": 0.37553839823689816,
+   "frames_sent": 1300,
+   "frames_done": 1300
+  }
+ },
+ {
+  "mac_config": "mcs9",
+  "run_id": "c-att15.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 20
+  },
+  "radio": {
+   "atten_db": 15,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 9,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.561142206192017,
+   "virtual_s": 22.0,
+   "speed_median": 1.7887249438792499,
+   "frames_sent": 400,
+   "frames_done": 400
+  }
+ },
+ {
+  "mac_config": "mcs9",
+  "run_id": "c-att20.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 20
+  },
+  "radio": {
+   "atten_db": 20,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 9,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.631785154342651,
+   "virtual_s": 22.0,
+   "speed_median": 1.791729021745181,
+   "frames_sent": 400,
+   "frames_done": 400
+  }
+ },
+ {
+  "mac_config": "mcs9",
+  "run_id": "c-att23.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 20
+  },
+  "radio": {
+   "atten_db": 23,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 9,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.317161560058594,
+   "virtual_s": 22.0,
+   "speed_median": 1.8303274657172173,
+   "frames_sent": 400,
+   "frames_done": 400
+  }
+ },
+ {
+  "mac_config": "mcs9",
+  "run_id": "c-att26.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 20
+  },
+  "radio": {
+   "atten_db": 26,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 9,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 12.291794300079346,
+   "virtual_s": 22.0,
+   "speed_median": 1.8167985272078928,
+   "frames_sent": 400,
+   "frames_done": 400
+  }
+ },
+ {
+  "mac_config": "mcs9",
+  "run_id": "c-att29.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 20
+  },
+  "radio": {
+   "atten_db": 29,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 9,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 11.872851610183716,
+   "virtual_s": 22.0,
+   "speed_median": 1.9081252286300867,
+   "frames_sent": 400,
+   "frames_done": 400
+  }
+ },
+ {
+  "mac_config": "mcs9",
+  "run_id": "c-att30.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 20
+  },
+  "radio": {
+   "atten_db": 30,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 9,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 11.688545227050781,
+   "virtual_s": 22.0,
+   "speed_median": 1.9139528419789924,
+   "frames_sent": 400,
+   "frames_done": 389
+  }
+ },
+ {
+  "mac_config": "mcs9",
+  "run_id": "c-att31.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 20
+  },
+  "radio": {
+   "atten_db": 31,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 9,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 11.260142087936401,
+   "virtual_s": 22.0,
+   "speed_median": 1.981389435471899,
+   "frames_sent": 400,
+   "frames_done": 160
+  }
+ },
+ {
+  "mac_config": "mcs9",
+  "run_id": "c-att32.0dB",
+  "experiment": "c",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 20
+  },
+  "radio": {
+   "atten_db": 32,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 9,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 10,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 10.849509477615356,
+   "virtual_s": 22.0,
+   "speed_median": 2.0600097417860677,
+   "frames_sent": 400,
+   "frames_done": 0
+  }
+ },
+ {
+  "mac_config": "pp",
+  "run_id": "a-00100B-010Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 10
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 0,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 35.41039776802063,
+   "virtual_s": 22.0,
+   "speed_median": 0.6601881160377832,
+   "frames_sent": 200,
+   "frames_done": 200
+  }
+ },
+ {
+  "mac_config": "pp",
+  "run_id": "a-00100B-050Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 0,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 23.417632818222046,
+   "virtual_s": 22.0,
+   "speed_median": 1.0813008752405877,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "pp",
+  "run_id": "a-04000B-010Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 4000,
+   "rate_hz": 10
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 0,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 13.87629747390747,
+   "virtual_s": 22.0,
+   "speed_median": 1.6101088189286523,
+   "frames_sent": 200,
+   "frames_done": 200
+  }
+ },
+ {
+  "mac_config": "pp",
+  "run_id": "a-30000B-005Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 30000,
+   "rate_hz": 5
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 0,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 13.540226697921753,
+   "virtual_s": 22.0,
+   "speed_median": 1.6547872619098105,
+   "frames_sent": 100,
+   "frames_done": 100
+  }
+ },
+ {
+  "mac_config": "sr",
+  "run_id": "a-00100B-010Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 10
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 1000,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 34.977728605270386,
+   "virtual_s": 22.0,
+   "speed_median": 0.6779367528638564,
+   "frames_sent": 200,
+   "frames_done": 200
+  }
+ },
+ {
+  "mac_config": "sr",
+  "run_id": "a-00100B-050Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 100,
+   "rate_hz": 50
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 1000,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 36.85925245285034,
+   "virtual_s": 22.0,
+   "speed_median": 0.6192820547549451,
+   "frames_sent": 1000,
+   "frames_done": 1000
+  }
+ },
+ {
+  "mac_config": "sr",
+  "run_id": "a-04000B-010Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 4000,
+   "rate_hz": 10
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 1000,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 38.23541307449341,
+   "virtual_s": 22.0,
+   "speed_median": 0.5600640368779524,
+   "frames_sent": 200,
+   "frames_done": 200
+  }
+ },
+ {
+  "mac_config": "sr",
+  "run_id": "a-30000B-005Hz",
+  "experiment": "a",
+  "n_ue": 1,
+  "traffic": {
+   "profile": "cbr",
+   "size": 30000,
+   "rate_hz": 5
+  },
+  "radio": {
+   "atten_db": 0.0,
+   "sinr_setpoint_db": null,
+   "fading": false,
+   "channel": "rfsim AWGN"
+  },
+  "gnb": {
+   "mu": 1,
+   "bandwidth_mhz": 20,
+   "tdd": {
+    "periodicity_idx": 5,
+    "nof_dl_slots": 3,
+    "nof_dl_symbols": 10,
+    "nof_ul_slots": 1,
+    "nof_ul_symbols": 2
+   },
+   "min_k2": 6,
+   "sr_period_ms": 5,
+   "mcs_table": "qam64",
+   "ul_bler_target_upper": 0.15,
+   "ul_bler_target_lower": 0.05,
+   "ul_mcs_max": 28,
+   "max_harq_tx": 4,
+   "ulsch_max_frame_inactivity": 1000,
+   "n_prb": 51,
+   "oai_tag": "2026.w39",
+   "rfsim": true
+  },
+  "timing": {
+   "wall_s": 28.915622234344482,
+   "virtual_s": 22.0,
+   "speed_median": 0.8681537107314389,
+   "frames_sent": 100,
+   "frames_done": 100
+  }
+ }
+]

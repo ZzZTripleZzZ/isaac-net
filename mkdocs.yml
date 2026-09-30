@@ -74,6 +74,7 @@ nav:
       - "Wi-Fi (802.11 DCF / EDCA)": wifi.md
       - Radio maps from USD scenes: scene-radio-map.md
       - ns-3 bridges in depth: bridges.md
+      - OAI 5G rfsim bridge: bridges-oai.md
       - Configurability: configurability.md
       - Feature matrix sources: feature-matrix-sources.md
       - gNB measurement protocol: measurement-protocol.md

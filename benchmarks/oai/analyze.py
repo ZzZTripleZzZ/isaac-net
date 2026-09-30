@@ -108,9 +108,22 @@ def pipeline(runs, tabs):
         if m["experiment"] != "a" or tr.get("size") != 100 or tr.get("rate_hz", 99) > 10 or tr.get("profile") != "cbr":
             continue
         sched = air_time([dict(r) for r in tabs[rd]["sched"] if r["dir"] == "UL" and r["sfn"] >= 0], rd)
-        dci = sorted((r["_air"], r["_slot"]) for r in sched if r["event"] == "sched")
+        dci = sorted((r["_air"], r["_slot"], r["tbs_bytes"]) for r in sched if r["event"] == "sched")
         pdu = sorted((r["_air"], r["_slot"], r["data_bytes"], r["tbs_bytes"]) for r in sched
                      if r["event"] == "rx" and r["crc"] == 1)
+        # grant of every PUSCH: every DCI yields one PUSCH, in order, so match receptions (pc rows: every detected
+        # PUSCH, CRC OK or not) to DCIs first in, first out
+        # (skipped: when grants go unused the UE sends nothing, no pc row exists and the pairing would slip)
+        grant_of, pend, j = {}, [], 0
+        pcs = sorted((r for r in sched if r["event"] == "pc"), key=lambda r: r["_slot"])
+        if len(pcs) < 0.98 * len(dci):
+            pcs = []
+        for r in pcs:
+            while j < len(dci) and dci[j][1] < r["_slot"]:
+                pend.append(dci[j])
+                j += 1
+            if pend:
+                grant_of[r["_slot"]] = pend.pop(0)
         dt, pt = np.array([d[0] for d in dci]), np.array([p[0] for p in pdu])
         for f in tabs[rd]["frames"]:
             if not f["complete"]:
@@ -121,7 +134,7 @@ def pipeline(runs, tabs):
             data = [p for p in pdu[j0:j1] if p[2] > 0]
             if i >= len(dci) or not data:
                 continue
-            g_data = max((d for d in dci if d[1] < data[0][1]), key=lambda d: d[1], default=None)
+            g_data = grant_of.get(data[0][1])
             rows.append({"mac_config": cfg, "run_id": m["run_id"], "frame_id": f["frame_id"],
                          "send_to_first_grant_ms": round((dci[i][0] - t0) * 1e3, 3),
                          "send_to_first_data_pusch_ms": round((data[0][0] - t0) * 1e3, 3),

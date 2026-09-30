@@ -44,7 +44,26 @@ GNB_SRC = "ci-scripts/conf_files/gnb.sa.band78.106prb.rfsim.yaml"
 UE_SRC = "ci-scripts/conf_files/nrue.uicc.yaml"
 CN_SRC = "ci-scripts/yaml_files/5g_rfsimulator"
 CN_FILES = ("oai_db.sql", "mini_nonrf_config.yaml", "mysql-healthcheck.sh")
-MAX_UE = 4
+MAX_UE = 10          # the CN5G test database holds IMSIs 208990100001100..109; UEs 5-10 go to an override file
+
+UE_EXTRA_SERVICE = """  oai-nr-ue{k}:
+    <<: *ue
+    container_name: ilnet-oai-ue{k}
+    depends_on: [oai-nr-ue{p}]
+    environment:
+      USE_ADDITIONAL_OPTIONS: >-
+        -E --rfsim ${{UE_RADIO}} --uicc0.imsi 2089901000011{i:02d} --rfsimulator.[0].serveraddr 192.168.71.140
+        --rfsimulator.[0].options chanmod --telnetsrv --telnetsrv.listenaddr 192.168.71.{ip}
+        --log_config.global_log_options level,nocolor,time ${{UE_EXTRA:-}}
+    networks:
+      public_net: {{ipv4_address: 192.168.71.{ip}}}
+  agent-ue{k}:
+    <<: *agent
+    container_name: ilnet-oai-agent-ue{k}
+    network_mode: service:oai-nr-ue{k}
+    depends_on: [oai-nr-ue{k}]
+    command: python /agent/agent.py ue --ctl 0.0.0.0:5300
+"""
 
 
 def set_key(text, key, value, count=1):
@@ -87,7 +106,7 @@ def gnb_yaml(src, prof, macrlc):
     models = "\n".join(
         f"    - model_name: rfsimu_channel_ue{k}\n      type: AWGN\n      ploss_dB: 0\n      noise_power_dB: -50\n"
         f"      forgetfact: 0\n      offset: 0\n      ds_tdl: 0" for k in range(MAX_UE))
-    t += f"\nchannelmod:\n  max_chan: 10\n  modellist: modellist_rfsimu_1\n  modellist_rfsimu_1:\n{models}\n"
+    t += f"\nchannelmod:\n  max_chan: 16\n  modellist: modellist_rfsimu_1\n  modellist_rfsimu_1:\n{models}\n"
     return t
 
 
@@ -105,13 +124,15 @@ def main(argv=None):
     ap.add_argument("--oai", required=True, help="openairinterface5g checkout (tag 2026.w39 tested)")
     ap.add_argument("--out", required=True, help="run directory to write")
     ap.add_argument("--profile", default="lena_match", choices=sorted(PROFILES))
-    ap.add_argument("--n-ue", type=int, default=1)
+    ap.add_argument("--n-ue", type=int, default=1, help=f"1..{MAX_UE}")
     ap.add_argument("--tag", default="2026.w39", help="oai-gnb / oai-nr-ue image tag")
     ap.add_argument("--cn-tag", default="v2.2.1", help="CN5G image tag")
     ap.add_argument("--macrlc", action="append", default=[], metavar="KEY=VALUE")
     ap.add_argument("--gnb-extra", default="", help="extra nr-softmodem options")
     ap.add_argument("--ue-extra", default="", help="extra nr-uesoftmodem options")
     a = ap.parse_args(argv)
+    if not 1 <= a.n_ue <= MAX_UE:
+        raise SystemExit(f"--n-ue must be 1..{MAX_UE}")
     p = PROFILES[a.profile]
     os.makedirs(a.out, exist_ok=True)
     here = os.path.dirname(os.path.abspath(__file__))
@@ -131,10 +152,21 @@ def main(argv=None):
         u = ue_yaml(f.read())
     with open(os.path.join(a.out, "nrue.yaml"), "w") as f:
         f.write(u)
+    ovr = os.path.join(a.out, "docker-compose.override.yaml")
+    if a.n_ue > 4:
+        # the anchors live in the base file, so the override repeats them
+        with open(os.path.join(here, "docker-compose.yaml")) as f:
+            base = f.read()
+        head = base[base.index("x-ue:"):base.index("services:")]
+        with open(ovr, "w") as f:
+            f.write(head + "services:\n" + "".join(
+                UE_EXTRA_SERVICE.format(k=k, p=k - 1, i=k - 1, ip=149 + k) for k in range(5, a.n_ue + 1)))
+    elif os.path.exists(ovr):
+        os.remove(ovr)
     ue_args = f"-r {p['prb']} --numerology 1 --band 78 -C {p['carrier_hz']} --ssb {p['ssb_sc']}"
     with open(os.path.join(a.out, ".env"), "w") as f:
         f.write(f"TAG={a.tag}\nCN_TAG={a.cn_tag}\nUE_RADIO={ue_args}\nGNB_EXTRA={a.gnb_extra}\nUE_EXTRA={a.ue_extra}\n"
-                f"COMPOSE_PROFILES={','.join(f'ue{k}' for k in range(2, a.n_ue + 1))}\n")
+                f"COMPOSE_PROFILES={','.join(f'ue{k}' for k in range(2, min(a.n_ue, 4) + 1))}\n")
     meta = {"profile": a.profile, **{k: v for k, v in p.items()}, "macrlc": macrlc, "tag": a.tag, "cn_tag": a.cn_tag,
             "n_ue": a.n_ue}
     import json

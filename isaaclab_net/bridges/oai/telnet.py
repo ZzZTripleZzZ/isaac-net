@@ -4,7 +4,11 @@ virtual clock.
 Commands used (OAI 2026.w39, common/utils/telnetsrv and radio/rfsimulator):
 
     channelmod show current                    list the channel models, "model <id> <name> type <type>:" headers
-    channelmod modify <id> ploss <dB>          path loss of model <id> (applied to every received sample)
+    channelmod modify <id> ploss <dB>          "path loss" of model <id>, which rfsim applies as a GAIN: the received
+                                               samples are scaled by 10^(ploss/20) (radio/rfsimulator/
+                                               apply_channelmod.c: "path_loss_dB should contain the total path
+                                               gain"). An attenuation of L dB is ploss = -L; positive values amplify
+                                               and clip the int16 samples.
     channelmod modify <id> noise_power_dB <dB> noise power of model <id>
     rfsimu vtime                               "vtime measurement: TS <samples> sample_rate <Hz>": the rfsim sample
                                                clock of this node (answered from a worker thread, asynchronously)
@@ -91,6 +95,7 @@ class OaiTelnet:
         return {name: int(i) for i, name, _ in _MODEL.findall(out)}
 
     def set_ploss(self, model_id, db):
+        """Raw ploss (a gain in dB, see the module docstring)."""
         self.cmd(f"channelmod modify {int(model_id)} ploss {float(db):.2f}", wait=0.05)
 
     def set_noise(self, model_id, db):

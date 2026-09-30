@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -160,6 +161,15 @@ class VClock:
             self._thr.join(timeout=1.0)
 
 
+def _die_with_parent():
+    try:
+        import ctypes
+        import signal
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)       # PR_SET_PDEATHSIG
+    except (OSError, AttributeError):
+        pass
+
+
 _TL = re.compile(r"^(\d\d):(\d\d):(\d\d)\.(\d+)\s*\[(\d+)\]:\s+(\w+)\s*(.*)$")
 _TICK = re.compile(r"frame (\d+) slot (\d+)")
 
@@ -168,21 +178,26 @@ class TTraceClock(VClock):
     """Virtual clock from the gNB's T-tracer slot ticks (see the module docstring).
 
     textlog: path of OAI's common/utils/T/tracer/textlog (built from the checkout: ``make textlog``); t_db: its
-    T_messages.txt. mu: numerology (slot = 1 ms / 2^mu). every: keep one tick in `every` slots (20 = 10 ms at mu 1).
+    T_messages.txt. mu: numerology (slot = 1 ms / 2^mu). every: keep one tick in `every` slots (10 = 5 ms at mu 1).
     extra_events / log_path: other T events to record, written verbatim (textlog format with -raw-time) to log_path.
     The gNB must run with ``--T_stdout 2 --T_nowait`` (T-tracer on, console kept, no wait for a tracer)."""
 
-    def __init__(self, textlog, t_db, host="192.168.71.140", port=2021, mu=1, every=20, extra_events=(),
-                 log_path=None, keep=200_000):
+    def __init__(self, textlog, t_db, host="192.168.71.140", port=2021, mu=1, every=10, extra_events=(),
+                 log_path=None, keep=2_000_000):
         super().__init__(None, keep=keep)
         self.slot_s = 1e-3 / 2 ** mu
         self.spf = 10 * 2 ** mu
         self.every = every
-        argv = [textlog, "-d", t_db, "-ip", host, "-p", str(port), "-raw-time", "-on", "GNB_PHY_UL_TICK"]
+        # stdbuf -oL: textlog's stdout is block-buffered into a pipe, which delays the ticks by tens of slots
+        argv = (["stdbuf", "-oL"] if shutil.which("stdbuf") else []) + \
+            [textlog, "-d", t_db, "-ip", host, "-p", str(port), "-raw-time", "-on", "GNB_PHY_UL_TICK"]
         for ev in extra_events:
             argv += ["-on", ev]
         self.log = open(log_path, "w") if log_path else None
-        self.proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        # textlog retries its connection forever; an orphan would take the gNB's single tracer slot, so it gets
+        # SIGTERM when this process dies (Linux prctl PR_SET_PDEATHSIG)
+        self.proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                                     preexec_fn=_die_with_parent)
         self._base, self._prev, self._n = 0, None, 0
         self._thr = threading.Thread(target=self._reader, daemon=True)
         self._thr.start()

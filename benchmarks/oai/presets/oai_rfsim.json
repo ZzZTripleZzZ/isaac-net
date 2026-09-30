@@ -1,0 +1,133 @@
+{
+ "name": "oai_rfsim",
+ "base": "oai_like",
+ "nrconfig": {
+  "mu": 1,
+  "bandwidth_mhz": 20,
+  "tdd_pattern": "DDDSU",
+  "special_split": [
+   10,
+   2,
+   2
+  ],
+  "sr_period_slots": 10,
+  "k2": 6,
+  "mcs_table": 1,
+  "ul_mcs_max": 28,
+  "max_harq_tx": 4,
+  "bler_target": 0.1,
+  "ul_harq_rtt_slots": 10,
+  "proactive_grant": "off",
+  "sr_grant_delay_slots": 28,
+  "proc_offset_ms": 0.0,
+  "fading": false
+ },
+ "calibration_knobs": {},
+ "provenance": {
+  "mu": "gNB configuration (manifest)",
+  "bandwidth_mhz": "gNB configuration (manifest)",
+  "tdd_pattern": "gNB configuration (manifest)",
+  "special_split": "gNB configuration (manifest)",
+  "sr_period_slots": "OAI code (nr_radio_config.c set_SR_periodandoffset: sl10 when the first UL slot is < 10), recorded in the manifest",
+  "k2": "min_rxtxtime = 6; every one of the paired grants in the SR runs had K2 = 6 slots",
+  "mcs_table": "gNB configuration (manifest)",
+  "ul_mcs_max": "gNB configuration (manifest)",
+  "max_harq_tx": "gNB configuration (manifest)",
+  "bler_target": "OAI's UL BLER band 0.05-0.15 (midpoint); the measured first-transmission BLER under OLLA was 0.056 (median over positions)",
+  "ul_harq_rtt_slots": "median slot gap from a failed PUSCH to its retransmission, 2801 inferred retransmissions in the HARQ runs with a working link (T-tracer, infer_crc); the engine fit ran with 5 (a lost-link run included), which does not change it: the latency runs at 0 dB had no retransmission",
+  "proactive_grant": "OAI's stock ulsch_max_frame_inactivity = 10 grants after 100 ms without uplink, a period the engine has no knob for; the SR path dominates for traffic at 5 Hz or faster (stock and SR-only runs agree within 0.5 ms), so off",
+  "sr_grant_delay_slots": "engine replay fit (tools/measure/calibrate.py --engine-fit) on the 11 stock-MAC latency runs, grid sr_grant_delay_slots 16-32 with proactive grants off: W1 8.41 ms, KS 0.32 (small frames 1.7-3.1 ms, 30 kB frames 19-41 ms); held out (Poisson 100 B, robot mix) W1 5.18 ms",
+  "proc_offset_ms": "engine replay fit (tools/measure/calibrate.py --engine-fit) on the 11 stock-MAC latency runs, grid sr_grant_delay_slots 16-32 with proactive grants off: W1 8.41 ms, KS 0.32 (small frames 1.7-3.1 ms, 30 kB frames 19-41 ms); held out (Poisson 100 B, robot mix) W1 5.18 ms",
+  "fading": "rfsim AWGN channel; the fit replayed without fading",
+  "calibration_knobs": "none: the link-level fit (la_offset_db 24.4, bler_sinr_shift_db -12, slope 0.1, all at the edge of their grids) is not identifiable in rfsim, whose decoding failures come from the fixed-point sample path rather than from the configured noise (docs/bridges-oai.md)"
+ },
+ "metrics": {
+  "fit_w1_ms": 8.410132593762874,
+  "fit_ks": 0.3200781889819383,
+  "holdout_w1_ms": 5.180142653524876,
+  "holdout_ks": 0.39857910906298,
+  "per_run": {
+   "a-00100B-010Hz": {
+    "w1_ms": 2.4075124222040176,
+    "ks": 0.39603960396039606
+   },
+   "a-00100B-050Hz": {
+    "w1_ms": 2.6929413084983826,
+    "ks": 0.49203187250996017
+   },
+   "a-00100B-100Hz": {
+    "w1_ms": 2.4872409690618507,
+    "ks": 0.31568431568431576
+   },
+   "a-01000B-010Hz": {
+    "w1_ms": 1.6985828131437308,
+    "ks": 0.31999999999999995
+   },
+   "a-01000B-050Hz": {
+    "w1_ms": 2.4438328907489772,
+    "ks": 0.23399999999999993
+   },
+   "a-01000B-100Hz": {
+    "w1_ms": 1.6834865391254425,
+    "ks": 0.15459540459540455
+   },
+   "a-04000B-010Hz": {
+    "w1_ms": 3.135074069976806,
+    "ks": 0.3069306930693069
+   },
+   "a-04000B-050Hz": {
+    "w1_ms": 7.810570010423664,
+    "ks": 0.15649999999999997
+   },
+   "a-30000B-005Hz": {
+    "w1_ms": 18.570565474987035,
+    "ks": 0.345
+   },
+   "a-30000B-010Hz": {
+    "w1_ms": 41.17151943945884,
+    "ks": 0.48
+   },
+   "a-00100B-poisson20Hz": {
+    "w1_ms": 3.5816975159645086,
+    "ks": 0.5333333333333333
+   },
+   "d-robot-1ue": {
+    "w1_ms": 6.7785877910852435,
+    "ks": 0.2638248847926267
+   }
+  },
+  "grid": [
+   {
+    "sr_grant_delay_slots": 28,
+    "d0_ms": 0.0,
+    "fit_w1_ms": 8.410132593762874,
+    "holdout_w1_ms": 5.180142653524876
+   },
+   {
+    "sr_grant_delay_slots": 24,
+    "d0_ms": 0.488816499710083,
+    "fit_w1_ms": 8.602058162534238,
+    "holdout_w1_ms": 4.642084064662457
+   },
+   {
+    "sr_grant_delay_slots": 32,
+    "d0_ms": 0.0,
+    "fit_w1_ms": 9.090992900300026,
+    "holdout_w1_ms": 6.3176848562359815
+   },
+   {
+    "sr_grant_delay_slots": 20,
+    "d0_ms": 2.305128407478332,
+    "fit_w1_ms": 9.130995025372505,
+    "holdout_w1_ms": 4.857015521705151
+   },
+   {
+    "sr_grant_delay_slots": 16,
+    "d0_ms": 4.904039537906648,
+    "fit_w1_ms": 9.677391343903542,
+    "holdout_w1_ms": 5.36090185159445
+   }
+  ],
+  "source": "OAI 2026.w39 rfsim, lena_match profile (51 PRB, DDDSU), stock MAC, lab box 2026-09-30"
+ }
+}

@@ -27,7 +27,7 @@ AGENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.py")
 
 # addresses of deploy/docker-compose.yaml
 GNB_IP = "192.168.71.140"
-UE_IPS = ("192.168.71.150", "192.168.71.151", "192.168.71.152", "192.168.71.153")
+UE_IPS = tuple(f"192.168.71.{150 + k}" for k in range(10))
 SINK_IP = "192.168.72.135"
 UE_CTL_PORT, SINK_CTL_PORT, SINK_PORT = 5300, 5301, 5201
 TELNET_PORT = 9090
@@ -174,7 +174,12 @@ class DockerOaiStack(Stack):
             if textlog is None:
                 raise ValueError("clock='ttrace' needs textlog and t_db (or $OAI_TEXTLOG and $OAI_T_MESSAGES)")
             self.vclock = TTraceClock(textlog, t_db, host=gnb_ip, mu=mu, extra_events=t_events, log_path=t_log)
-            self.vclock.wait_ready()
+            try:
+                self.vclock.wait_ready()
+            except TimeoutError:
+                self.vclock.close()
+                raise TimeoutError("no T-tracer slot ticks: is the gNB running with --T_stdout 2 --T_nowait, and is "
+                                   "another tracer (a textlog process) already connected to it?") from None
         elif clock == "telnet":
             self.vclock = VClock(self.gnb, period_s=0.1)
         elif clock == "wall":
@@ -185,12 +190,13 @@ class DockerOaiStack(Stack):
         self.pathloss = [(0.0, 0.0)] * n_ue
 
     def set_pathloss(self, k, ul_db, dl_db=None):
-        """Uplink and downlink path loss of UE k in dB (rfsim channel model ploss; dl_db None = same as ul_db)."""
+        """Extra uplink and downlink attenuation of UE k in dB, >= 0 (dl_db None = same as ul_db). rfsim's ploss is a
+        gain, so the models get ploss = -attenuation."""
         if not self.channel_control:
             raise RuntimeError("channel_control=False")
         dl_db = ul_db if dl_db is None else dl_db
-        self.gnb.set_ploss(self.ul_model[k], ul_db)
-        self.ue_tn[k].set_ploss(self.dl_model[k], dl_db)
+        self.gnb.set_ploss(self.ul_model[k], -float(ul_db))
+        self.ue_tn[k].set_ploss(self.dl_model[k], -float(dl_db))
         self.pathloss[k] = (float(ul_db), float(dl_db))
 
     def macstats(self):

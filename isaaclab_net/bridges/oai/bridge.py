@@ -15,8 +15,11 @@ Delays are reported in virtual time (the stack's clock); the raw wall-clock valu
 
 Logs (log_dir): probe-format CSVs, so tools/measure/owd.py and ingest.py read them directly:
     tx_ue<k>.csv, rx.csv          wall clock (sender and receiver on one host: offset 0)
-    tx_ue<k>_vt.csv, rx_vt.csv    the same with every timestamp mapped to virtual time
-    vtime.csv                     the clock polls (wall ns, virtual s, query round trip)
+    tx_ue<k>_vt.csv, rx_vt.csv    the same with every timestamp mapped to virtual time, written at close() from
+                                  the complete clock record (online mappings extrapolate past the newest sample)
+    vtime.csv                     the clock samples (wall ns, virtual s, query round trip)
+Online delays (step()["done"]) map both ends when the frame completes: the send time is interpolated, the receive
+time can lie a few ms past the newest clock sample and is extrapolated at the recent speed.
 The UE index travels in the probe header's flow field (flow = 1 + k): the UPF rewrites source addresses.
 """
 from __future__ import annotations
@@ -89,16 +92,29 @@ class OaiBridge:
         d = self.log_dir
         self._logs = {}
         for k in range(self.stack.n_ue):
-            for suf in ("", "_vt"):
-                f = open(os.path.join(d, f"tx_ue{k + 1}{suf}.csv"), "w", newline="")
-                w = csv.writer(f)
-                w.writerow(TX_COLS)
-                self._logs[("tx", k, suf)] = (f, w)
-        for suf in ("", "_vt"):
-            f = open(os.path.join(d, f"rx{suf}.csv"), "w", newline="")
+            f = open(os.path.join(d, f"tx_ue{k + 1}.csv"), "w", newline="")
             w = csv.writer(f)
-            w.writerow(RX_COLS)
-            self._logs[("rx", suf)] = (f, w)
+            w.writerow(TX_COLS)
+            self._logs[("tx", k)] = (f, w)
+        f = open(os.path.join(d, "rx.csv"), "w", newline="")
+        w = csv.writer(f)
+        w.writerow(RX_COLS)
+        self._logs[("rx",)] = (f, w)
+
+    def _write_virtual_logs(self):
+        """tx_ue<k>_vt.csv and rx_vt.csv from the wall logs and the complete clock record."""
+        d = self.log_dir
+        jobs = [(f"tx_ue{k + 1}", TX_COLS, "t_tx_ns") for k in range(self.stack.n_ue)] + [("rx", RX_COLS, "t_rx_ns")]
+        for name, cols, tcol in jobs:
+            with open(os.path.join(d, f"{name}.csv"), newline="") as f:
+                rows = list(csv.DictReader(f))
+            tv = self.vc.to_virtual_ns([abs(int(r[tcol])) for r in rows]) if rows else []
+            with open(os.path.join(d, f"{name}_vt.csv"), "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(cols)
+                for r, v in zip(rows, tv):
+                    r[tcol] = int(v)
+                    w.writerow([r[c] for c in cols])
 
     def _now(self):
         return self.vc.now_virtual_s() if self.pacing == "virtual" else time.time()
@@ -137,12 +153,9 @@ class OaiBridge:
         return fids
 
     def _log_tx(self, ue, tx):
-        _, w = self._logs[("tx", ue, "")]
-        _, wv = self._logs[("tx", ue, "_vt")]
-        tv = self.vc.to_virtual_ns([abs(r[7]) for r in tx])
-        for r, v in zip(tx, tv):
+        _, w = self._logs[("tx", ue)]
+        for r in tx:
             w.writerow(r)
-            wv.writerow(r[:7] + [int(v)])
 
     def _pace(self):
         target = self.t0 + (self.k + 1) * self.dt
@@ -166,12 +179,9 @@ class OaiBridge:
         done = []
         if rx:
             if self._logs:
-                _, w = self._logs[("rx", "")]
-                _, wv = self._logs[("rx", "_vt")]
-                tv = self.vc.to_virtual_ns([r[9] for r in rx])
-                for r, v in zip(rx, tv):
+                _, w = self._logs[("rx",)]
+                for r in rx:
                     w.writerow(r)
-                    wv.writerow(r[:9] + [int(v)])
             for src, flow, seq, fid, frag, n_frag, fb, pb, t_tx, t_rx in rx:
                 ue = flow - 1
                 ent = self.reg.get((ue, fid))
@@ -203,6 +213,7 @@ class OaiBridge:
             self._logs = None
             if not self.vc.identity:
                 self.vc.save(os.path.join(self.log_dir, "vtime.csv"))
+            self._write_virtual_logs()
         for a in (*self.ues, self.sink):
             a.close()
 

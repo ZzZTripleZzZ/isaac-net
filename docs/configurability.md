@@ -112,6 +112,7 @@ The comparison was checked line by line against the official documentation of ns
 | Wi-Fi (802.11) uplink | level `WIFI`: mean-field DCF / EDCA contention per sub-step, 802.11ax / ac / a rates with SNR-threshold rate adaptation, A-MPDU, RTS/CTS, several APs with RSSI association and co-channel sharing, optional hidden nodes ([wifi.md](wifi.md)) | not in 5G-LENA; ns-3 has a separate `wifi` module | none | not in Simu5G; INET, which Simu5G builds on, has 802.11 models | **partial**: a validated mean-field abstraction, not a packet-level 802.11 model; no downlink, OFDMA or MU-MIMO |
 | Carrier aggregation / BWP | none | CA and BWPs | none | CA; BWPs not documented | **out of scope** for robot fleets on one carrier |
 | Differentiable KPIs | fluid relaxations L1D / QAD: gradients of delay, delivery, AoI and energy w.r.t. send probability, message size, transmit power and position ([differentiable.md](differentiable.md)) | not assessed | not assessed | not assessed | **partial (exploratory)**: fluid models only; the L2 scheduler and HARQ are not differentiated |
+| Real-stack validation | OAI 5G in rfsim mode behind a lockstep bridge, 1–10 UEs ([bridges-oai.md](bridges-oai.md)) | n/a | n/a | n/a | **have**, for validation only (not a model feature) |
 
 ## Traffic models
 

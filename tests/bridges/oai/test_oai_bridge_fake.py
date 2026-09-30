@@ -219,5 +219,6 @@ def test_make_configs_profiles():
                  ("ulsch_max_frame_inactivity", 1000), ("pusch_TargetSNRx10", 300)):
         assert f"{k}: {v}\n" in out, k
     assert out.count("model_name: rfsimu_channel_ue") == MC.MAX_UE
+    assert "imsi 208990100001109" in MC.UE_EXTRA_SERVICE.format(k=10, p=9, i=9, ip=159)
     assert "channelmod:" in MC.ue_yaml("uicc0:\n  imsi: 1\nchannelmod:\n  old: 1\n")
     assert os.path.exists(os.path.join(os.path.dirname(MC.__file__), "docker-compose.yaml"))

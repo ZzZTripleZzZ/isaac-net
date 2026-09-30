@@ -97,6 +97,17 @@ class Deploy:
 
 
 # ------------------------------------------------------------------ one run
+def _cleanup():
+    """Stop textlog processes left by a failed run (they hold the gNB's single tracer slot)."""
+    import signal
+    r = subprocess.run(["pgrep", "-P", str(os.getpid())], capture_output=True, text=True)
+    for pid in r.stdout.split():
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except (ProcessLookupError, ValueError):
+            pass
+
+
 def macstats_loop(stack, path, stop):
     with open(path, "w") as f:
         while not stop.wait(1.0):
@@ -146,7 +157,7 @@ def run(dep_dir, run_dir, manifest, schedules, duration_s, n_ue, atten_db=0.0, t
         stack.set_pathloss(k, atten_db, 0.0)
     time.sleep(0.5)
     stop = threading.Event()
-    th = threading.Thread(target=macstats_loop, args=(stack, os.path.join(run_dir, "macstats.log"), stop))
+    th = threading.Thread(target=macstats_loop, args=(stack, os.path.join(run_dir, "macstats.log"), stop), daemon=True)
     th.start()
     br = OaiBridge(stack, step_dt=0.02, pacing="none", log_dir=run_dir)
     vc = stack.vclock
@@ -272,21 +283,30 @@ def phase_harq(dep, work, cfg, attens, dur, traffic=(1000, 50)):
     size, rate = traffic
     for a in attens:
         rid = f"c-att{a:04.1f}dB"
-        if os.path.exists(os.path.join(camp, rid, "manifest.json")):
+        if os.path.exists(os.path.join(camp, rid, "manifest.json")) or os.path.exists(os.path.join(camp, f"{rid}.failed")):
             continue
         if not dep.healthy(1):
             dep.cur = None
             d = dep.up(cfg, 1, mac)
         m = base_manifest(rid, "c", mac, 1, {"profile": "cbr", "size": size, "rate_hz": rate}, a)
         m["ttrace_infer_crc"] = True
-        run(d, os.path.join(camp, rid), m, [cbr(rate, size, dur, 0.01)], dur, 1, atten_db=a)
+        try:
+            run(d, os.path.join(camp, rid), m, [cbr(rate, size, dur, 0.01)], dur, 1, atten_db=a)
+        except (TimeoutError, OSError, RuntimeError) as e:          # the UE lost the link: record, redeploy
+            log(f"{rid}: failed ({e!r}); the UE probably dropped the link at {a} dB")
+            with open(os.path.join(camp, f"{rid}.failed"), "w") as f:
+                f.write(repr(e))
+            _cleanup()
+            dep.cur = None
+            d = dep.up(cfg, 1, mac)
 
 
-def phase_ues(dep, work, dur, n_max=4):
+def phase_ues(dep, work, dur, counts=(1, 2, 3, 4), loads=("light", "heavy")):
     mac = MAC_CFGS["default"]
     camp = os.path.join(work, "campaign_default")
-    for n in range(1, n_max + 1):
-        for load, (size, rate) in (("light", (4000, 10)), ("heavy", (30000, 10))):
+    traffic = {"light": (4000, 10), "heavy": (30000, 10)}
+    for n in counts:
+        for load, (size, rate) in ((x, traffic[x]) for x in loads):
             rid = f"b-{n}ue-{load}"
             if os.path.exists(os.path.join(camp, rid, "manifest.json")):
                 continue
@@ -323,11 +343,13 @@ def main(argv=None):
             elif p == "pp":
                 phase_latency(dep, a.work, "pp", GRID_SMALL, a.dur, holdout=False)
             elif p == "c":
-                phase_harq(dep, a.work, "default", [0, 10, 15, 20, 23, 26, 29], a.dur)
+                phase_harq(dep, a.work, "default", [0, 10, 15, 20, 23, 26, 29, 31, 33, 35], a.dur)
             elif p == "cmcs":
-                phase_harq(dep, a.work, "mcs9", [15, 20, 23, 26, 29, 32], a.dur, traffic=(100, 20))
+                phase_harq(dep, a.work, "mcs9", [15, 20, 23, 26, 29, 30, 31, 32], a.dur, traffic=(100, 20))
             elif p == "d":
                 phase_ues(dep, a.work, a.dur)
+            elif p == "dmany":                         # how many UEs one rfsim gNB takes on this host
+                phase_ues(dep, a.work, a.dur, counts=(6, 8, 10), loads=("light",))
     finally:
         if not a.keep_up:
             dep.down()
