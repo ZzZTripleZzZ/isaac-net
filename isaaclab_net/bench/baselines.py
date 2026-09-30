@@ -5,7 +5,7 @@ Every baseline acts through the same interface on a NetTask:
     pol.reset(task)                                   # before an evaluation or a training run
     cont, send = pol.act(task, obs, done)             # obs [E,R,D]; done [E] of the previous step (None at start)
 
-PPO follows the trainer pattern of the earlier kill-test code: one actor shared by every robot (parameter sharing,
+PPO follows the trainer pattern of the earlier prototype experiments: one actor shared by every robot (parameter sharing,
 per-robot observations), a hybrid action (Gaussian velocity or controller parameters in [-1,1], categorical send
 choice), GAE(0.99, 0.95), clip 0.2, 4 epochs x 8 minibatches, entropy 0.005, Adam 3e-4, gradient norm 0.5.
 The GRU variant adds a recurrent trunk trained on the rollout sequences (hidden state reset at episode starts).
