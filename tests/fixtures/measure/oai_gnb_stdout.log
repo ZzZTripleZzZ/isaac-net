@@ -1,0 +1,9 @@
+[NR_MAC]   Frame.Slot 128.0
+[NR_MAC]   UE RNTI 1d47 CU-UE-ID 1 in-sync PH 52 dB PCMAX 24 dBm, average RSRP -44 (16 meas)
+[NR_MAC]   UE 1d47: dlsch_rounds 100/1/0/0, dlsch_errors 0, pucch0_DTX 0, BLER 0.00000 MCS (0) 9
+[NR_MAC]   UE 1d47: ulsch_rounds 200/2/0/0, ulsch_DTX 0, ulsch_errors 0, BLER 0.00000 MCS (0) 9
+[NR_MAC]   UE 1d47: MAC:    TX         164632 RX         536402 bytes
+[NR_MAC]   Frame.Slot 256.0
+[NR_MAC]   UE RNTI 1d47 CU-UE-ID 1 in-sync PH 52 dB PCMAX 24 dBm, average RSRP -44 (16 meas)
+[NR_MAC]   UE 1d47: dlsch_rounds 150/2/0/0, dlsch_errors 0, pucch0_DTX 0, BLER 0.00000 MCS (0) 9
+[NR_MAC]   UE 1d47: ulsch_rounds 300/5/1/0, ulsch_DTX 0, ulsch_errors 0, BLER 0.00000 MCS (0) 9

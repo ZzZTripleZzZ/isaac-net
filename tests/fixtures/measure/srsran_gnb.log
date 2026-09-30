@@ -1,0 +1,8 @@
+2026-09-29T12:00:00.001500 [SCHED   ] [D] [  100.3] Slot decisions pci=1 t=41us (0 PDSCHs, 1 PUSCH, 0 PUCCHs, 1 attempted PDCCH, 0 attempted UCIs):
+- UE PUSCH: ue=0 c-rnti=0x4601 h_id=0 rb=[0..51) symb=[0..14) tbs=736 rv=0 nrtx=0 nof_layers=1 olla=-0.3
+2026-09-29T12:00:00.003500 [PHY     ] [I] [  100.7] PUSCH: rnti=0x4601 h_id=0 prb=[0, 51) symb=[0, 14) mod=QPSK rv=0 tbs=736 crc=KO iter=6.0 sinr=3.1dB t=210.2us uci_0ns ret_0ns
+2026-09-29T12:00:00.004000 [MAC     ] [I] [  100.8] some unrelated line rnti=0x4601
+2026-09-29T12:00:00.012500 [PHY     ] [I] [  101.5] PUSCH: rnti=0x4601 h_id=0 prb=[0, 51) symb=[0, 14) mod=QPSK rv=2 tbs=736 crc=OK iter=2.0 sinr=3.4dB t=190.0us uci_0ns ret_0ns
+2026-09-29T12:00:00.013500 [PHY     ] [I] [  101.7] PUSCH: rnti=0x4601 h_id=1 prb=[0, 51) symb=[0, 14) mod=QPSK rv=0 tbs=1313 crc=OK iter=1.5 sinr=8.0dB t=180.0us uci_0ns ret_0ns
+2026-09-29T12:00:00.021500 [SCHED   ] [I] [  102.3] Slot decisions pci=1 t=35us (0 PDSCHs, 1 PUSCH, 0 PUCCHs): UL: ue=1 rnti=0x4602 h_id=0 ss_id=2 rb=[0..20) newtx=true rv=0 tbs=928
+2026-09-29T12:00:00.023500 [PHY     ] [I] [  102.7] PUSCH: rnti=0x4602 h_id=0 prb=[0, 20) symb=[0, 14) mod=QAM16 rv=0 tbs=928 crc=OK iter=1.2 sinr=15.2dB t=150.0us uci_0ns ret_0ns

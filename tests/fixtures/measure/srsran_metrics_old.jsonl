@@ -1,0 +1,1 @@
+{"timestamp": 1790000000.5, "ue_list": [{"ue_container": {"pci": 1, "rnti": 17921, "cqi": 14, "dl_mcs": 26, "dl_brate": 800000.0, "dl_nof_ok": 80, "dl_nof_nok": 2, "dl_bs": 0, "pusch_snr_db": 21.0, "ul_mcs": 19, "ul_brate": 1500000.0, "ul_nof_ok": 300, "ul_nof_nok": 6, "bsr": 100}}]}

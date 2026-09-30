@@ -293,7 +293,7 @@ isaaclab-net/
 
 ## Documentation
 
-Collaborator documentation lives in [`docs/`](docs/README.md): the [project status](docs/STATUS.md) with open items and starter tasks, the [5G-LENA validation](docs/validation-5g-lena.md), the [public-data calibration](docs/calibration-public-data.md), [performance](docs/performance.md) with the backend equivalence methodology, the [Isaac Lab integration](docs/isaac-lab.md), [multi-cell networks](docs/multicell.md) and the [ns-3 bridges](docs/bridges.md).
+Collaborator documentation lives in [`docs/`](docs/README.md): the [project status](docs/STATUS.md) with open items and starter tasks, the [5G-LENA validation](docs/validation-5g-lena.md), the [public-data calibration](docs/calibration-public-data.md), the [real-network measurement protocol](docs/measurement-protocol.md) with its parsers and calibration hooks in `isaaclab_net/tools/measure/`, [performance](docs/performance.md) with the backend equivalence methodology, the [Isaac Lab integration](docs/isaac-lab.md), [multi-cell networks](docs/multicell.md) and the [ns-3 bridges](docs/bridges.md).
 
 ## Contributing
 

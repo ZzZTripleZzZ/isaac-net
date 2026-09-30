@@ -1,0 +1,8 @@
+12:00:00.000100000: GNB_PHY_UL_TICK gNB_ID 0 frame 100 slot 7
+12:00:00.000200000: GNB_MAC_UL rnti 7495 frame 100 slot 7 mcs 9 tbs 1313
+12:00:00.000300000: GNB_MAC_PUSCH_POWER_CONTROL rnti 7495 frame 100 slot 7 snrx10 225 phr 40 tpc 1 tb_size 1313 txpower_calc 10 rbSize 51 mcs 9 rssi -600
+12:00:00.002100000: GNB_MAC_UL_PDU_WITH_DATA gNB_ID 0 CC_id 0 rnti 7495 frame 100 slot 7 harq_pid 3 data {buffer size:1313}
+12:00:00.004000000: GNB_MAC_DL rnti 7495 frame 100 slot 12 mcs 27 tbs 5000
+12:00:09.235000000: GNB_MAC_UL rnti 7495 frame 1023 slot 19 mcs 9 tbs 1313
+12:00:09.235500000: GNB_MAC_UL rnti 7495 frame 0 slot 0 mcs 10 tbs 1400
+this line is not an event
