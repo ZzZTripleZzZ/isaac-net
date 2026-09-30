@@ -227,7 +227,9 @@ def test_substep_periodic_equals_policy_at_short_step(fading):
     """A 10 ms periodic model inside 100 ms steps gives every message the delay the same message gets when the
     policy submits it at a 10 ms control step: arrival slots gate the MAC and the delay counts from them."""
     size, steps = 1200, 6
-    base = dict(frame_buffer=64, msg_sizes=(float(size),), fading=fading, timeout_steps=1000)
+    # rng="global": both engines consume one global stream in the same slot order (the engine RNG keys the draws by
+    # control step and slot index, which differ between a 100 ms and a 10 ms step)
+    base = dict(frame_buffer=64, msg_sizes=(float(size),), fading=fading, timeout_steps=1000, rng="global")
     a = make_engine("L2", 2, 3, "cpu", NRConfig(traffic=TM.periodic(size, 10, phase="aligned"), **base), seed=4)
     b = make_engine("L2", 2, 3, "cpu", NRConfig(control_step_ms=10.0, **base), seed=4)
     snr = torch.tensor([[3.0, 10.0, 20.0], [0.0, 6.0, 25.0]])

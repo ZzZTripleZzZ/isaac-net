@@ -515,7 +515,7 @@ def nr_step_kernel(
         F: tl.constexpr, FB: tl.constexpr, M: tl.constexpr, MB: tl.constexpr, HB: tl.constexpr,
         C: tl.constexpr, G: tl.constexpr, NL: tl.constexpr, EQW: tl.constexpr, NPRB: tl.constexpr,
         UL: tl.constexpr, DL: tl.constexpr, FADING: tl.constexpr, GATE: tl.constexpr, MMB: tl.constexpr,
-        RHO_R: tl.constexpr,
+        RHO_R: tl.constexpr, STORE_H: tl.constexpr,
         MODE: tl.constexpr, COMB: tl.constexpr, SCHED: tl.constexpr, WIDEBAND: tl.constexpr,
         HARQ_DROP: tl.constexpr, OLLA: tl.constexpr, PHR_CAP: tl.constexpr, WHOLE_BAND: tl.constexpr,
         PC: tl.constexpr, STEP: tl.constexpr, RETX_PRIO: tl.constexpr,
@@ -672,7 +672,7 @@ def nr_step_kernel(
                     0, S_, SB, M, MB, C, G, NL, EQW, NPRB, MODE, COMB, SCHED, WIDEBAND, HARQ_DROP, OLLA,
                     PHR_CAP, WHOLE_BAND, PC, STEP, RETX_PRIO, MCS_MAX_UL, MAX_TX, TARGET, TB_OH, SR_DELAY,
                     UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B)
-    if FADING:
+    if FADING and STORE_H:
         tl.store(h_ptr + o_h, hr, mask=m_rs)
         tl.store(h_ptr + o_h + 1, hi, mask=m_rs)
     ao = e * (8 * HB)
@@ -722,17 +722,24 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
     U = ul if cfg.ul else (dl if dl is not None else ul)
     D = dl if dl is not None else U
     tu, td = tb["ul"], tb["dl"] if dl is not None else tb["ul"]
+    UL_on, DL_on = eng._const["UL"], eng._const["DL"]
     dummy = uref
-    eng._kernel = nr_step_kernel[(E,)](
-        *_link_args(U), *_link_args(D),
-        net.h, uref if uref is not None else dref, dref if dref is not None else dummy,
-        pc if pc is not None else dummy, eng._tdev, net.rng.episode, net.rng.ctr[STEP], net.rng.s0, eng._chs,
-        *(gate if gate is not None else (dummy, dummy, dummy)), gate[0].shape[-1] if gate is not None else 1,
-        eng._acc, itab, ftab, K, net.fading_rho_ms if net.fading_rho_ms is not None else net.h,
-        tu["tab"], tu["thr"], tu["se"], tu["beta"], tu["rate"], tu["eq"], tu["tbs"], tu["cbs"], tu["ncb"], tu["bg"],
-        tu["ci0"], tu["cwi"],
-        td["tab"], td["thr"], td["se"], td["beta"], td["rate"], td["eq"], td["tbs"], td["cbs"], td["ncb"], td["bg"],
-        td["ci0"], td["cwi"],
-        tb["lift"], tb["cax"], tb["w"], tb["S0"], tb["DS"], tb["C0"], tb["DC"], R, cfg.slots_per_step,
-        GATE=gate is not None, RHO_R=net.fading_rho_ms is not None, MMB=triton.next_power_of_2(gate[0].shape[-1]) if gate is not None else 1,
-        **eng._const, num_warps=eng._num_warps)
+    # With both directions the step runs as two kernels, DL first: each replays the same fading trajectory (the same
+    # start state and keyed draws, the same code), so the UL kernel sees exactly the gains the DL kernel saw, and
+    # each carries only one link's state (half the registers). The UL kernel stores the fading state.
+    passes = [(True, True)] if not (UL_on and DL_on) else [(False, True), (True, False)]
+    for ul_p, dl_p in passes:
+        const = dict(eng._const, UL=ul_p and UL_on, DL=dl_p and DL_on, STORE_H=ul_p or not UL_on)
+        eng._kernel = nr_step_kernel[(E,)](
+            *_link_args(U), *_link_args(D),
+            net.h, uref if uref is not None else dref, dref if dref is not None else dummy,
+            pc if pc is not None else dummy, eng._tdev, net.rng.episode, net.rng.ctr[STEP], net.rng.s0, eng._chs,
+            *(gate if gate is not None else (dummy, dummy, dummy)), gate[0].shape[-1] if gate is not None else 1,
+            eng._acc, itab, ftab, K, net.fading_rho_ms if net.fading_rho_ms is not None else net.h,
+            tu["tab"], tu["thr"], tu["se"], tu["beta"], tu["rate"], tu["eq"], tu["tbs"], tu["cbs"], tu["ncb"], tu["bg"],
+            tu["ci0"], tu["cwi"],
+            td["tab"], td["thr"], td["se"], td["beta"], td["rate"], td["eq"], td["tbs"], td["cbs"], td["ncb"], td["bg"],
+            td["ci0"], td["cwi"],
+            tb["lift"], tb["cax"], tb["w"], tb["S0"], tb["DS"], tb["C0"], tb["DC"], R, cfg.slots_per_step,
+            GATE=gate is not None, RHO_R=net.fading_rho_ms is not None, MMB=triton.next_power_of_2(gate[0].shape[-1]) if gate is not None else 1,
+            **const, num_warps=eng._num_warps)

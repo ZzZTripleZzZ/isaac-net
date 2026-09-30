@@ -82,7 +82,9 @@ def test_make_engine_rejects_bad_requests():
     with pytest.raises(ValueError):
         make_engine("L2", 2, 2, backend="warp")
     with pytest.raises(NotImplementedError):
-        make_engine("L2", 2, 2, backend="graph")
+        make_engine("L2", 2, 2, backend="compile")          # the NR engine has reference / graph / triton
+    with pytest.raises(ValueError):
+        make_engine("L2", 2, 2, backend="graph")            # the NR engine's graph backend needs CUDA
     with pytest.raises(ValueError):
         make_engine("L1", 2, 2, config=NRConfig(control_step_ms=33.0))     # not a whole number of UL slots
     with pytest.raises(ValueError):
