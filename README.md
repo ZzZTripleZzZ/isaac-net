@@ -185,7 +185,6 @@ class MyFleetEnv(NetEnvMixin, DirectRLEnv):
 
 **Scale.** These numbers come from the fleet env with random actions, which saturate the uplink from 16 robots per env, measured on an idle RTX 4090 (0% utilization before every run, median of 3 windows; conditions in [docs/performance.md](docs/performance.md#isaac-lab-scale)):
 
-<!-- speed tables updated by the benchmark campaign -->
 | Envs × robots | Robots | Network off (control steps/s) | L2-legacy `triton` | NR `L2` `triton` (uplink) | Network per step, isolated (legacy / NR) |
 |---:|---:|---:|---:|---:|---:|
 | 2,048 × 128 | 262,144 | 5.19 | 4.08 | 4.15 | 11 / 37 ms |
@@ -294,7 +293,6 @@ Every prototype level (`L0` to `L1`, `L2-legacy`) has a readable eager reference
 
 Network step time (`submit` + `step`, dict outputs) in ms on an idle RTX 4090, median of 3 processes ([docs/performance.md](docs/performance.md) has every level, backend and size, the memory and the spreads):
 
-<!-- speed tables updated by the benchmark campaign -->
 | level | 256 × 16 reference | graph | triton | 4,096 × 100 reference | graph | triton |
 |:---|---:|---:|---:|---:|---:|---:|
 | `L0`, `L0DR` | 1.2–1.4 | 0.36 | | 4.7 | 10.6 | |
