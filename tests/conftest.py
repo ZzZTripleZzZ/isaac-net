@@ -2,9 +2,11 @@
 
 * Makes `engine_api` (tests/) importable; the package itself comes from `pip install -e .` or, in a plain
   checkout, from the repo root that pyproject.toml puts on the path.
-* Registers the `gpu` and `slow` markers and skips `gpu` tests when CUDA is unavailable.
+* Registers the `gpu`, `slow` and `isaac` markers; skips `gpu` tests when CUDA is unavailable and `isaac` tests
+  when Isaac Lab is not installed.
 * tests/scripts/ (command-line equivalence scripts) and tests/bridges/ (need an ns-3 build) are not collected.
 """
+import importlib.util
 import os
 import sys
 
@@ -25,15 +27,18 @@ def pytest_configure(config):
     torch.set_num_threads(int(os.environ.get("ISAACLAB_NET_TEST_THREADS", "1")))
     config.addinivalue_line("markers", "gpu: needs a CUDA GPU (skipped automatically without one)")
     config.addinivalue_line("markers", "slow: longer runs (deselect with -m 'not slow')")
+    config.addinivalue_line("markers", "isaac: needs Isaac Lab 3.0 and a GPU (skipped automatically without them)")
 
 
 def pytest_collection_modifyitems(config, items):
-    if torch.cuda.is_available():
-        return
-    skip = pytest.mark.skip(reason="CUDA not available")
+    has_isaac = importlib.util.find_spec("isaaclab") is not None
+    skip_gpu = pytest.mark.skip(reason="CUDA not available")
+    skip_isaac = pytest.mark.skip(reason="Isaac Lab not installed")
     for item in items:
-        if "gpu" in item.keywords:
-            item.add_marker(skip)
+        if "isaac" in item.keywords and not has_isaac:
+            item.add_marker(skip_isaac)
+        elif "gpu" in item.keywords and not torch.cuda.is_available():
+            item.add_marker(skip_gpu)
 
 
 @pytest.fixture

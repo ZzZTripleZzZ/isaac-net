@@ -20,7 +20,8 @@ import torch
 
 from mani_skill.envs.sapien_env import BaseEnv
 
-from isaaclab_net.isaac.netmodule import MessageHistory, NetConfig, NetModule, TrafficRequest, net_features
+from isaaclab_net import NRConfig
+from isaaclab_net.isaac import MessageHistory, NetModule, TrafficRequest, net_features
 
 NUM_ROBOTS = 16
 
@@ -32,9 +33,8 @@ class NetFleetManiSkill(BaseEnv):
         # build R simple actors (e.g. scene.create_actor_builder().add_cylinder...) per sub-scene
         self.robots = [...]   # list of R batched Actor objects, each with .pose.p [E,3]
         E, dev = self.num_envs, self.device
-        step_dt = 1.0 / self.control_freq
-        self.net = NetModule(NetConfig(num_envs=E, num_robots=NUM_ROBOTS, device=str(dev),
-                                       step_dt=step_dt, rung="L2"))
+        cfg = NRConfig(control_step_ms=1000.0 / self.control_freq)   # L2 (NR engine) accepts any control step
+        self.net = NetModule("L2", E, NUM_ROBOTS, str(dev), cfg)
         self.uplink = MessageHistory(E, NUM_ROBOTS, 3, history_len=32, device=str(dev))
         self._net_out = None
 
@@ -47,14 +47,17 @@ class NetFleetManiSkill(BaseEnv):
         self.net.reset(env_idx)
         self.uplink.reset(env_idx, self._poses()[env_idx])
 
+    def _before_control_step(self):
+        self._pos0 = self._poses()                    # capture at the start-of-step pose
+
     def _after_control_step(self):
-        pos = self._poses()
-        self.uplink.push(self.net.t, pos)
+        self.uplink.push(self.net.clock, self._pos0)
         send = torch.ones(self.num_envs, NUM_ROBOTS, dtype=torch.long, device=self.device)
-        self._net_out = self.net.step(pos, TrafficRequest(send=send))
-        self.uplink.update(self._net_out.newest_cap)
+        self.net.submit(None, TrafficRequest(send=send))
+        self._net_out = self.net.step(None, self._poses())      # END-of-step poses
+        self.uplink.update(self._net_out["newest_cap"])
 
     def _get_obs_extra(self, info: dict):
-        feats = (net_features(self._net_out, self.net.cfg.step_dt) if self._net_out is not None
-                 else torch.zeros(self.num_envs, NUM_ROBOTS, 5, device=self.device))
+        feats = (net_features(self._net_out, self.net.step_dt, self.net.F) if self._net_out is not None
+                 else torch.zeros(self.num_envs, NUM_ROBOTS, 4, device=self.device))
         return dict(server_view=self.uplink.seen.flatten(1), net=feats.flatten(1))

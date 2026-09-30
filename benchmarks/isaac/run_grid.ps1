@@ -1,23 +1,24 @@
-# Task-4 grid: E x R x {off, L0 (ref engine), L2 graph, L2 triton}; one process per configuration.
-# Must run in a context with GPU access (on the lab box: a SYSTEM scheduled task, see install/README).
-param([string]$Out = 'results\grid.jsonl', [int]$Steps = 150, [int]$Warmup = 15, [int]$MaxTime = 45)
+# Task grid: E x R x {off, L0 reference, L2-legacy graph, L2-legacy triton}; one process per configuration.
+# Needs a context with GPU access (on the lab box: a SYSTEM scheduled task, scripts\windows\systask.ps1).
+param([string]$Out = 'benchmarks\isaac\results\grid_new.jsonl', [int]$Steps = 150, [int]$Warmup = 15, [int]$MaxTime = 45,
+      [string]$Py = 'C:\isaac5g\env_isaaclab\Scripts\python.exe')
 . C:\isaac5g\env.ps1
 $ErrorActionPreference = 'Continue'
-Set-Location C:\isaac5g\demo
-New-Item -ItemType Directory -Force results | Out-Null
-$py = 'C:\isaac5g\env_isaaclab\Scripts\python.exe'
-$runs = @(@('off','graph'), @('L0','ref'), @('L2','graph'), @('L2','triton'))
+Set-Location (Resolve-Path "$PSScriptRoot\..\..")
+$runs = @(@('off','graph'), @('L0','reference'), @('L2-legacy','graph'), @('L2-legacy','triton'))
 foreach ($R in @(16, 32)) {
   foreach ($E in @(64, 256, 1024)) {
     foreach ($rb in $runs) {
       "== E=$E R=$R $($rb[0]) $($rb[1]) $(Get-Date)"
-      & $py benchmarks\bench.py --num_envs $E --num_robots $R --rung $rb[0] --backend $rb[1] --steps $Steps --warmup $Warmup --max_time $MaxTime --out $Out 2>&1 | Select-String 'RESULT|Error|Traceback|error:'
+      & $Py benchmarks\isaac\bench.py --num_envs $E --num_robots $R --level $rb[0] --backend $rb[1] --steps $Steps --warmup $Warmup --max_time $MaxTime --out $Out 2>&1 | Select-String 'RESULT|Error|Traceback|error:'
     }
   }
 }
-# reference engine L2 (eager, launch-bound) at two points
-foreach ($E in @(64, 1024)) {
-  "== E=$E R=16 L2 ref $(Get-Date)"
-  & $py benchmarks\bench.py --num_envs $E --num_robots 16 --rung L2 --backend ref --steps $Steps --warmup 3 --max_time $MaxTime --out $Out 2>&1 | Select-String 'RESULT|Error|Traceback|error:'
+# eager reference engines at two points: the legacy slot model and the NR engine
+foreach ($lvl in @('L2-legacy', 'L2')) {
+  foreach ($E in @(64, 1024)) {
+    "== E=$E R=16 $lvl reference $(Get-Date)"
+    & $Py benchmarks\isaac\bench.py --num_envs $E --num_robots 16 --level $lvl --backend reference --steps $Steps --warmup 3 --max_time $MaxTime --out $Out 2>&1 | Select-String 'RESULT|Error|Traceback|error:'
+  }
 }
-"GRID_DONE $(Get-Date)"
+"DONE $(Get-Date)"

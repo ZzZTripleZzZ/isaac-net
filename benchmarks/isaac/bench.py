@@ -1,7 +1,7 @@
-"""Throughput benchmark for NetFleetEnv: one (E, R, rung) configuration per process.
+"""Throughput benchmark for NetFleetEnv: one (E, R, level, backend) configuration per process.
 
-Usage (from C:\\isaac5g\\demo with the Isaac venv active):
-    python benchmarks\bench.py --num_envs 256 --num_robots 16 --rung L2 --backend graph --steps 300 --out results.jsonl
+Usage (from the repository root with the Isaac venv active):
+    python benchmarks\isaac\bench.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton --steps 300
 Random actions (uniform in [-1,1]), so about 1/3 of robot-steps send nothing, 1/3 small, 1/3 large.
 Appends one JSON line with env steps/s, robot-steps/s, GPU memory and device-wide GPU utilisation.
 """
@@ -20,13 +20,13 @@ from isaaclab.app import add_launcher_args, launch_simulation
 parser = argparse.ArgumentParser(conflict_handler="resolve")
 parser.add_argument("--num_envs", type=int, default=64)
 parser.add_argument("--num_robots", type=int, default=16)
-parser.add_argument("--rung", default="L2", choices=["off", "L0", "L1", "L2"])
+parser.add_argument("--level", default="L2-legacy", choices=["off", "L0", "L0DR", "L1", "L2-legacy", "L2"])
 parser.add_argument("--steps", type=int, default=300)
 parser.add_argument("--warmup", type=int, default=50)
 parser.add_argument("--max_time", type=float, default=120.0, help="stop the timed loop after this many seconds")
-parser.add_argument("--out", default="results.jsonl")
-parser.add_argument("--backend", default="graph", choices=["ref", "eager", "graph", "compile", "triton"],
-                    help="L2 engine backend (ignored for off/L0/L1, which use the ref engine)")
+parser.add_argument("--out", default="bench.jsonl")
+parser.add_argument("--backend", default="triton", choices=["reference", "eager", "graph", "compile", "triton"],
+                    help="engine backend (triton: L1 and L2-legacy only; the NR engine L2: reference only)")
 add_launcher_args(parser)
 args = parser.parse_args()
 
@@ -74,10 +74,10 @@ def main():
     from isaaclab_net.examples.isaac_fleet_env import NetFleetEnv, make_cfg
 
     u_before, m_before = gpu_query()
-    cfg = make_cfg(args.num_envs, args.num_robots, args.rung, device=getattr(args, "device", None) or "cuda:0",
+    cfg = make_cfg(args.num_envs, args.num_robots, args.level, device=getattr(args, "device", None) or "cuda:0",
                    backend=args.backend)
-    rec = dict(E=args.num_envs, R=args.num_robots, rung=args.rung, steps=args.steps,
-               backend=args.backend if args.rung == "L2" else ("ref" if args.rung != "off" else "-"),
+    rec = dict(E=args.num_envs, R=args.num_robots, level=args.level, steps=args.steps,
+               backend=args.backend if args.level != "off" else "-",
                gpu_util_before=u_before, gpu_mem_before_mib=m_before)
     with launch_simulation(cfg, args):
         t0 = time.time()

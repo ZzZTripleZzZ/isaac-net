@@ -8,9 +8,11 @@ Mirrors isaaclab_net/examples/fleet_task.py (FleetEnv, task T1) inside Isaac Lab
     25 / 50 m; when a detecting frame is DELIVERED the whole fleet learns the hazard location
   - obs per robot (12, same layout as env.py): pos, goal offset, known-hazard offset and radius,
     siren, queued frames, age of information, SNR, known flag
-Network rungs: "off" (ideal: detections known the same step, no network features), "L0", "L1", "L2".
-L2 runs on the fast engine (backend "graph" by default, "triton" where Triton exists); L0/L1 on the ref engine.
-The network is wired through isaaclab_net.isaac.NetEnvMixin (net_setup / net_step / net_reset / net_obs).
+Network levels: "off" (ideal: detections known the same step, no network features) or any make_engine level
+("L0", "L0DR", "L1", "L2-legacy", "L2"), on any backend the level has ("reference", "eager", "graph", "compile",
+"triton" for L1 / L2-legacy; the NR engine "L2" has "reference" only). For scale use L2-legacy on triton.
+The network is wired through isaaclab_net.isaac.NetEnvMixin (net_setup / net_step / net_reset / net_obs) and
+configured by one NRConfig (message sizes, frame buffer, timeout, control step).
 
 Physics: PhysX via Isaac Sim, dt = 1/50 s, decimation 5 -> 0.1 s control step (K = 40 UL slots).
 Spheres have gravity disabled and float at z = 0.5 m, so velocity writes are not fought by friction.
@@ -32,7 +34,7 @@ from isaaclab.utils import configclass
 from isaaclab_physx.physics import PhysxCfg
 from isaaclab_physx.sim.schemas import PhysxRigidBodyCfg
 
-from isaaclab_net.isaac import NetConfig, ParamRanges
+from isaaclab_net import NRConfig
 from isaaclab_net.isaac.mixins import NetEnvMixin, rigid_positions_local
 
 ARENA = 150.0
@@ -92,23 +94,28 @@ class NetFleetEnvCfg(DirectRLEnvCfg):
     action_space = 16 * 3
     observation_space = 16 * OBS_PER_ROBOT
     state_space = 0
-    net_rung: str = "L2"                          # "off" | "L0" | "L1" | "L2"
-    slot_dt: float = 0.0025
+    net_level: str = "L2-legacy"                  # "off" | "L0" | "L0DR" | "L1" | "L2-legacy" | "L2"
+    net_backend: str = "graph"                    # reference | eager | graph | compile | triton
     pose_chunks: int = 4
-    net_backend: str = "graph"                    # L2 only: eager | graph | compile | triton | ref
+    net_seed: int | None = None                   # engine and radio generators (reset draws); None = random
 
 
-def make_cfg(num_envs: int, num_robots: int, rung: str, device: str = "cuda:0",
+def make_cfg(num_envs: int, num_robots: int, level: str, device: str = "cuda:0",
              backend: str = "graph") -> NetFleetEnvCfg:
     cfg = NetFleetEnvCfg()
     cfg.scene = make_scene_cfg(num_robots, num_envs)
     cfg.num_robots = num_robots
     cfg.action_space = num_robots * 3
     cfg.observation_space = num_robots * OBS_PER_ROBOT
-    cfg.net_rung = rung
+    cfg.net_level = level
     cfg.sim.device = device
-    cfg.net_backend = backend if rung == "L2" else "ref"
+    cfg.net_backend = backend
     return cfg
+
+
+def net_config(step_dt: float) -> NRConfig:
+    """The network configuration of the task: T1 frame sizes, 16-frame buffer, 2 s timeout, one gNB."""
+    return NRConfig(msg_sizes=SIZES, frame_buffer=F_DEPTH, timeout_steps=TIMEOUT, control_step_ms=step_dt * 1000.0)
 
 
 class NetFleetEnv(NetEnvMixin, DirectRLEnv):
@@ -120,13 +127,9 @@ class NetFleetEnv(NetEnvMixin, DirectRLEnv):
         self.R = R
         self.robots: RigidObjectCollection = self.scene["robots"]
         step_dt = self.cfg.sim.dt * self.cfg.decimation
-        net_cfg = None
-        if self.cfg.net_rung != "off":
-            net_cfg = NetConfig(num_envs=E, num_robots=R, device=str(dev), step_dt=step_dt,
-                                slot_dt=self.cfg.slot_dt, pose_chunks=self.cfg.pose_chunks,
-                                rung=self.cfg.net_rung, msg_sizes=SIZES, frame_depth=F_DEPTH,
-                                timeout_steps=TIMEOUT, gnb_pos=((0.0, 0.0, 6.0),), backend=self.cfg.net_backend)
-        self.net_setup(net_cfg, ParamRanges())
+        # gNB on a 6 m mast at the arena corner (radio coordinates (0, 0))
+        self.net_setup(self.cfg.net_level, R, net_config(step_dt), self.cfg.net_backend,
+                       pose_chunks=self.cfg.pose_chunks, gnb_pos=((0.0, 0.0, 6.0),), seed=self.cfg.net_seed)
         self._rng = torch.tensor(RANGE, device=dev)
         self._pdet = torch.tensor(PDET, device=dev)
         self.tt = torch.zeros(E, dtype=torch.long, device=dev)            # per-env control-step clock
