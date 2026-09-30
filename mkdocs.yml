@@ -60,6 +60,7 @@ nav:
       - Status: STATUS.md
       - 5G-LENA validation: validation-5g-lena.md
       - Fidelity vs 5G-LENA (formal study): fidelity-vs-lena.md
+      - Fidelity under load (5G-LENA gap): fidelity-load-gap.md
       - Public-data calibration: calibration-public-data.md
       - Performance: performance.md
       - Isaac Lab on Windows: isaac-lab.md

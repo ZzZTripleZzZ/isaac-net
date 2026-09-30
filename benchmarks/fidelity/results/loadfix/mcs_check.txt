@@ -1,0 +1,15 @@
+1 RBG: engine - 5G-LENA MCS mean +0.48; equal 0.48, engine higher 0.49, lower 0.03 (3583 UEs)
+2 RBG: engine - 5G-LENA MCS mean +0.49; equal 0.50, engine higher 0.48, lower 0.02 (3583 UEs)
+5 RBG: engine - 5G-LENA MCS mean +0.49; equal 0.49, engine higher 0.49, lower 0.02 (3583 UEs)
+SNR  0- 3 dB:  272 UEs, 5G-LENA median MCS   3.0, engine (5 RBG)   3.0
+SNR  3- 6 dB:  330 UEs, 5G-LENA median MCS   6.5, engine (5 RBG)   8.0
+SNR  6- 9 dB:  532 UEs, 5G-LENA median MCS  11.0, engine (5 RBG)  11.0
+SNR  9-12 dB:  550 UEs, 5G-LENA median MCS  14.0, engine (5 RBG)  15.0
+SNR 12-15 dB:  700 UEs, 5G-LENA median MCS  18.0, engine (5 RBG)  19.0
+SNR 15-18 dB:  268 UEs, 5G-LENA median MCS  22.0, engine (5 RBG)  22.0
+SNR 18-21 dB:  269 UEs, 5G-LENA median MCS  24.0, engine (5 RBG)  24.0
+SNR 21-24 dB:  196 UEs, 5G-LENA median MCS  27.0, engine (5 RBG)  27.0
+SNR 24-27 dB:  143 UEs, 5G-LENA median MCS  28.0, engine (5 RBG)  28.0
+SNR 27-30 dB:   78 UEs, 5G-LENA median MCS  28.0, engine (5 RBG)  28.0
+SNR 30-33 dB:  109 UEs, 5G-LENA median MCS  28.0, engine (5 RBG)  28.0
+SNR 33-36 dB:   60 UEs, 5G-LENA median MCS  28.0, engine (5 RBG)  28.0
