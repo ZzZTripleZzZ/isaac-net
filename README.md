@@ -148,16 +148,15 @@ class MyFleetEnv(NetEnvMixin, DirectRLEnv):
 
 `net_setup` takes any level of `make_engine` (`"off"` for an ideal link), an `NRConfig`, a backend and an `IsaacNetCfg`. The observation features are chosen from the delivered mask and the delay of each message slot, age of information, queue length and bytes, SINR and RSRP, the serving cell, a last-delivery flag, the delays of the last k delivered messages, and a blockage flag, all with one normalization. The domain-randomization ranges cover the radio (transmit power, noise floor, path loss, shadowing sigma, blockage loss), the gNB placement, and the delay and loss of L0 and L0DR, and `dr_support(level)` tells which of them a level honors. `net_decimation` and `net_substeps` run the network slower or faster than the env step. `net_step(pos, send, tag, cur_tag)` also carries a per-message tag, such as the id of the hazard a frame captured, and returns `tag_delivered` per env. The fields, the feature table and the randomization table are in [docs/isaac-lab.md](docs/isaac-lab.md#configuring-the-network). The earlier `NetConfig` is a deprecated alias. [`isaac_fleet_env.py`](isaaclab_net/examples/isaac_fleet_env.py) is the complete example: E envs × R robots in a 150 m arena, with hazards that the whole fleet learns about only when a detection frame is delivered.
 
-**Scale.** These numbers come from the fleet env with random actions, which saturate the uplink from 16 robots per env. They were measured on 2026-09-29, before the Isaac layer was rebuilt on `make_engine`, with the same L2-legacy model and Triton kernel. The RTX 4090 was shared with other jobs that kept it 98–99% busy the whole time. Treat the absolute rates as lower bounds, and trust the ratios of network on to network off:
+**Scale.** These numbers come from the fleet env with random actions, which saturate the uplink from 16 robots per env, measured on an idle RTX 4090 (0% utilization before every run, median of 3 windows; conditions in [docs/performance.md](docs/performance.md#isaac-lab-scale)):
 
-| Envs × robots | Robots | Network off (control steps/s) | L2-legacy `triton` (control steps/s) | On / off | Network per step |
+| Envs × robots | Robots | Network off (control steps/s) | L2-legacy `triton` | NR `L2` `triton` (uplink) | Network per step, isolated (legacy / NR) |
 |---:|---:|---:|---:|---:|---:|
-| 1,024 × 128 | 131,072 | 6.21 | 5.55 | 0.89 | 19 ms |
-| 2,048 × 128 | 262,144 | 4.38 | 3.96 | 0.90 | 31 ms |
-| 4,096 × 128 | 524,288 | 2.90 | 2.58 | 0.89 | 52 ms |
-| 8,192 × 128 | 1,048,576 | 1.40 | 1.27 | 0.91 | 75 ms |
+| 2,048 × 128 | 262,144 | 5.19 | 4.08 | 4.15 | 11 / 37 ms |
+| 4,096 × 128 | 524,288 | 2.58 | 2.39 | 2.44 | 23 / 72 ms |
+| 8,192 × 128 | 1,048,576 | 1.50 | 1.51 | 1.32 | 45 / 146 ms |
 
-One control step is 0.1 s of simulated time. At about one million robots the network runs in the loop at 1.33 million robot-steps per second in 16.4 GB of device memory. From 131k robots upwards the network costs 9–20% of the step. The `graph` backend replays thousands of small kernels per step, so under time-slicing it is several times slower than `triton`: use `graph` for bitwise-reference runs and `triton` for scale. Startup grows by about 1.1 ms per robot (PhysX cloning), which is 19 minutes at one million robots. End-to-end PPO (rsl_rl, 1,024 × 16, L2-legacy `triton`) ran 30 iterations in 241 s at 53k robot-steps per second.
+One control step is 0.1 s of simulated time. At about one million robots the network runs in the loop at 1.59 million (legacy) and 1.38 million (NR) robot-steps per second, in at most 19 GiB of device memory. The Isaac step is bound by host work, so the network's GPU work mostly overlaps with it and costs 0–12% of the step from 524k robots up. Use `graph` for bitwise-reference runs and `triton` for scale. Startup grows by about 1.0 ms per robot (PhysX cloning), which is 18 minutes at one million robots. End-to-end PPO (rsl_rl, 1,024 × 16, L2-legacy `triton`) ran 30 iterations in 241 s on the earlier shared GPU.
 
 **A second backend: MuJoCo Playground / MJX.** The same `NetModule` runs inside jitted, vmapped JAX code: [`isaaclab_net.mjx.NetModuleMJX`](isaaclab_net/mjx/net_module.py) hands the MJX poses to the torch engine through `jax.experimental.buffer_callback` with zero-copy DLPack views on XLA's own CUDA stream, and [`mjx_fleet_env.py`](isaaclab_net/examples/mjx_fleet_env.py) is the fleet task as a Playground env that Brax PPO trains. The in-env network is bitwise equal to a direct torch replay of the same poses on `graph`, `triton` and the reference engine; versions, costs and limits are in [docs/backends-mjx.md](docs/backends-mjx.md).
 
@@ -239,18 +238,20 @@ net = make_engine("NN", E, R, dev, params="~/.cache/isaaclab_net/levels/L2-legac
 
 ## Backends and speed
 
-Every prototype level (`L0` to `L1`, `L2-legacy`) has a readable eager reference in `isaaclab_net/core/proto/netsim.py` and graph-safe fast versions in `isaaclab_net/core/proto/netsim_fast.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference at every level (per-message outputs, every queue and MAC state, with random partial resets). `triton` (`L1`, `L2-legacy`) runs all 40 slots of a control step in one fused kernel and matches the reference to rounding: from an identical state every finish time agrees, and over long runs aggregate delivery and delay agree to three or four significant digits. `compile` (torch.compile + CUDA graph) also agrees to rounding. The NR engine (`L2`) has `graph` (one or several cells, bitwise identical to its reference, including with random partial resets) and `triton` (one cell, one fused kernel per control step, equal to rounding); both need its engine RNG (`rng="engine"`, the default). The legacy multi-cell engine has only the `reference` backend. The surrogate and bound levels (`TR` to `NOCOMM`) are written once with graph-safe ops, so their `reference` backend runs the same operations as `graph`, which is bitwise identical to it. On a shared GPU the NR uplink costs about 2.6–3.9 times the legacy reference per step, and the multi-cell engine about 1.2 times.
+Every prototype level (`L0` to `L1`, `L2-legacy`) has a readable eager reference in `isaaclab_net/core/proto/netsim.py` and graph-safe fast versions in `isaaclab_net/core/proto/netsim_fast.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference at every level (per-message outputs, every queue and MAC state, with random partial resets). `triton` (`L1`, `L2-legacy`) runs all 40 slots of a control step in one fused kernel and matches the reference to rounding: from an identical state every finish time agrees, and over long runs aggregate delivery and delay agree to three or four significant digits. `compile` (torch.compile + CUDA graph) also agrees to rounding. The NR engine (`L2`) has `graph` (one or several cells, bitwise identical to its reference, including with random partial resets) and `triton` (one cell, one fused kernel per control step, equal to rounding); both need its engine RNG (`rng="engine"`, the default). The legacy multi-cell engine has only the `reference` backend. The surrogate and bound levels (`TR` to `NOCOMM`) are written once with graph-safe ops, so their `reference` backend runs the same operations as `graph`, which is bitwise identical to it. On an idle GPU the NR uplink costs about 3.5 times the legacy reference per step and 4–6 times the legacy `triton` kernel.
 
-Network step time (`submit` + `step`, dict outputs) in ms, on an RTX 4090 that other jobs kept 98–99% busy, so absolute numbers are pessimistic:
+Network step time (`submit` + `step`, dict outputs) in ms on an idle RTX 4090, median of 3 processes ([docs/performance.md](docs/performance.md) has every level, backend and size, the memory and the spreads):
 
 | level | 256 × 16 reference | graph | triton | 4,096 × 100 reference | graph | triton |
 |:---|---:|---:|---:|---:|---:|---:|
-| `L0`, `L0DR` | 10.0–10.3 | 2.1 | | 19.2–19.5 | 45 | |
-| `L05`, `L05Q` | 13.5–14.3 | 2.1 | | 21–23 | 46 | |
-| `L1` | 118 | 7.3 | 2.1 | 458 | 474 | 48 |
-| `L2-legacy` | 769 | 32 | 2.1 | 1,102 | 566 | 71 |
+| `L0`, `L0DR` | 1.2–1.4 | 0.36 | | 4.7 | 10.6 | |
+| `L05`, `L05Q` | 1.5–1.6 | 0.40 | | 5.0–5.1 | 10.9 | |
+| `L1` | 15.1 | 1.9 | 0.36 | 107 | 108 | 11.1 |
+| `L2-legacy` | 94 | 9.7 | 0.46 | 191 | 135 | 17.7 |
+| `L2` (NR, uplink) | 330 | 50 | 1.7 | 2,310 | 2,228 | 67.8 |
+| `L2` (NR, uplink + downlink) | 1,540 | 240 | 5.7 | 11,467 | 11,084 | 295 |
 
-At small sizes every fast backend sits at a ~2 ms floor set by the busy GPU. At 4,096 × 100 the fixed-shape graph versions of the delay levels are memory-bound and slower than the eager reference, which only touches the new and finished frames. Resetting 1% of envs every step adds 0.3–2 ms at 256 × 16. `tests/scripts/test_equiv.py`, `test_reset.py` and `benchmarks/bench.py` reproduce these results, and `pytest -m gpu` runs the equivalence checks as tests.
+At 4,096 × 100 the fixed-shape graph versions of the delay levels are memory-bound and slower than the eager reference, which only touches the new and finished frames, and the NR `graph` backend costs as much as its reference. `triton` is the scale path. `tests/scripts/test_equiv.py`, `test_reset.py` and `benchmarks/bench.py` reproduce these results, and `pytest -m gpu` runs the equivalence checks as tests.
 
 ## Validation against ns-3
 
@@ -263,7 +264,7 @@ The reference simulator is ns-3.48 with 5G-LENA NR v5.1, used unmodified except 
 - [x] Package layout `isaaclab_net/` (core, isaac, bridges, examples) per [ARCHITECTURE.md](ARCHITECTURE.md)
 - [x] Partial resets per env, per-env clocks and the `submit` / `step` dict API, at every level and backend
 - [x] Configurable NR: numerology, TDD patterns, 3GPP MCS/TBS and BLER tables, multiple HARQ processes, downlink
-- [ ] `graph` / `triton` backends for the NR engine
+- [x] `graph` / `triton` backends for the NR engine
 - [x] Multi-cell interference and handover (legacy L2)
 - [x] Multi-cell MAC in the NR engine (per-cell schedulers and HARQ, uplink and downlink interference, power control, handover)
 - [x] Isaac Lab 3.0 integration on the engine API: DirectRLEnv mixin, network domain randomization, fleet demo env, PPO
