@@ -270,7 +270,7 @@ class MacLink:
             comb = g1(self.h_comb) + 10 ** (eff / 10) if cfg.harq_combining == "cc" else 10 ** (eff / 10)
             eff_used = 10 * torch.log10(comb.clamp(min=1e-9))
         p_err = phy.tb_error_prob(mcs, eff_used, tbs, mcs_eq)
-        u = torch.rand_like(p_err) if self.rng is None else self.rng.uniform(self._bler_site, rel, R)
+        u = torch.rand_like(p_err) if self.rng is None else self.rng.step_uniform(self._bler_site, rel, R)
         ok = tx & (u >= p_err)
         fail = tx & ~ok
         exh = fail & (ntx >= cfg.max_harq_tx)

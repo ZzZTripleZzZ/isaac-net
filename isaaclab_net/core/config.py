@@ -346,7 +346,6 @@ class NRConfig:
         assert self.harq_combining in ("cc", "ir_lena", "none") and self.harq_fail in ("rlc_am", "drop")
         assert self.eff_sinr in ("eesm", "mean_db") and self.pf_metric in ("subband", "wideband")
         assert self.scheduler in ("pf", "pf_wideband", "maxci", "rr"), "scheduler: pf, pf_wideband, maxci or rr"
-        assert self.rng in ("engine", "global"), "rng must be 'engine' or 'global'"
         assert self.discard in ("purge", "none", "pdcp_arrival") and self.tbs_mode in ("38214", "lena")
         assert self.bler_source in ("pdsch", "lena", "sionna_label") and self.noise_model in ("fixed", "thermal")
         assert not (self.harq_combining == "ir_lena" and self.eff_sinr != "eesm")

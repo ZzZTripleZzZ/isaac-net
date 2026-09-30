@@ -31,7 +31,7 @@ import torch
 from .config import NRConfig
 from .engine import NREngine
 
-NOT_STATE = {"env", "_zero", "_tdev", "_acc"}  # constants and scratch (never reassigned; not state)
+NOT_STATE = {"env", "_zero", "_tdev", "_acc", "_g0_dev", "_full_enq"}  # constants and scratch (never reassigned; not state)
 
 
 def state_owners(eng):
@@ -172,7 +172,8 @@ class NRGraphEngine(NREngine):
         b.copy_(x)
         return b
 
-    def step(self, t, x=None, cur_hid=None, *, snr_db=None, dl_snr_db=None, pathgain_db=None):
+    def step(self, t, x=None, cur_hid=None, *, snr_db=None, dl_snr_db=None, pathgain_db=None, vel=None,
+             triggers=None):
         """See NREngine.step (same inputs and outputs)."""
         net, cfg = self.net, self.config
         if net.trace_frames is not None or net.trace_frames_dl is not None or net.log_sinr or \
@@ -180,19 +181,28 @@ class NRGraphEngine(NREngine):
             raise NotImplementedError("debug traces are not supported by the fast backends; use backend='reference'")
         T = self._now(t)
         legacy = cur_hid is not None
+        if net.C > 1 and pathgain_db is None and (x is None or x.dim() != 3):
+            raise ValueError("several cells: pass poses [E,R,2|3] or pathgain_db=[E,R,C]")
+        if net.C == 1 and pathgain_db is not None:
+            raise ValueError("pathgain_db= needs config.n_cells > 1; use x (poses or SNR) with one cell")
+        gen = None
+        if self.traffic is not None:           # this step's messages, eagerly (as NREngine.step)
+            n0 = net.ul.q.enq
+            arr, gen_acc = self._inject(T, triggers)
+            gen = (gen_acc, self._full_enq - n0)
         ins = {"hid": self._buf("hid", cur_hid if legacy else self._last_hid)}
         if net.C > 1:
             if pathgain_db is None:
                 if x is None or x.dim() != 3:
                     raise ValueError("several cells: pass poses [E,R,2|3] or pathgain_db=[E,R,C]")
-                pathgain_db = self._pathgain(x)
+                pathgain_db = self._pathgain(x, vel)
             kind = "cells"
             ins["x"] = self._buf("pg", pathgain_db)
         elif pathgain_db is not None:
             raise ValueError("pathgain_db= needs config.n_cells > 1; use x (poses or SNR) with one cell")
         elif snr_db is None and x.dim() == 3:
             kind = "pg"
-            ins["x"] = self._buf("pg", self._pathgain(x)[..., 0])
+            ins["x"] = self._buf("pg", self._pathgain(x, vel)[..., 0])
         else:
             xs = x if snr_db is None else snr_db
             kind = "snr" if xs.dim() == 2 else "snr3"
@@ -207,7 +217,8 @@ class NRGraphEngine(NREngine):
         dt0 = (1 if net.last_g is None else g0 + sched[0][0] - net.last_g) if fad else 0
         P = len(cfg.tdd_pattern)
         skey = g0 % math.lcm(P, cfg.sr_period_slots, cfg.cqi_period_slots)
-        key = (skey, dt0, kind, tuple((k, tuple(v.shape)) for k, v in ins.items()), bool(self.log_stats), gate)
+        key = (skey, dt0, kind, tuple((k, tuple(v.shape)) for k, v in ins.items()), bool(self.log_stats), gate,
+               bool(getattr(self, "_extras", False)))
         self._tdev.fill_(T)
         self._rebind()                 # inputs the eager part reassigned (e.g. net.fading_rho_ms from the radio)
         g = self._graphs.get(key)
@@ -222,13 +233,19 @@ class NRGraphEngine(NREngine):
             net.ioN_n[k] += v
         if self.log_stats:
             self._log_from_stash()
+            if getattr(self, "_extras", False) and net.stats["delay"]:      # arrival-corrected delays
+                dk = self._out["delivered"] & (self._stash["ul.cap"] <= net.log_cap_max)
+                net.stats["delay"][-1] = self._out["delay"][dk].cpu()
         if gate is not None:          # host side of the gate hooks (NREngine traffic models), as in the capture
             self._gate, self._gate_seen, self._snap = None, True, None
         self.T = T + 1
         o = self._out
         if legacy:
             return o["newest"].clone(), o["det_env"].clone()
-        return {k: v.clone() for k, v in o.items()}
+        res = {k: v.clone() for k, v in o.items()}
+        if gen is not None:
+            res["gen_accepted"], res["gen_bytes"] = gen
+        return res
 
     def _static_gate(self):
         """Traffic models of NREngine (feat/traffic) gate the UL stream by arrival slot through hooks on net.ul
@@ -238,6 +255,10 @@ class NRGraphEngine(NREngine):
         gate = getattr(self, "_gate", None)
         if gate is None:
             return None
+        if not hasattr(self, "_g0_dev"):
+            self._g0_dev = torch.zeros((), dtype=torch.long, device=self.dev)
+        self._g0_dev.fill_(int(self._g0))
+        self._g0 = self._g0_dev            # the gate hooks compute rel = g - _g0 on the device
         self._gate = tuple(self._buf(f"gate{i}", x) for i, x in enumerate(gate))
         if getattr(self, "_full_enq", None) is not None:
             self._full_enq = self._buf("full_enq", self._full_enq)
@@ -267,7 +288,11 @@ class NRGraphEngine(NREngine):
                 del net._log_ul, net._log_dl
         self._last_snr = snr
         if getattr(self, "_extras", False) and getattr(self, "_snap", None) is not None:
-            self._outputs_extras(out, out["delivered"], out["timed_out"], out["dropped"])
+            ls, net.log_stats = net.log_stats, False      # its statistics part runs after the replay (step())
+            try:
+                self._outputs_extras(out, out["delivered"], out["timed_out"], out["dropped"])
+            finally:
+                net.log_stats = ls
             self._snap = None
         out["newest"] = self._rel(out["newest"])
         out["cap"] = self._rel(out["cap"])

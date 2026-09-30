@@ -128,8 +128,8 @@ class NRNet:
         if self.rng is None:
             h0 = torch.randn(E, R, *cdim, S, 2, device=d, generator=self.gen) / math.sqrt(2)
         else:              # new episode for the reset envs, then their draws (rows of other envs are discarded)
-            self.rng.reset(None if env_ids is None else env_mask(E, env_ids, d))
-            h0 = self.rng.reset_normal(H0, R * math.prod(cdim) * S * 2).view(E, R, *cdim, S, 2) / math.sqrt(2)
+            self.rng.reset_mask(None if env_ids is None else env_mask(E, env_ids, d))
+            h0 = self.rng.reset_normal_all(H0, R * math.prod(cdim) * S * 2).view(E, R, *cdim, S, 2) / math.sqrt(2)
         if env_ids is None:
             self.h = h0
             self.last_g = None
@@ -251,7 +251,7 @@ class NRNet:
             if self.rng is None:
                 z = torch.randn_like(self.h)
             else:
-                z = self.rng.normal(FADING, rel, self.h[0].numel()).view(self.h.shape)
+                z = self.rng.step_normal(FADING, rel, self.h[0].numel()).view(self.h.shape)
             if self.fading_rho_ms is None:
                 rho = self.cfg.fading_rho_per_ms ** (dt * self.cfg.slot_ms)
                 self.h = rho * self.h + math.sqrt(1 - rho ** 2) * z / math.sqrt(2)
@@ -469,7 +469,7 @@ class NRNet:
         u = self.ul
         q = u.q
         if self.rng is not None:
-            self.rng.tick()
+            self.rng.tick_step()
         delivered, timed, dropped = u.end_step(t, cfg.timeout_steps)
         capd = torch.where(delivered, q.cap, torch.full_like(q.cap, -1))
         newest = capd.max(-1).values
