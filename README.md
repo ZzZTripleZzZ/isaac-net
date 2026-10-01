@@ -5,7 +5,7 @@
 <p><b>GPU-batched 5G and Wi-Fi network simulation for massively parallel robot learning: thousands of Isaac Lab environments, tens to hundreds of robots per cell, one GPU, network state stepped in lockstep with physics.</b></p>
 
 <p>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-4B5563?style=flat-square">
+  <a href="https://pypi.org/project/isaac-net/"><img alt="PyPI" src="https://img.shields.io/pypi/v/isaac-net?style=flat-square&color=4B5563"></a>
   <a href="https://www.python.org/"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-3776AB?style=flat-square&logo=python&logoColor=white"></a>
   <a href="https://pytorch.org/"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-CUDA-EE4C2C?style=flat-square&logo=pytorch&logoColor=white"></a>
   <a href="https://triton-lang.org/"><img alt="Triton" src="https://img.shields.io/badge/kernels-Triton-2F5C9E?style=flat-square"></a>
@@ -43,10 +43,12 @@ Parallel robot learning runs thousands of environments on one GPU, but the netwo
 git clone git@github.com:ZzZTripleZzZ/isaac-net.git && cd isaac-net
 uv venv --python 3.11 && source .venv/bin/activate
 uv pip install torch                                # CUDA build of PyTorch; Triton ships with it on Linux
+uv pip install isaac-net                            # the released package from PyPI
+# or, from a clone, for development:
 uv pip install -e ".[dev]"                          # the isaac_net package, plus pytest, ruff and build
 ```
 
-Linux with an NVIDIA GPU is the main target, and Python 3.10 to 3.12 is supported. Every reference engine also runs on a CPU (`pip install torch --index-url https://download.pytorch.org/whl/cpu`), which is enough for the CPU test suite. The package is not on PyPI while the repository is private. A release wheel installs the same way: `pip install "isaac_net-0.1.0-py3-none-any.whl[dev]"`. Scripts in `prototype/` still work, as thin shims over the package.
+Linux with an NVIDIA GPU is the main target, and Python 3.10 to 3.12 is supported. Every reference engine also runs on a CPU (`pip install torch --index-url https://download.pytorch.org/whl/cpu`), which is enough for the CPU test suite. Releases are on PyPI as [`isaac-net`](https://pypi.org/project/isaac-net/): `pip install isaac-net` (add `[dev]` for the test tools). Scripts in `prototype/` still work, as thin shims over the package.
 
 | Extra | Adds | For |
 |:---|:---|:---|
@@ -334,7 +336,7 @@ isaac-net-bench calibrate --task all --level L2-legacy --backend triton   # offe
 - [ ] `triton` for the multi-cell NR engine and a tiled kernel for large R
 - [ ] Lab gNB and POWDER measurement campaign; multi-cell calibration against a reference
 - [ ] Isaac Sim (Kit) on Linux clusters once a final Isaac Lab 3.0 container exists
-- [ ] Public release and PyPI
+- [x] Public release and PyPI (`pip install isaac-net`, 0.1.0)
 
 ## Repository layout
 

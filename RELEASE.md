@@ -1,6 +1,6 @@
 # Cutting a release
 
-This page is the checklist for a release of `isaac-net`. **Publishing to PyPI is deferred until the project is public.** Until then a release is a git tag plus the wheel and sdist attached to it (or handed to collaborators directly), and nobody runs `twine upload`.
+This page is the checklist for a release of `isaac-net`. Releases are published to PyPI as [`isaac-net`](https://pypi.org/project/isaac-net/); 0.1.0 was published on 2026-10-01 with `twine upload` from a maintainer's machine (credentials in that maintainer's `~/.pypirc`, never in the repository).
 
 ## Versioning
 
@@ -60,4 +60,4 @@ The version has one source of truth: `__version__` in `isaac_net/__init__.py`. `
 
 ## When the project is public
 
-Publishing to PyPI starts only after the repository is public and the paper describing the engine is out. At that point: register the `isaac-net` name, publish to TestPyPI first and install from it in a fresh venv, then publish with a trusted-publisher GitHub Actions workflow triggered by the tag, and update the project URLs in `pyproject.toml` and the Citation section of the README.
+For the next release: bump `isaac_net.__version__`, date the CHANGELOG section, tag `vX.Y.Z`, build with `python -m build`, run `twine check dist/*`, upload with `twine upload dist/*`, and install the published version in a fresh venv as the smoke test. Moving the upload to a trusted-publisher GitHub Actions workflow triggered by the tag is the planned follow-up.

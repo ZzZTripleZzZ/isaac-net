@@ -66,7 +66,7 @@ The following results were produced outside the package code, with scripts in th
 | 14 | Bridge follow-ups | Stale frames are not purged from the ns-3 RLC queue, partial reset works only in the process-per-env mode, and the Windows launcher of the pool is untested | [bridges.md](bridges.md) |
 | 15 | Smaller PHY and MAC gaps | MIESM, FR2 numerology, FDD, MIMO layers and DL power control are not modelled, and the UL DCI-slot constraint for K2 is missing | [configurability.md](configurability.md) |
 | 16 | Reference scenario in the repository | The standalone 5G-LENA scenario `netslot-ref.cc`, its crash-guard patch and the sweep scripts live outside this repository | [validation-5g-lena.md](validation-5g-lena.md) |
-| 17 | Public release | PyPI publishing, the public repository URL and the citation wait until the project is public | [RELEASE.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/RELEASE.md) |
+| 17 | Public release | Done: the repository is public, 0.1.0 is on PyPI (`pip install isaac-net`), and the README carries the citation; remaining: a trusted-publisher release workflow | [RELEASE.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/RELEASE.md) |
 
 ## Suggested starter tasks
 
