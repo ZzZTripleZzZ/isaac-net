@@ -15,6 +15,7 @@ This page runs one scripted controller in a closed loop against each network mod
 | ideal | level `ORACLE`: every frame arrives in its capture step with zero delay and no loss | graph |
 | L2 | NR engine with `lena_validation_v2()` | graph |
 | L0 | i.i.d. lognormal delay and i.i.d. loss, fitted to the pooled L2 marginals (median 2.55 steps, log sigma 0.229, loss 0.0005; `l0_fit.csv`) | graph |
+| L0-emp | level `L0` in its empirical mode: i.i.d. delay resampled from the pooled L2 delays, i.i.d. loss; run later on the same seeds, see [Empirical marginal](#empirical-marginal-l0-emp) | graph |
 | L1 | fluid level, default parameters | graph |
 | L2-legacy | the prototype slot-level engine | triton |
 | ns-3 | ns-3.48 with 5G-LENA v5.1 through the lockstep bridge, one process per env over TCP | CPU |
@@ -101,7 +102,7 @@ The tables use the columns of the light-load table, plus the distance of each ar
 
 **The task return is still flat.** Every arm at every load, the ideal link included, returns 81.8–82.9, and the robots spend at most 0.26% of their steps inside a hazard. The heavier loads change the delay, the AoI and the number of frames sent, but not the return of this controller, so the return column still says nothing about the models.
 
-**In short.** Under load, an i.i.d. model fitted to the engine's own marginals departs from ns-3 in what the controller observes: the AoI tail and the number of frames sent at both loads, and the delay distribution at 0.2 s. The NR engine with `lena_validation_v2` matches ns-3 on those quantities at both loads and on the delay distribution at 0.2 s, but at 32 robots per cell its delay body lies about 9% above that of ns-3.
+**In short.** Under load, an i.i.d. lognormal fitted to the engine's own marginals departs from ns-3 in what the controller observes: the AoI tail and the number of frames sent at both loads, and the delay distribution at 0.2 s. The NR engine with `lena_validation_v2` matches ns-3 on those quantities at both loads and on the delay distribution at 0.2 s, but at 32 robots per cell its delay body lies about 9% above that of ns-3. Part of L0's miss comes from the lognormal shape, and [Empirical marginal](#empirical-marginal-l0-emp) separates shape from independence.
 
 **Wall time.** At 8 × 16 and 0.2 s, L2 needs 45.6 ms and ns-3 41.7 ms per control step, and at 8 × 32, 59.2 and 57.2 ms. The 0.2 s run shared the box with 8 other ns-3 processes (the held-out scenario of [fidelity-heldout.md](fidelity-heldout.md)), so its ns-3 timing is pessimistic.
 
@@ -118,12 +119,46 @@ The tables use the columns of the light-load table, plus the distance of each ar
 | split-half reference: L2 even vs odd seeds | | | | | | | | 30.7 / 0.141 | |
 | split-half reference: ns-3 even vs odd seeds | | | | | | | | 34.2 / 0.154 | |
 
+## Empirical marginal (L0-emp)
+
+L0 above is a two-parameter lognormal. A lognormal with the L2 median and log sigma cannot reach the L2 tail (its p95 is 404 ms at 0.2 s and 811 ms at 8 × 32, against 506 and 1,039 ms for L2), so the misses of L0 under load could come from that shape and not from the independence of the draws. L0-emp separates the two. It draws each message's delay i.i.d. from the empirical marginal of the same pooled L2 delays that L0 is fitted to, at each load and on the same seeds. It uses level `L0` with `params={"q": <sorted L2 delays in control steps>, "p": <loss>}`: each delay is one of the L2 delays, chosen by the rank of L0's own normal draw (inverted CDF), so the whole tail is kept. The loss is fitted as for L0, so that L0-emp's delivery ratio, counting the sample's share beyond the 2 s deadline, equals that of L2 (no extra loss at any load here; the 0.28% of L2 delays above 2 s at 8 × 32 time out). The send rule, task, seeds and geometry are those of the runs above. ns-3, L2 and L0 are not rerun: their frames and per-seed rows come from the earlier folders. L0 was rerun in the same job as a check and reproduces the earlier L0 bit for bit in 104 of 105 seed-metric values (the last differs by 0.002 ms in a delay p95). Code: `run_closedloop.py --arms L0,L0-emp --fit-from <folder>` and `l0emp_compare.py`. Results: `benchmarks/results/closedloop/l0emp/`.
+
+Mean over 5 seeds ± 95% t interval, with the difference to ns-3 in brackets. "P(AoI > x)" is the share of robot-steps whose AoI exceeds ns-3's AoI p95, rounded up to the 0.1 s step (0.9, 1.0 and 2.0 s). It is computed from the AoI rebuilt out of `frames.csv.gz`, which reproduces the logged AoI mean of every arm and seed. The KS columns compare the arm's even seeds with ns-3's odd seeds, for the delay and for the AoI, and the floor is the split-half distance of L2 and of ns-3 (`comparison.csv`, `aoi.csv`, `closedloop_distances.csv`).
+
+| Load | Arm | Delay p50 / p95 (ms) | AoI mean (s) | AoI p95 (s) | Frames sent | P(AoI > x) | Delay KS | AoI KS |
+|:---|:---|---:|---:|---:|---:|---:|---:|---:|
+| 0.6 s, 8 × 16 | L2 | 257 / 409 | 0.583 | 0.86 ± 0.07 (−4.4%) | 6,393 ± 4 (+0.1%) | 1.33 ± 1.50% | 0.118 | 0.029 |
+| | L0 | 255 / 372 | 0.560 | 0.80 ± 0.00 (−11.1%) | 6,394 ± 2 (+0.1%) | 0.58 ± 0.07% | 0.123 | 0.044 |
+| | L0-emp | 255 / 415 | 0.585 | 0.90 ± 0.00 (0.0%) | 6,394 ± 2 (+0.1%) | 1.41 ± 0.13% | 0.112 | 0.012 |
+| | ns-3 | 252 / 399 | 0.582 | 0.90 ± 0.00 | 6,386 ± 10 | 1.24 ± 1.18% | | |
+| | floor | | | | | | 0.075–0.101 | 0.025–0.035 |
+| 0.2 s, 8 × 16 | L2 | 263 / 506 | 0.515 | 0.96 ± 0.19 (−2.0%) | 11,062 ± 672 (+0.3%) | 4.22 ± 2.90% | 0.122 | 0.115 |
+| | L0 | 259 / 404 | 0.436 | 0.70 ± 0.00 (−28.6%) | 12,083 ± 22 (+9.6%) | 0.01 ± 0.01% | 0.217 | 0.177 |
+| | L0-emp | 260 / 507 | 0.487 | 0.80 ± 0.00 (−18.4%) | 11,042 ± 26 (+0.2%) | 1.31 ± 0.03% | 0.108 | 0.097 |
+| | ns-3 | 254 / 500 | 0.520 | 0.98 ± 0.20 | 11,024 ± 677 | 4.34 ± 2.87% | | |
+| | floor | | | | | | 0.122–0.126 | 0.108–0.110 |
+| 0.6 s, 8 × 32 | L2 | 525 / 1,039 | 1.023 | 2.00 ± 0.20 (+3.1%) | 11,235 ± 326 (−1.0%) | 4.38 ± 1.93% | 0.353 | 0.033 |
+| | L0 | 524 / 811 | 0.867 | 1.30 ± 0.00 (−33.0%) | 11,864 ± 14 (+4.5%) | 0.01 ± 0.01% | 0.113 | 0.123 |
+| | L0-emp | 525 / 1,027 | 0.967 | 1.62 ± 0.06 (−16.5%) | 11,284 ± 44 (−0.6%) | 1.42 ± 0.30% | 0.353 | 0.046 |
+| | ns-3 | 483 / 979 | 1.028 | 1.94 ± 0.29 | 11,353 ± 315 | 4.27 ± 1.89% | | |
+| | floor | | | | | | 0.045–0.061 | 0.034–0.039 |
+
+**The lognormal shape explains the frames sent and about half of the AoI p95 miss.** With the empirical marginal, the robots send within 0.2% and 0.6% of what they send under ns-3 at the two loaded settings, well inside ns-3's seed interval (±6.1% and ±2.8%), against +9.6% and +4.5% for L0. The delay distribution also matches as well as L2 does: at 0.2 s the disjoint-seed delay KS is 0.108, at the floor, and at 8 × 32 it is 0.353, the same offset as L2, since L0-emp resamples L2's delays. The AoI p95 miss shrinks from −29% to −18% at 0.2 s and from −33% to −16.5% at 8 × 32, and the mean AoI miss from −16% to −6% at both.
+
+**Independence misses the AoI tail.** The rest of the gap does not close. Under L2 and ns-3, 4.2–4.4% of robot-steps have an AoI above ns-3's p95 at both loaded settings, while under L0-emp only 1.3–1.4% do. Paired by seed, the ns-3 share exceeds the L0-emp share in all five seeds at both loads, by 3.0 ± 2.9 and 2.9 ± 2.1 percentage points, whereas L2 differs from ns-3 by 0.1 points. On the AoI p95 statistic alone at five seeds, the −18% at 0.2 s lies inside ns-3's seed interval of ±21% and the −16.5% at 8 × 32 just outside its ±15%. The AoI distribution separates the same way at 8 × 32 (AoI KS 0.046 for L0-emp against floors of 0.034–0.039 and 0.033 for L2), but not at 0.2 s, where L0-emp's AoI KS of 0.097 lies within the floor. The mechanism is visible in the delays themselves. Under L2 and ns-3, 64–70% of the delay variance lies between robots, and successive delays of one robot are correlated around that robot's mean (lag-1 correlation 0.86–0.94). Under L0 and L0-emp both are zero (0.01–0.02 and −0.02). A robot that drew long delays under L2 or ns-3 keeps drawing them, so its AoI grows over several messages, while an i.i.d. draw spreads the long delays over all robots. At light load nothing separates: L0-emp matches ns-3 in AoI p95 (0.90 s), frames sent and AoI distribution (KS 0.012).
+
+**In short.** Both stories hold in part. The lognormal shape caused the frames-sent miss and about half of the AoI p95 miss. Independence causes the rest: an i.i.d. draw from the exact closed-loop marginal still leaves the AoI tail about three times too light under load, about 16–18% low at the p95. What was tested is one marginal shared by all robots. A delay model conditioned on each robot's SNR or history was not tested, and the large between-robot share suggests it would close part of the gap. The empirical marginal itself is only known after L2 (or ns-3) has run in closed loop under the same controller, since the offered traffic depends on the network model.
+
+**Seed intervals of the AoI p95.** The 95% t intervals over the 5 seeds, as a share of the mean, for every arm of the three runs (`comparison.csv`, column `aoi_p95_s_ci95_pct`): at light load ±7.9% for L2 and ±0 for every other arm (every seed gives the same value on the 0.1 s step grid); at 0.2 s ±19.6% for L2, ±20.8% for ns-3, ±12.6% for L2-legacy and ±0 for ideal, L0, L0-emp and L1; at 8 × 32 ±9.8% for L2, ±14.7% for ns-3, ±6.4% for L2-legacy, ±3.4% for L0-emp and ±0 for ideal, L0 and L1. The frames sent have ±0.07% (L2) and ±0.15% (ns-3) at light load, ±6.1% for both at 0.2 s and ±2.9% and ±2.8% at 8 × 32.
+
+**Figure data.** `l0emp/closedloop_delay_quantiles.csv` (1,001 quantiles, inverted CDF, of every arm's delivered delays per run) and `l0emp/closedloop_distances.csv` (every run's `distances.csv` with a `run` column, plus the L0-emp rows and the disjoint-seed rows of the light load) have the format of the paper's figure data and keep every earlier row unchanged, so they can replace it as they are.
+
 ## Caveats
 
 - **One controller.** A single scripted controller with a fixed send rule. A controller that sends more often, or reacts to delay, would load the cell differently, and the distances above would change with it.
 - **One geometry.** A single cell, a 60 m arena kept inside the validated SNR range, fading off. In the example task's 150 m arena the ns-3 reference loses most frames to the coverage gap, and none of the numbers here carry over to it.
 - **Small scale.** 8 envs, 5 seeds of 30 s and one message size. The loaded regime, where the send rule reacts to queueing, is covered by the section [Under load](#under-load) below. The task return is not sensitive to the network at any of the tested loads.
-- **L0 is fitted to this run.** Its parameters come from the L2 arm of the same seeds, so its agreement with L2 on the median and the delivery ratio is by construction. Every load refits it.
+- **L0 is fitted to this run.** Its parameters come from the L2 arm of the same seeds, so its agreement with L2 on the median and the delivery ratio is by construction. Every load refits it. L0-emp resamples the same L2 delays, so its agreement with L2's delay distribution is by construction too.
 - **Shared seeds.** The pooled pairs share seeds and therefore trajectories, so a pooled distance can lie below the split-half reference. The disjoint-seed column of the loaded runs (one arm's even seeds against ns-3's odd seeds) avoids this.
 
 ## Reproduce
@@ -138,6 +173,12 @@ python benchmarks/closedloop/run_closedloop.py --interval 1 --out benchmarks/res
 python benchmarks/closedloop/run_closedloop.py --R 32 --out benchmarks/results/closedloop_loaded/r32_8x32
 python benchmarks/closedloop/run_closedloop.py --interval 2 --out benchmarks/results/closedloop_loaded/interval2_8x16
 python benchmarks/closedloop/plot_cdf_loaded.py benchmarks/results/closedloop_loaded docs/img/closed-loop-loaded-cdf.png
+# empirical marginal, fitted to the L2 arm of each earlier run (no L2 or ns-3 rerun), then the comparison
+O=benchmarks/results/closedloop/l0emp
+python benchmarks/closedloop/run_closedloop.py --arms L0,L0-emp --fit-from benchmarks/results/closedloop --out $O/light_8x16
+python benchmarks/closedloop/run_closedloop.py --arms L0,L0-emp --interval 1 --fit-from benchmarks/results/closedloop_loaded/interval1_8x16 --out $O/i02_8x16
+python benchmarks/closedloop/run_closedloop.py --arms L0,L0-emp --R 32 --fit-from benchmarks/results/closedloop_loaded/r32_8x32 --out $O/r32_8x32
+python benchmarks/closedloop/l0emp_compare.py
 ```
 
-`--interval` sets the send counter (5: one frame per 0.6 s, 1: per 0.2 s) and `--R` the robots per env. `--arms` selects a subset (L0 needs L2 earlier in the list, since it is fitted to it). The result folder holds `per_seed.csv` (every metric per arm and seed), `summary.csv` (means and 95% intervals), `delay_cdf.csv` (pooled CDF on a log grid from 0.1 ms to 2 s), `distances.csv`, `l0_fit.csv`, `frames.csv.gz` (every delivered frame: arm, seed, env, robot, capture step, delay), `setup.json` and the run log.
+`--interval` sets the send counter (5: one frame per 0.6 s, 1: per 0.2 s) and `--R` the robots per env. `--arms` selects a subset (L0 and L0-emp need L2 earlier in the list, since they are fitted to it, or `--fit-from` with an earlier run folder that has the L2 arm). The result folder holds `per_seed.csv` (every metric per arm and seed), `summary.csv` (means and 95% intervals), `delay_cdf.csv` (pooled CDF on a log grid from 0.1 ms to 2 s), `distances.csv`, `l0_fit.csv`, `frames.csv.gz` (every delivered frame: arm, seed, env, robot, capture step, delay), `setup.json` and the run log.

@@ -1,0 +1,31 @@
+L0 rerun check: 105 compared, 1 differ
+light_8x16 L2 AoI p95 0.860 ± 0.068 (-4.4%), sent 6393 ± 4 (+0.1%), p95 409, KS disj 0.117
+light_8x16 L0 AoI p95 0.800 ± 0.000 (-11.1%), sent 6394 ± 2 (+0.1%), p95 372, KS disj 0.123
+light_8x16 L0-emp AoI p95 0.900 ± 0.000 (+0.0%), sent 6394 ± 2 (+0.1%), p95 414, KS disj 0.112
+light_8x16 ns3 AoI p95 0.900 ± 0.000 (+0.0%), sent 6386 ± 10 (+0.0%), p95 399, KS disj nan
+i02_8x16 L2 AoI p95 0.960 ± 0.188 (-2.0%), sent 11062 ± 672 (+0.3%), p95 506, KS disj 0.122
+i02_8x16 L0 AoI p95 0.700 ± 0.000 (-28.6%), sent 12083 ± 22 (+9.6%), p95 404, KS disj 0.217
+i02_8x16 L0-emp AoI p95 0.800 ± 0.000 (-18.4%), sent 11042 ± 26 (+0.2%), p95 507, KS disj 0.108
+i02_8x16 ns3 AoI p95 0.980 ± 0.204 (+0.0%), sent 11024 ± 677 (+0.0%), p95 500, KS disj nan
+r32_8x32 L2 AoI p95 2.000 ± 0.196 (+3.1%), sent 11235 ± 326 (-1.0%), p95 1039, KS disj 0.353
+r32_8x32 L0 AoI p95 1.300 ± 0.000 (-33.0%), sent 11864 ± 14 (+4.5%), p95 811, KS disj 0.113
+r32_8x32 L0-emp AoI p95 1.620 ± 0.056 (-16.5%), sent 11284 ± 44 (-0.6%), p95 1027, KS disj 0.353
+r32_8x32 ns3 AoI p95 1.940 ± 0.286 (+0.0%), sent 11353 ± 315 (+0.0%), p95 979, KS disj nan
+light_8x16 L2 P(AoI > 0.9 s) 0.0133 ± 0.0150, ns3 - arm -0.0009 ± 0.0034, AoI KS 0.029 (floors 0.035 / 0.025), between-robot 0.70, lag1 0.93
+light_8x16 L0 P(AoI > 0.9 s) 0.0058 ± 0.0007, ns3 - arm 0.0066 ± 0.0111, AoI KS 0.044 (floors 0.035 / 0.025), between-robot 0.02, lag1 -0.02
+light_8x16 L0-emp P(AoI > 0.9 s) 0.0141 ± 0.0013, ns3 - arm -0.0017 ± 0.0108, AoI KS 0.012 (floors 0.035 / 0.025), between-robot 0.02, lag1 -0.02
+light_8x16 L1 P(AoI > 0.9 s) 0.0000 ± 0.0000, ns3 - arm 0.0124 ± 0.0118, AoI KS 0.077 (floors 0.035 / 0.025), between-robot 0.69, lag1 0.98
+light_8x16 L2-legacy P(AoI > 0.9 s) 0.0001 ± 0.0002, ns3 - arm 0.0123 ± 0.0117, AoI KS 0.061 (floors 0.035 / 0.025), between-robot 0.52, lag1 0.46
+light_8x16 ns3 P(AoI > 0.9 s) 0.0124 ± 0.0118, ns3 - arm nan ± nan, AoI KS nan (floors 0.035 / 0.025), between-robot 0.66, lag1 0.94
+i02_8x16 L2 P(AoI > 1.0 s) 0.0422 ± 0.0290, ns3 - arm 0.0012 ± 0.0006, AoI KS 0.115 (floors 0.108 / 0.110), between-robot 0.64, lag1 0.86
+i02_8x16 L0 P(AoI > 1.0 s) 0.0001 ± 0.0001, ns3 - arm 0.0433 ± 0.0287, AoI KS 0.177 (floors 0.108 / 0.110), between-robot 0.01, lag1 -0.02
+i02_8x16 L0-emp P(AoI > 1.0 s) 0.0131 ± 0.0003, ns3 - arm 0.0303 ± 0.0289, AoI KS 0.097 (floors 0.108 / 0.110), between-robot 0.01, lag1 -0.02
+i02_8x16 L1 P(AoI > 1.0 s) 0.0000 ± 0.0000, ns3 - arm 0.0434 ± 0.0287, AoI KS 0.327 (floors 0.108 / 0.110), between-robot 0.35, lag1 0.75
+i02_8x16 L2-legacy P(AoI > 1.0 s) 0.0000 ± 0.0001, ns3 - arm 0.0433 ± 0.0287, AoI KS 0.288 (floors 0.108 / 0.110), between-robot 0.30, lag1 0.09
+i02_8x16 ns3 P(AoI > 1.0 s) 0.0434 ± 0.0287, ns3 - arm nan ± nan, AoI KS nan (floors 0.108 / 0.110), between-robot 0.65, lag1 0.86
+r32_8x32 L2 P(AoI > 2.0 s) 0.0438 ± 0.0193, ns3 - arm -0.0011 ± 0.0014, AoI KS 0.033 (floors 0.039 / 0.034), between-robot 0.64, lag1 0.91
+r32_8x32 L0 P(AoI > 2.0 s) 0.0001 ± 0.0001, ns3 - arm 0.0426 ± 0.0190, AoI KS 0.123 (floors 0.039 / 0.034), between-robot 0.02, lag1 -0.02
+r32_8x32 L0-emp P(AoI > 2.0 s) 0.0142 ± 0.0030, ns3 - arm 0.0285 ± 0.0205, AoI KS 0.046 (floors 0.039 / 0.034), between-robot 0.02, lag1 -0.02
+r32_8x32 L1 P(AoI > 2.0 s) 0.0000 ± 0.0000, ns3 - arm 0.0427 ± 0.0189, AoI KS 0.233 (floors 0.039 / 0.034), between-robot 0.67, lag1 0.95
+r32_8x32 L2-legacy P(AoI > 2.0 s) 0.0001 ± 0.0001, ns3 - arm 0.0427 ± 0.0189, AoI KS 0.247 (floors 0.039 / 0.034), between-robot 0.44, lag1 0.65
+r32_8x32 ns3 P(AoI > 2.0 s) 0.0427 ± 0.0189, ns3 - arm nan ± nan, AoI KS nan (floors 0.039 / 0.034), between-robot 0.65, lag1 0.93

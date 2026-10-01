@@ -159,7 +159,9 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
 
     config: NRConfig shared by every module (default NRConfig()); the prototype levels read only its application
       fields (frame_buffer, timeout_steps, control_step_ms -> UL slots per step, msg_sizes) and rng / seed.
-    sizes: override of config.msg_sizes. params: fitted parameters of L0 ({"mu", "sig", "p"}) and L05 / L05Q
+    sizes: override of config.msg_sizes. params: fitted parameters of L0 ({"mu", "sig", "p"}, or
+      {"q", "p"} for an i.i.d. delay from an empirical marginal: q = delay quantiles or sorted sample in control
+      steps, drawn by inverted CDF) and L05 / L05Q
       ({"q", "pdrop"}); for TR / GE / QA / NN a fit file path, a fit-file dict or the level's own dict (see
       levels.load_level_params). seed: overrides config.seed. With config.rng = "engine" (default) every draw of
       the prototype, surrogate and bound levels comes from the engine's streams seeded by it (proto/rng.py);

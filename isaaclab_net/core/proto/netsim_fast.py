@@ -160,9 +160,9 @@ def put_slot(x, idx, new, v):
 
 def arrival_body(mode, new, send, count, nact, snr_in, t, z, u1, u2, lvl):
     """NetDelay._on_arrival for every robot at once; returns the delivery time [E,R] (used where new).
-    lvl: dict of level tensors (mu/sig/p floats for L0; mu/sig/p [E] for L0DR; q, pd, edges for L05/L05Q)."""
+    lvl: dict of level tensors (mu/sig/p floats for L0, or q [K] and p with an empirical marginal; mu/sig/p [E] for L0DR; q, pd, edges for L05/L05Q)."""
     if mode == "L0":
-        delay = torch.exp(lvl["mu"] + lvl["sig"] * z)
+        delay = _ns.l0_quantile_delay(lvl["q"], z) if "q" in lvl else torch.exp(lvl["mu"] + lvl["sig"] * z)
         lost = u1 < lvl["p"]
     elif mode == "L0DR":
         delay = torch.exp(lvl["mu"][:, None] + lvl["sig"][:, None] * z)
@@ -259,7 +259,11 @@ class NetFast:
             self.hcnt = z((E, R), torch.float32, 0.0)
             self.h = z((E, R, S, 2), torch.float32, 0.0)
         elif rung == "L0":
-            self._lvl = {k: float(params[k]) for k in ("mu", "sig", "p")}
+            if "q" in params:          # empirical marginal (proto/netsim.py l0_quantile_delay)
+                self._lvl = {"q": torch.as_tensor(params["q"], dtype=torch.float32, device=d).flatten().sort().values,
+                             "p": float(params["p"])}
+            else:
+                self._lvl = {k: float(params[k]) for k in ("mu", "sig", "p")}
         elif rung == "L0DR":
             self._dr = _ns.l0dr_ranges(params)
             self.mu = z((E,), torch.float32, 0.0)

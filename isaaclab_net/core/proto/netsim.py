@@ -133,6 +133,14 @@ def env_index(env_ids, E, device):
     return torch.as_tensor(list(env_ids), dtype=torch.long, device=device)
 
 
+def l0_quantile_delay(q, z):
+    """L0 with an empirical marginal (params["q"]): the delay (control steps) at the rank of the standard normal draw
+    z in the ascending quantile table q [K], q[floor(Phi(z) K)]. With q = the sorted delays of a sample this resamples
+    that sample i.i.d. (its inverted CDF); it uses the lognormal mode's own draw z, so the random streams do not change."""
+    u = 0.5 * (1.0 + torch.erf(z * (1.0 / math.sqrt(2.0))))
+    return q[(u * q.numel()).long().clamp(0, q.numel() - 1)]
+
+
 def fill_rows(x, ids, v):
     """In-place: x[ids] = v (all rows if ids is None). v is a scalar or a [len(ids), ...] tensor.
 
@@ -436,6 +444,8 @@ class NetDelay(NetBase):
             self.mu = torch.zeros(E, device=d)
             self.sig = torch.zeros(E, device=d)
             self.p = torch.zeros(E, device=d)
+        elif self.mode == "L0" and "q" in self.params:   # empirical marginal instead of the lognormal
+            self.q0 = torch.as_tensor(self.params["q"], dtype=torch.float32, device=d).flatten().sort().values
         elif self.mode in ("L05", "L05Q"):
             self.q = self.params["q"].to(d)          # [*key bins, 101] delay quantiles in steps
             self.pd = self.params["pdrop"].to(d)     # [*key bins]
@@ -460,8 +470,11 @@ class NetDelay(NetBase):
     def _on_arrival(self, t, e, r, i, draws):
         z, u1, u2 = (x[e, r] for x in draws)
         if self.mode == "L0":
-            mu, sig, p = self.params["mu"], self.params["sig"], self.params["p"]
-            delay = torch.exp(mu + sig * z)
+            p = self.params["p"]
+            if "q" in self.params:
+                delay = l0_quantile_delay(self.q0, z)
+            else:
+                delay = torch.exp(self.params["mu"] + self.params["sig"] * z)
             lost = u1 < p
         elif self.mode == "L0DR":
             delay = torch.exp(self.mu[e] + self.sig[e] * z)

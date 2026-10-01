@@ -5,6 +5,8 @@ The same scripted Fleet-Alert controller drives E x R robots for T control steps
   ideal      level ORACLE: every frame arrives in its capture step, delay 0, never lost
   L2         NR engine, lena_validation_v2(), graph backend
   L0         i.i.d. lognormal delay and loss, fitted to the L2 arm's pooled marginals (l0_fit.csv)
+  L0-emp     level L0 in its empirical mode: i.i.d. delay resampled from the pooled L2 delays (their empirical
+             marginal) and i.i.d. loss, both from the same L2 frames as L0 (l0emp_fit.csv)
   L1         fluid level, graph backend
   L2-legacy  prototype slot-level engine, triton backend
   ns3        ns-3.48 + 5G-LENA v5.1 through the lockstep bridge (one process per env, TCP)
@@ -22,7 +24,8 @@ arm sees the same initial poses, goals, shadowing and hazard draws; the runs dif
 delivers to the controller.
 
 usage (lab box): python benchmarks/closedloop/run_closedloop.py --out benchmarks/results/closedloop
-  heavier loads (docs/closed-loop.md, "Under load"): --interval 2 (one frame per 0.2 s) or --R 32
+  heavier loads (docs/closed-loop.md, "Under load"): --interval 1 (one frame per 0.2 s) or --R 32
+  L0 / L0-emp without rerunning L2: --arms L0,L0-emp --fit-from <folder of an earlier run that has the L2 arm>
 """
 from __future__ import annotations
 
@@ -43,7 +46,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..")))
 
 from isaaclab_net.core import NRConfig, lena_validation_v2, make_engine  # noqa: E402
 
-ARMS = ("ideal", "L2", "L0", "L1", "L2-legacy", "ns3")
+ARMS = ("ideal", "L2", "L0", "L0-emp", "L1", "L2-legacy", "ns3")
 SIZES = (4000.0, 30000.0)
 STEP_S = 0.1
 TIMEOUT = 20                       # application deadline, control steps (2 s)
@@ -236,6 +239,8 @@ class Ns3Arm:
 
 
 def make_arm(arm, E, R, dev, seed, l0_params=None):
+    """l0_params: {"L0": lognormal params, "L0-emp": quantile-table params} (fitted to the L2 arm)."""
+    l0_params = l0_params or {}
     eseed = int(seed) * 1000 + 1
     app = dict(msg_sizes=SIZES, timeout_steps=TIMEOUT, control_step_ms=STEP_S * 1000, frame_buffer=16, seed=eseed)
     if arm == "ideal":
@@ -243,7 +248,9 @@ def make_arm(arm, E, R, dev, seed, l0_params=None):
     if arm == "L2":
         return EngineArm("L2", "graph", lena_validation_v2(**app), E, R, dev, eseed)
     if arm == "L0":
-        return EngineArm("L0", "graph", NRConfig(**app), E, R, dev, eseed, params=l0_params)
+        return EngineArm("L0", "graph", NRConfig(**app), E, R, dev, eseed, params=l0_params["L0"])
+    if arm == "L0-emp":
+        return EngineArm("L0", "graph", NRConfig(**app), E, R, dev, eseed, params=l0_params["L0-emp"])
     if arm == "L1":
         return EngineArm("L1", "graph", NRConfig(**app), E, R, dev, eseed)
     if arm == "L2-legacy":
@@ -342,6 +349,36 @@ def fit_l0(delays_ms, delivered, resolved):
                                                 l2_delivery_ratio=dr, lognormal_within_deadline=p_in)
 
 
+def fit_l0_emp(delays_ms, delivered, resolved):
+    """L0-emp parameters from the same pooled L2 frames as fit_l0: the L0 level's empirical mode ({"q", "p"}), where q
+    is the sorted pooled sample in control steps, so each delay is resampled i.i.d. from the empirical marginal
+    (inverted CDF, the extreme tail included), and an i.i.d. loss p chosen as in fit_l0 so that L0-emp's delivery
+    ratio, including the sample's share beyond the deadline, equals L2's. Returns the params and 101 summary rows."""
+    x = np.sort(np.asarray(delays_ms, float)) / (STEP_S * 1000.0)
+    p_in = float(np.mean(x < TIMEOUT))
+    dr = delivered / max(resolved, 1)
+    p = float(min(max(1 - dr / max(p_in, 1e-12), 0.0), 1.0))
+    qs = np.quantile(x, np.linspace(0, 1, 101), method="inverted_cdf")
+    rows = [dict(quantile=i / 100, delay_steps=float(v), loss=p, l2_delivery_ratio=dr, sample_within_deadline=p_in,
+                 n_sample=len(x)) for i, v in enumerate(qs)]
+    return {"q": torch.tensor(x, dtype=torch.float32), "p": p}, rows
+
+
+def l2_from_folder(path):
+    """Pooled L2 delays (ms), delivered and resolved frame counts of an earlier run (frames.csv.gz, per_seed.csv)."""
+    d = []
+    with gzip.open(os.path.join(path, "frames.csv.gz"), "rt") as f:
+        for r in csv.DictReader(f):
+            if r["arm"] == "L2":
+                d.append(float(r["delay_ms"]))
+    with open(os.path.join(path, "per_seed.csv")) as f:
+        rows = [r for r in csv.DictReader(f) if r["arm"] == "L2"]
+    if not d or not rows:
+        raise SystemExit(f"{path} has no L2 arm to fit L0 / L0-emp to")
+    dl = sum(int(r["delivered"]) for r in rows)
+    return np.asarray(d), dl, dl + sum(int(r["timed_out"]) for r in rows)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arms", default=",".join(ARMS))
@@ -350,7 +387,9 @@ def main():
     ap.add_argument("--R", type=int, default=16)
     ap.add_argument("--T", type=int, default=300)
     ap.add_argument("--interval", type=int, default=MIN_INTERVAL,
-                    help="minimum control steps between two sends of one robot (5 = 0.5 s)")
+                    help="send counter: 5 = one frame per robot per 0.6 s, 1 = per 0.2 s (docs/closed-loop.md)")
+    ap.add_argument("--fit-from", default=None,
+                    help="fit L0 / L0-emp to the L2 arm of this earlier run folder instead of an L2 arm of this run")
     ap.add_argument("--out", default=os.path.join(HERE, "..", "results", "closedloop"))
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     a = ap.parse_args()
@@ -359,19 +398,27 @@ def main():
     seeds = [int(s) for s in a.seeds.split(",")]
     arms = a.arms.split(",")
     rows, pooled = [], {}
-    l0 = None
+    l0 = {}
     allframes = []
     for arm in arms:
-        if arm == "L0":
-            if "L2" not in pooled:
-                raise SystemExit("L0 is calibrated to the L2 arm: run L2 before L0")
-            l2 = [r for r in rows if r["arm"] == "L2"]
-            l0, fit = fit_l0(pooled["L2"], sum(r["delivered"] for r in l2),
-                             sum(r["delivered"] + r["timed_out"] for r in l2))
-            with open(os.path.join(a.out, "l0_fit.csv"), "w", newline="") as f:
-                w = csv.DictWriter(f, fieldnames=list(fit))
+        if arm in ("L0", "L0-emp"):
+            if a.fit_from:
+                src = l2_from_folder(a.fit_from)
+            elif "L2" in pooled:
+                l2 = [r for r in rows if r["arm"] == "L2"]
+                src = (pooled["L2"], sum(r["delivered"] for r in l2), sum(r["delivered"] + r["timed_out"] for r in l2))
+            else:
+                raise SystemExit(f"{arm} is calibrated to the L2 arm: run L2 before it, or pass --fit-from")
+            if arm == "L0":
+                l0[arm], fit = fit_l0(*src)
+                fit, name = [fit], "l0_fit.csv"
+            else:
+                l0[arm], fit = fit_l0_emp(*src)
+                name = "l0emp_fit.csv"
+            with open(os.path.join(a.out, name), "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=list(fit[0]))
                 w.writeheader()
-                w.writerow(fit)
+                w.writerows(fit)
         ds = []
         ta = time.perf_counter()
         for s in seeds:
@@ -418,8 +465,8 @@ def main():
             for g in grid:
                 w.writerow([arm, f"{g:.4g}", f"{np.searchsorted(x, g, 'right') / max(len(x), 1):.5f}"])
     # pairwise distances, pooled over seeds, plus split-half floors (even vs odd seeds within one arm)
-    pairs = [("L0", "L2"), ("L1", "L2"), ("L2", "ns3"), ("L2-legacy", "ns3"), ("L0", "ns3"), ("L1", "ns3"),
-             ("ideal", "ns3")]
+    pairs = [("L0", "L2"), ("L0-emp", "L2"), ("L1", "L2"), ("L2", "ns3"), ("L2-legacy", "ns3"), ("L0", "ns3"),
+             ("L0-emp", "ns3"), ("L1", "ns3"), ("ideal", "ns3")]
     with open(os.path.join(a.out, "distances.csv"), "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["a", "b", "n_a", "n_b", "w1_ms", "ks"])
@@ -442,7 +489,7 @@ def main():
         if "ns3" in pooled:
             m3 = fr[:, 0] == "ns3"
             od3 = np.array([d for (s, d) in zip(fr[m3, 1], fr[m3, 2]) if s % 2 == 1], float)
-            for arm in ("L2", "L0", "L1", "L2-legacy"):
+            for arm in ("L2", "L0", "L0-emp", "L1", "L2-legacy"):
                 if arm not in pooled:
                     continue
                 m = fr[:, 0] == arm
@@ -453,7 +500,8 @@ def main():
     with open(os.path.join(a.out, "setup.json"), "w") as f:
         json.dump(dict(arms=arms, seeds=seeds, E=a.E, R=a.R, T=a.T, arena_m=ARENA, ni_dbm=NI_DBM,
                        shadow_std_db=SHADOW_STD, min_snr_db=MIN_SNR, send_class_bytes=SIZES[SEND_CLS - 1],
-                       min_interval_steps=a.interval, timeout_steps=TIMEOUT, l0_params=l0,
+                       min_interval_steps=a.interval, timeout_steps=TIMEOUT, fit_from=a.fit_from,
+                       l0_params=l0.get("L0"),
                        device=str(dev), gpu=torch.cuda.get_device_name(0) if dev.type == "cuda" else None,
                        torch=torch.__version__), f, indent=1)
 

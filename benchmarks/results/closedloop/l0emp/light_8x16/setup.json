@@ -1,0 +1,32 @@
+{
+ "arms": [
+  "L0",
+  "L0-emp"
+ ],
+ "seeds": [
+  0,
+  1,
+  2,
+  3,
+  4
+ ],
+ "E": 8,
+ "R": 16,
+ "T": 300,
+ "arena_m": 60.0,
+ "ni_dbm": -101.44,
+ "shadow_std_db": 6.0,
+ "min_snr_db": 7.0,
+ "send_class_bytes": 30000.0,
+ "min_interval_steps": 5,
+ "timeout_steps": 20,
+ "fit_from": "benchmarks/results/closedloop",
+ "l0_params": {
+  "mu": 0.9360933591703348,
+  "sig": 0.2294928723032078,
+  "p": 0.000500547473799462
+ },
+ "device": "cuda",
+ "gpu": "NVIDIA GeForce RTX 4090",
+ "torch": "2.14.0+cu126"
+}

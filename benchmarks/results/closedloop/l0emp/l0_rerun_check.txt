@@ -1,0 +1,2 @@
+L0 rerun vs earlier L0: 105 seed x metric values compared, 1 differ
+('i02_8x16', '4', 'delay_p95_ms', 404.6444091796875, 404.64666748046875)
