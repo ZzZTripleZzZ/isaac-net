@@ -396,7 +396,16 @@ The repository is private while the first paper is in preparation. Collaborators
 
 ## Citation
 
-A paper describing the engine is in preparation. A citation and an arXiv link will be added on release.
+The paper describing Isaac-Net is under submission; an arXiv link will be added when it is posted. Zifan Zhang and Mingzhe Han contributed equally.
+
+```bibtex
+@article{zhang2026isaacnet,
+  title   = {Slot-Level 5G Networks for Massively Parallel Multi-Robot Learning},
+  author  = {Zhang, Zifan and Han, Mingzhe and Athreya, Kannan and Liu, Yuchen},
+  year    = {2026},
+  note    = {Zifan Zhang and Mingzhe Han contributed equally}
+}
+```
 
 ## License
 

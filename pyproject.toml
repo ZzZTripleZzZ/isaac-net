@@ -11,7 +11,12 @@ readme = "README.md"
 license = "BSD-3-Clause"
 # The Sionna BLER tables in core/data are Apache-2.0 and ship with their license file (docs/licensing.md).
 license-files = ["LICENSE", "isaac_net/core/data/LICENSE-*"]
-authors = [{ name = "Zifan Zhang", email = "zhangzifan716@gmail.com" }]
+authors = [
+  { name = "Zifan Zhang", email = "zhangzifan716@gmail.com" },
+  { name = "Mingzhe Han", email = "han.1453@osu.edu" },
+  { name = "Kannan Athreya", email = "kannan@cse.ohio-state.edu" },
+  { name = "Yuchen Liu" },
+]
 requires-python = ">=3.10"
 keywords = ["5G", "NR", "network simulation", "reinforcement learning", "Isaac Lab", "robotics", "GPU", "Wi-Fi"]
 classifiers = [
