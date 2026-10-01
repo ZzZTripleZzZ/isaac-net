@@ -18,43 +18,11 @@
 
 </div>
 
-```mermaid
-flowchart LR
-    subgraph SIM["Isaac Lab or MuJoCo Playground / MJX (E parallel envs)"]
-        SCN["USD scene"]
-        P["physics step<br/>robot poses [E, R, 3]"]
-        POL["policy<br/>actions + messages to send"]
-    end
-    subgraph NET["isaaclab-net engine (all envs at once, one GPU or sharded over several)"]
-        CH["channel<br/>log-distance, TR 38.901, radio map,<br/>blockage, per-robot Doppler"]
-        TRF["traffic<br/>policy messages, periodic, bursty,<br/>video, event-triggered"]
-        BG["background users<br/>per cell"]
-        LVL["fidelity level<br/>L2 NR MAC/PHY, L2-legacy, WIFI,<br/>L0 to L1, surrogates, bounds"]
-        AD["adaptive fidelity<br/>cheap or expensive level per env"]
-        Q["message queues<br/>FIFO, timeouts, deadlines"]
-        EDGE["edge loop<br/>edge servers, return path"]
-        EN["radio energy<br/>and battery"]
-    end
-    subgraph VAL["validation only"]
-        NS3["ns-3 5G-LENA bridges"]
-        OAI["OAI 5G rfsim bridge"]
-    end
-    SCN -- "bake with Sionna RT" --> CH
-    P -- poses --> CH
-    POL -- messages --> TRF
-    TRF --> Q
-    CH --> LVL
-    BG --> LVL
-    Q --> LVL
-    AD -.-> LVL
-    LVL --> EDGE
-    LVL --> EN
-    EDGE -- "delivered, delay, AoI, SINR, action age" --> OBS["observations<br/>and rewards"]
-    EN -- "state of charge" --> OBS
-    OBS --> POL
-    NS3 -. "stands in for the level" .-> LVL
-    OAI -. "stands in for the level" .-> LVL
-```
+<p align="center">
+  <img src="docs/img/overview.png" alt="One control step of isaaclab-net: Isaac Lab environments submit message classes and robot poses, the GPU network engine runs K uplink slots of NR MAC against PHY tables, and per-robot deliveries, delays, AoI and SNR return as observations" width="100%">
+</p>
+
+*One control step. Isaac Lab (left) submits a message class and the robot poses for every environment. The engine (right) keeps queues, radio state and the NR MAC in `[envs, robots, ...]` tensors, runs the K uplink slots of the step, and returns per-robot deliveries, delays, AoI, queue lengths and SNR. The strip shows how D physics substeps and K uplink slots share one control step.*
 
 Parallel robot learning runs thousands of environments on one GPU, but the network between robots and the edge is usually reduced to a fixed or random delay, if it is modeled at all. Packet-level simulators such as ns-3 capture scheduling, retransmissions and contention, but they run one scenario at a time on a CPU, far from the throughput an RL loop needs. `isaaclab-net` closes that gap. Every piece of network state, from each robot's channel and HARQ process to its queued messages, is a fixed-shape tensor with leading dimensions `[envs, robots]`. The engine advances all environments' uplinks slot by slot on the GPU, in lockstep with the physics. A policy therefore trains against queues that build up when the team transmits together, links that degrade as robots move, and retransmissions that stretch delay tails.
 

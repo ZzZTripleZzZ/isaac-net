@@ -4,24 +4,9 @@
 
 Parallel robot learning runs thousands of environments on one GPU, but the network between robots and the edge is usually reduced to a fixed or random delay, if it is modeled at all. Packet-level simulators such as ns-3 capture scheduling, retransmissions and contention, but they run one scenario at a time on a CPU, far from the throughput an RL loop needs. `isaaclab-net` closes that gap. Every piece of network state, from each robot's channel and HARQ process to its queued messages, is a fixed-shape tensor with leading dimensions `[envs, robots]`, and the engine advances the uplinks of all environments slot by slot on the GPU, in lockstep with the physics.
 
-```mermaid
-flowchart LR
-    subgraph SIM["Isaac Lab (E parallel envs)"]
-        P["physics step<br/>robot poses [E, R, 3]"]
-        POL["policy<br/>actions + messages to send"]
-    end
-    subgraph NET["isaaclab-net engine (one GPU, all envs at once)"]
-        RAD["radio<br/>path loss, shadowing, fading"]
-        PHY["PHY abstraction<br/>MCS, BLER"]
-        MAC["MAC per slot<br/>SR/BSR, PF scheduler, HARQ, OLLA"]
-        Q["message queues<br/>FIFO, timeouts"]
-    end
-    P -- poses --> RAD
-    POL -- messages --> Q
-    RAD --> PHY --> MAC --> Q
-    Q -- "delivered, delay, AoI, SINR" --> OBS["observations<br/>and rewards"]
-    OBS --> POL
-```
+![One control step of isaaclab-net](img/overview.png)
+
+*One control step: Isaac Lab submits message classes and robot poses, the engine runs the K uplink slots of the NR MAC with all state in `[envs, robots, ...]` tensors, and per-robot deliveries, delays, AoI and SNR return as observations.*
 
 The package is an early research prototype. These pages are for collaborators who are joining the project.
 
