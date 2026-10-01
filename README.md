@@ -37,7 +37,13 @@ Parallel robot learning runs thousands of environments on one GPU, but the netwo
 
 **Status.** Research prototype, version 0.1.0, packaged as `isaac_net`. One factory builds every fidelity level behind one API: the configurable NR engine with multiple cells, the frozen legacy slot model, a Wi-Fi level, cheaper fluid and delay levels, fitted surrogates and two bounds. Around them sit selectable channel models and radio maps baked from USD scenes, traffic generators, an edge-computing loop, background users, a radio energy model, adaptive fidelity per env and multi-GPU sharding. The Isaac Lab layer and a MuJoCo Playground / MJX backend run all of it, the benchmark suite defines four network-aware multi-robot tasks, and ns-3 5G-LENA and OAI 5G bridges check the engine against a packet-level simulator and a real protocol stack. All speed and scale numbers come from an uncontended campaign on an idle GPU, and the 5G-LENA scheduler and grant mechanisms are engine switches with no fitted parameter. [docs/STATUS.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/STATUS.md) has the details and the open items, and [CHANGELOG.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/CHANGELOG.md) lists what 0.1.0 contains.
 
+**Platforms.** The `isaac_net` package itself is plain Python + PyTorch and runs on both Linux and Windows 11 with an NVIDIA GPU (the reference engines also run on a CPU). The Isaac Lab integration was developed and tested natively on **Windows 11**; Linux is supported through the recipe in [docs/isaac-lab-linux.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/isaac-lab-linux.md). Commands below are given for both: `bash` blocks are Linux, `powershell` blocks are Windows (Windows PowerShell 5.1 or PowerShell 7). Paths written as `~/.cache/isaac_net/...` mean `$HOME\.cache\isaac_net\...` (i.e. `C:\Users\<you>\.cache\isaac_net\...`) on Windows.
+
 ## Install
+
+This installs the standalone package (no Isaac Lab). To use it inside Isaac Lab, follow the [Isaac Lab quick start](#isaac-lab-quick-start) instead, which installs it into Isaac's own environment.
+
+**Linux (bash):**
 
 ```bash
 git clone git@github.com:ZzZTripleZzZ/isaac-net.git && cd isaac-net
@@ -48,7 +54,21 @@ uv pip install isaac-net                            # the released package from 
 uv pip install -e ".[dev]"                          # the isaac_net package, plus pytest, ruff and build
 ```
 
-Linux with an NVIDIA GPU is the main target, and Python 3.10 to 3.12 is supported. Every reference engine also runs on a CPU (`pip install torch --index-url https://download.pytorch.org/whl/cpu`), which is enough for the CPU test suite. Releases are on PyPI as [`isaac-net`](https://pypi.org/project/isaac-net/): `pip install isaac-net` (add `[dev]` for the test tools). Scripts in `prototype/` still work, as thin shims over the package.
+**Windows 11 (PowerShell):**
+
+```powershell
+git clone git@github.com:ZzZTripleZzZ/isaac-net.git
+cd isaac-net
+uv venv --python 3.11
+.venv\Scripts\Activate.ps1                          # if blocked: Set-ExecutionPolicy -Scope Process Bypass
+uv pip install torch --index-url https://download.pytorch.org/whl/cu130   # the PyPI torch wheel is CPU-only on Windows
+uv pip install triton-windows                       # optional: community Triton build, only for the triton backend
+uv pip install isaac-net                            # the released package from PyPI
+# or, from a clone, for development:
+uv pip install -e ".[dev]"                          # the isaac_net package, plus pytest, ruff and build
+```
+
+Linux with an NVIDIA GPU is the main target for the standalone package, and Python 3.10 to 3.12 is supported. Every reference engine also runs on a CPU (`pip install torch --index-url https://download.pytorch.org/whl/cpu`), which is enough for the CPU test suite. Releases are on PyPI as [`isaac-net`](https://pypi.org/project/isaac-net/): `pip install isaac-net` (add `[dev]` for the test tools). Scripts in `prototype/` still work, as thin shims over the package.
 
 | Extra | Adds | For |
 |:---|:---|:---|
@@ -92,7 +112,7 @@ for _ in range(300):                                # one control step = 100 ms 
 
 ## Isaac Lab quick start
 
-Tested natively on Windows 11 with an RTX 4090 (driver 617.14; the CUDA 13.0 build of PyTorch needs 580.88 or newer). For Linux, including clusters without root or with a glibc older than 2.35, see [docs/isaac-lab-linux.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/isaac-lab-linux.md): kit-less Isaac Lab 3.0 on Newton or OV PhysX, where `ISAAC_NET_PHYSICS=newton` (or `ovphysx`) selects the fleet env's physics backend.
+This section is written for **Windows 11** (PowerShell), where the integration was developed and tested natively with an RTX 4090 (driver 617.14; the CUDA 13.0 build of PyTorch needs 580.88 or newer). For **Linux**, including clusters without root or with a glibc older than 2.35, install Isaac Lab with [docs/isaac-lab-linux.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/isaac-lab-linux.md) (kit-less Isaac Lab 3.0 on Newton or OV PhysX, where `ISAAC_NET_PHYSICS=newton` or `ovphysx` selects the fleet env's physics backend); the test, benchmark and training commands after that are given in bash below.
 
 | Component | Version |
 |:---|:---|
@@ -103,7 +123,7 @@ Tested natively on Windows 11 with an RTX 4090 (driver 617.14; the CUDA 13.0 bui
 | Triton | `triton-windows` 3.8.0.post29 (community build, only for the `triton` backend) |
 | RL library | `rsl-rl-lib` 5.5.1 (installed by `isaaclab.bat -i`) |
 
-**Install Isaac Sim and Isaac Lab.** The scripts in `scripts/windows/` follow the Isaac Lab 3.0 page "Python environment with Isaac Sim" (Windows, uv) and keep everything under `C:\isaac5g`. Run them from an Administrator PowerShell in the repository folder:
+**Install Isaac Sim and Isaac Lab (Windows).** The scripts in `scripts/windows/` follow the Isaac Lab 3.0 page "Python environment with Isaac Sim" (Windows, uv) and keep everything under `C:\isaac5g`. Run them from an Administrator PowerShell in the repository folder:
 
 ```powershell
 New-Item -ItemType Directory -Force C:\isaac5g | Out-Null
@@ -116,7 +136,7 @@ powershell -File scripts\windows\04_triton_windows.ps1     # triton-windows, for
 
 `env.ps1` sets `OMNI_KIT_ACCEPT_EULA=YES`, which accepts the NVIDIA Omniverse EULA; read it before you run the scripts. It also moves the per-user caches (Kit, Triton, uv, temp) into `C:\isaac5g\home`. The download is about 40 GB and the install takes about 15 minutes.
 
-**Add the package and run the tests, a benchmark and a short training run:**
+**Add the package and run the tests, a benchmark and a short training run.** Windows (PowerShell):
 
 ```powershell
 . C:\isaac5g\env.ps1                                       # activates the Isaac venv
@@ -126,6 +146,17 @@ uv pip install pytest
 python -m pytest -m isaac tests\test_isaac_env.py
 python benchmarks\isaac\bench.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton --steps 100
 python benchmarks\isaac\train_ppo.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton --iters 5
+```
+
+Linux (bash), with the Isaac Lab venv from [docs/isaac-lab-linux.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/isaac-lab-linux.md) activated:
+
+```bash
+cd isaac-net                                               # this repository
+uv pip install --no-deps -e .                              # --no-deps keeps Isaac's CUDA build of torch
+uv pip install pytest
+python -m pytest -m isaac tests/test_isaac_env.py
+python benchmarks/isaac/bench.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton --steps 100
+python benchmarks/isaac/train_ppo.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton --iters 5
 ```
 
 Isaac Lab 3.0 runs headless by default. The Isaac tests launch one Isaac Sim process per case and take about 1 minute each. On a machine where nobody is logged on at the console, CUDA is available only to jobs that run as SYSTEM: `scripts\windows\systask.ps1` runs a script as a one-shot SYSTEM task, and `scripts\windows\wait.ps1` waits for it and removes the task.
@@ -203,7 +234,12 @@ git clone https://gitlab.com/cttc-lena/nr.git ~/src/nr
 python -m isaac_net.tools.extract_lena_tables ~/src/nr   # writes ~/.cache/isaac_net/lena_eesm_tables.npz
 ```
 
-`ISAAC_NET_LENA_TABLES` points the engine to another location. Keep the generated file out of any redistribution.
+```powershell
+git clone https://gitlab.com/cttc-lena/nr.git $HOME\src\nr
+python -m isaac_net.tools.extract_lena_tables $HOME\src\nr   # writes $HOME\.cache\isaac_net\lena_eesm_tables.npz
+```
+
+`ISAAC_NET_LENA_TABLES` (`export` in bash, `$env:ISAAC_NET_LENA_TABLES = "..."` in PowerShell) points the engine to another location. Keep the generated file out of any redistribution.
 
 ## What the engine models
 
@@ -262,9 +298,15 @@ Every level exposes the same API, so a task switches fidelity by changing one ar
 python -m isaac_net.tools.fit_levels --source L2-legacy --task T1 --backend graph   # ~/.cache/isaac_net/levels/L2-legacy_T1.pt
 ```
 
+```powershell
+python -m isaac_net.tools.fit_levels --source L2-legacy --task T1 --backend graph   # $HOME\.cache\isaac_net\levels\L2-legacy_T1.pt
+```
+
 ```python
 net = make_engine("NN", E, R, dev, params="~/.cache/isaac_net/levels/L2-legacy_T1.pt", backend="graph")
 ```
+
+The `~` in `params` is expanded by Python, so the same string works on Linux and Windows.
 
 `ORACLE` and `NOCOMM` are value-of-information bounds for task design. Run a task under both first: a task in which network fidelity can matter must show a large gap between its `ORACLE` and `NOCOMM` returns. If the gap is small, the policy gains little from what the network delivers, and the task cannot tell fidelity levels apart.
 
