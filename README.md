@@ -400,7 +400,7 @@ The paper describing Isaac-Net is under submission; an arXiv link will be added 
 
 ```bibtex
 @article{zhang2026isaacnet,
-  title   = {Slot-Level 5G Networks for Massively Parallel Multi-Robot Learning},
+  title   = {Network-in-the-Loop at Scale: GPU-Batched 5G Simulation for Massively Parallel Robot Learning},
   author  = {Zhang, Zifan and Han, Mingzhe and Athreya, Kannan and Liu, Yuchen},
   year    = {2026},
   note    = {Zifan Zhang and Mingzhe Han contributed equally}
