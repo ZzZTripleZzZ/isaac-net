@@ -1,5 +1,7 @@
 # isaac-net
 
+![A robot fleet in a warehouse at dusk, with 5G masts among the robot lanes](img/banner-plain.jpg){ .isaac-hero loading=lazy }
+
 **GPU-batched 5G network simulation for massively parallel robot learning: thousands of Isaac Lab environments, tens to hundreds of robots per cell, one GPU, network state stepped in lockstep with physics.**
 
 Parallel robot learning runs thousands of environments on one GPU, but the network between robots and the edge is usually reduced to a fixed or random delay, if it is modeled at all. Packet-level simulators such as ns-3 capture scheduling, retransmissions and contention, but they run one scenario at a time on a CPU, far from the throughput an RL loop needs. `isaac-net` closes that gap. Every piece of network state, from each robot's channel and HARQ process to its queued messages, is a fixed-shape tensor with leading dimensions `[envs, robots]`, and the engine advances the uplinks of all environments slot by slot on the GPU, in lockstep with the physics.

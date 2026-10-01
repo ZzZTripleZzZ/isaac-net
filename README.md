@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>isaac-net</h1>
+<img src="https://raw.githubusercontent.com/ZzZTripleZzZ/isaac-net/main/docs/img/banner.jpg" alt="isaac-net: GPU-batched 5G simulation for massively parallel robot learning" width="100%">
 
 <p><b>GPU-batched 5G and Wi-Fi network simulation for massively parallel robot learning: thousands of Isaac Lab environments, tens to hundreds of robots per cell, one GPU, network state stepped in lockstep with physics.</b></p>
 
@@ -169,6 +169,10 @@ class MyFleetEnv(NetEnvMixin, DirectRLEnv):
 | 2,048 × 128 | 262,144 | 5.38 (5.04–5.61) | 4.08 | 4.11 (3.82–4.34) | 11 / 50 ms |
 | 4,096 × 128 | 524,288 | 2.95 (2.84–3.07) | 2.39 | 2.44 (2.37–2.52) | 23 / 100 ms |
 | 8,192 × 128 | 1,048,576 | 1.50 (1.37–1.57) | 1.51 | 1.24 (1.23–1.24) | 45 / 199 ms |
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ZzZTripleZzZ/isaac-net/main/docs/img/teaser_blender.png" alt="Rendered fleet scene: many arenas, each with its own gNB mast and robot fleet, with an inset comparing robot-steps per second for GPU physics alone, physics with the per-slot 5G uplink, and ns-3 co-simulation" width="85%">
+</p>
 
 One control step is 0.1 s of simulated time. At about one million robots the network runs in the loop at 1.59 million (legacy) and 1.30 million (NR) robot-steps per second, in at most 20 GiB of device memory. The Isaac step is bound by host work. From 524k robots up the validated NR uplink lengthens the step by 40–86% of its isolated cost (about 30% of its GPU work overlaps with host work on average), and the network-off rate varies by 8–14% between processes, so single-run on / off differences of a few percent are not meaningful. Use `graph` for bitwise-reference runs and `triton` for scale. Startup grows about linearly with the number of robots (PhysX cloning), 17–26 minutes at one million robots. End-to-end PPO (rsl_rl, 1,024 × 16, L2-legacy `triton`) ran 30 iterations in 241 s on the earlier shared GPU.
 
