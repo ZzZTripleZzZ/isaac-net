@@ -1,5 +1,6 @@
 site_name: isaaclab-net
 site_description: GPU-batched 5G network simulation for massively parallel robot learning in Isaac Lab
+site_url: https://isaacnet.zifanzhang.com/docs/
 repo_url: https://github.com/ZzZTripleZzZ/isaaclab-net
 repo_name: isaaclab-net
 edit_uri: edit/main/docs/
