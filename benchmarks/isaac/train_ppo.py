@@ -24,8 +24,8 @@ parser.add_argument("--iters", type=int, default=30)
 add_launcher_args(parser)
 _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root
 if _root not in sys.path:
-    sys.path.insert(0, _root)                     # isaaclab_net without `pip install -e .`
-from isaaclab_net.examples.fleet_args import add_net_args, isaac_cfg_from_args  # noqa: E402
+    sys.path.insert(0, _root)                     # isaac_net without `pip install -e .`
+from isaac_net.examples.fleet_args import add_net_args, isaac_cfg_from_args  # noqa: E402
 
 add_net_args(parser)
 args = parser.parse_args()
@@ -37,7 +37,7 @@ def main():
                                     RslRlVecEnvWrapper, check_rsl_rl_version, create_rsl_rl_runner,
                                     handle_deprecated_rsl_rl_cfg)
 
-    from isaaclab_net.examples.isaac_fleet_env import NetFleetEnv, make_cfg
+    from isaac_net.examples.isaac_fleet_env import NetFleetEnv, make_cfg
 
     @configclass
     class FleetPPOCfg(RslRlOnPolicyRunnerCfg):

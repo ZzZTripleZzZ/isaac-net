@@ -10,9 +10,9 @@ import json
 import torch
 
 from common import MC, Traffic, SIZES
-from isaaclab_net.core.proto.netsim import UL_PER_STEP
-from isaaclab_net.core.proto.netsim_mc import NetSlotMC
-from isaaclab_net.core.radio import RadioMC
+from isaac_net.core.proto.netsim import UL_PER_STEP
+from isaac_net.core.proto.netsim_mc import NetSlotMC
+from isaac_net.core.radio import RadioMC
 
 LINE = dict(n_cells=3, cell_layout="custom", cell_positions_m=((25.0, 75.0), (75.0, 75.0), (125.0, 75.0)))
 

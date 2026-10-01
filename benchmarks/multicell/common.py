@@ -5,7 +5,7 @@ import sys
 import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))  # repo root
-from isaaclab_net.core.config import netslot_compat  # noqa: E402
+from isaac_net.core.config import netslot_compat  # noqa: E402
 
 SIZES = (4000.0, 30000.0)
 ARENA = 150.0

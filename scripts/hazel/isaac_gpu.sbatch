@@ -28,10 +28,10 @@ run cartpole_ovphysx isaaclab train --rl_library rsl_rl --task Isaac-Cartpole-Di
 run cartpole_newton_4096 isaaclab train --rl_library rsl_rl --task Isaac-Cartpole-Direct --num_envs 4096 --max_iterations 30 physics=newton_mjwarp
 # 2. our fleet env on each physics backend (bench smoke, then the isaac-marked tests)
 for P in isaacsim_physx newton ovphysx; do
-  run fleet_bench_$P env ISAACLAB_NET_PHYSICS=$P python benchmarks/isaac/bench.py --num_envs 16 --num_robots 4 --level L2-legacy --backend triton --steps 20 --warmup 3 --max_time 60 --out $OUT/fleet_bench.jsonl
+  run fleet_bench_$P env ISAAC_NET_PHYSICS=$P python benchmarks/isaac/bench.py --num_envs 16 --num_robots 4 --level L2-legacy --backend triton --steps 20 --warmup 3 --max_time 60 --out $OUT/fleet_bench.jsonl
 done
 for P in newton ovphysx; do
-  run pytest_isaac_$P env ISAACLAB_NET_PHYSICS=$P python -m pytest -m isaac tests/test_isaac_env.py -v --durations=10
+  run pytest_isaac_$P env ISAAC_NET_PHYSICS=$P python -m pytest -m isaac tests/test_isaac_env.py -v --durations=10
 done
 # 3. core GPU suite in the Isaac Lab env (torch 2.12 cu130, Triton 3.7)
 run pytest_gpu_labenv python -m pytest -m gpu -q

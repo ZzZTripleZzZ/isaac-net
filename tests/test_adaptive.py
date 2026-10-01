@@ -13,10 +13,10 @@ import math
 import pytest
 import torch
 
-from isaaclab_net.core import EdgeConfig, EdgeLoop, NRConfig, make_engine, multicell
-from isaaclab_net.core.adaptive import FIFO, AdaptiveEngine, FidelityConfig, FidelityCurriculum, make_adaptive
-from isaaclab_net.core.proto import netsim as ns
-from isaaclab_net.core.proto.netsim import Requests
+from isaac_net.core import EdgeConfig, EdgeLoop, NRConfig, make_engine, multicell
+from isaac_net.core.adaptive import FIFO, AdaptiveEngine, FidelityConfig, FidelityCurriculum, make_adaptive
+from isaac_net.core.proto import netsim as ns
+from isaac_net.core.proto.netsim import Requests
 
 CFG = NRConfig(seed=11)
 SEED = 11

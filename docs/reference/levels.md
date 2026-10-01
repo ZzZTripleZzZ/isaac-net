@@ -41,27 +41,27 @@ For the surrogates and bounds, `reference` and `eager` run the same graph-safe c
 `TR`, `GE` and `NN` exist only as fits, and `QA` is calibrated by the same tool. The fit rolls out `L2` or `L2-legacy` on the example fleet task under a behavior policy, logs every message through the public API, and writes all four surrogates into one file outside the repository:
 
 ```bash
-python -m isaaclab_net.tools.fit_levels --source L2-legacy --task T1 --device cuda --backend graph
-python -m isaaclab_net.tools.fit_levels --source L2 --preset netslot_compat --task T1 --out ~/fits/T1_nr.pt
+python -m isaac_net.tools.fit_levels --source L2-legacy --task T1 --device cuda --backend graph
+python -m isaac_net.tools.fit_levels --source L2 --preset netslot_compat --task T1 --out ~/fits/T1_nr.pt
 ```
 
-The default location is `~/.cache/isaaclab_net/levels/<source>_<task>.pt`, or `$ISAACLAB_NET_LEVELS_DIR`. The tool refuses a path inside the source tree, and fitted files are never committed. A JSON summary of the fit is written next to the file. Load the file with `params`:
+The default location is `~/.cache/isaac_net/levels/<source>_<task>.pt`, or `$ISAAC_NET_LEVELS_DIR`. The tool refuses a path inside the source tree, and fitted files are never committed. A JSON summary of the fit is written next to the file. Load the file with `params`:
 
 ```python
-net = make_engine("NN", E, R, device, params="~/.cache/isaaclab_net/levels/L2-legacy_T1.pt", backend="graph")
+net = make_engine("NN", E, R, device, params="~/.cache/isaac_net/levels/L2-legacy_T1.pt", backend="graph")
 ```
 
 The file records the message sizes it was fitted with, and `make_engine` refuses an engine whose `msg_sizes` differ. The surrogates share the prototype constants, so the fit tool refuses a source config with a different frame buffer or timeout.
 
-::: isaaclab_net.tools.fit_levels.fit_levels
+::: isaac_net.tools.fit_levels.fit_levels
     options:
       heading_level: 3
 
-::: isaaclab_net.tools.fit_levels.save_fit
+::: isaac_net.tools.fit_levels.save_fit
     options:
       heading_level: 3
 
-::: isaaclab_net.core.levels.load_level_params
+::: isaac_net.core.levels.load_level_params
     options:
       heading_level: 3
 
@@ -69,32 +69,32 @@ The file records the message sizes it was fitted with, and `make_engine` refuses
 
 These classes are what `make_engine` returns for the surrogate and bound levels. Build them through `make_engine`, which checks the config first.
 
-::: isaaclab_net.core.levels.surrogates.NetTR
+::: isaac_net.core.levels.surrogates.NetTR
     options:
       heading_level: 3
       members: false
 
-::: isaaclab_net.core.levels.surrogates.NetGE
+::: isaac_net.core.levels.surrogates.NetGE
     options:
       heading_level: 3
       members: false
 
-::: isaaclab_net.core.levels.surrogates.NetQA
+::: isaac_net.core.levels.surrogates.NetQA
     options:
       heading_level: 3
       members: false
 
-::: isaaclab_net.core.levels.surrogates.NetNN
+::: isaac_net.core.levels.surrogates.NetNN
     options:
       heading_level: 3
       members: false
 
-::: isaaclab_net.core.levels.bounds.NetOracle
+::: isaac_net.core.levels.bounds.NetOracle
     options:
       heading_level: 3
       members: false
 
-::: isaaclab_net.core.levels.bounds.NetNoComm
+::: isaac_net.core.levels.bounds.NetNoComm
     options:
       heading_level: 3
       members: false

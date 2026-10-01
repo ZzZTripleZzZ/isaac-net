@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Load-gap campaign on the lab box (CPU, reference backend): every LoadFixNet arm over the 153 primary-arm runs.
-# Run from a directory holding data/ (lena_extract.py output); REPO points at an isaaclab-net checkout.
-#   ISAACLAB_NET_LENA_TABLES=<local 5G-LENA EESM tables> REPO=... ARMS="pf pipe all" bash run_loadfix.sh
+# Run from a directory holding data/ (lena_extract.py output); REPO points at an isaac-net checkout.
+#   ISAAC_NET_LENA_TABLES=<local 5G-LENA EESM tables> REPO=... ARMS="pf pipe all" bash run_loadfix.sh
 set -u
 REPO=${REPO:-repo}
 REPS=${REPS:-4}

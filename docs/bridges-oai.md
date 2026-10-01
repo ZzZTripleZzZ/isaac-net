@@ -4,7 +4,7 @@ The ns-3 bridges ([bridges.md](bridges.md)) check the GPU engine against another
 
 Like the ns-3 bridges it is a **validation tool and is never part of the training loop**. It runs in lockstep with a control loop at 10 Hz and one UE per robot, so it serves a handful of robots (1–10 UEs were tested), for example one environment of up to ten robots.
 
-The code is in `isaaclab_net/bridges/oai/`, the measurement scripts are in `benchmarks/oai/`, and the tables below are in `benchmarks/oai/results/`.
+The code is in `isaac_net/bridges/oai/`, the measurement scripts are in `benchmarks/oai/`, and the tables below are in `benchmarks/oai/results/`.
 
 ## Summary
 
@@ -37,14 +37,14 @@ git clone --depth 1 --branch 2026.w39 https://github.com/OPENAIRINTERFACE/openai
 (cd oai-src/common/utils/T/tracer && make textlog)
 docker pull oaisoftwarealliance/oai-gnb:2026.w39     # and oai-nr-ue, oai-amf/smf/upf:v2.2.1, trf-gen-cn5g, mysql:9.6
 
-python isaaclab_net/bridges/oai/deploy/make_configs.py --oai oai-src --out run --profile lena_match --n-ue 2 \
+python isaac_net/bridges/oai/deploy/make_configs.py --oai oai-src --out run --profile lena_match --n-ue 2 \
     --gnb-extra="--T_stdout 2 --T_nowait"          # T-tracer on (the bridge's clock), no wait for a tracer
 (cd run && docker compose up -d)                   # UEs attach in about 40 s; `docker ps` shows them healthy
 
 export OAI_TEXTLOG=$PWD/oai-src/common/utils/T/tracer/textlog OAI_T_MESSAGES=$PWD/oai-src/common/utils/T/T_messages.txt
 python - <<'EOF'
-from isaaclab_net.bridges.oai import DockerOaiStack, OaiBridge
-from isaaclab_net.bridges.oai.net import OaiNet
+from isaac_net.bridges.oai import DockerOaiStack, OaiBridge
+from isaac_net.bridges.oai.net import OaiNet
 stack = DockerOaiStack(n_ue=2)                     # agents, telnet channel control, T-tracer clock
 bridge = OaiBridge(stack, step_dt=0.1, pacing="virtual", log_dir="logs/ep0")
 net = OaiNet(1, 2, "cpu", (4000.0, 30000.0), bridge)   # a NetBase: submit / step like any engine
@@ -229,7 +229,7 @@ Every latency and UE-count run was replayed through the NR engine (level `L2`, r
 
 ### The fitted `oai_rfsim` preset
 
-`python -m isaaclab_net.tools.measure.calibrate <campaign> --engine-fit` on the stock-MAC runs, with the configuration facts from the manifests (numerology, bandwidth, TDD, SR period, K2, MCS table, HARQ), the HARQ round trip from the traced retransmissions and a replay fit of `sr_grant_delay_slots` over 16–32 slots with proactive grants off:
+`python -m isaac_net.tools.measure.calibrate <campaign> --engine-fit` on the stock-MAC runs, with the configuration facts from the manifests (numerology, bandwidth, TDD, SR period, K2, MCS table, HARQ), the HARQ round trip from the traced retransmissions and a replay fit of `sr_grant_delay_slots` over 16–32 slots with proactive grants off:
 
 | `sr_grant_delay_slots` | 16 | 20 | 24 | **28** | 32 |
 |:---|---:|---:|---:|---:|---:|
@@ -240,7 +240,7 @@ Every latency and UE-count run was replayed through the NR engine (level `L2`, r
 The fit W1 is dominated by the two 30 kB runs (19 and 41 ms); on the small-frame runs it is 1.7–3.1 ms. The preset file is `oai_like()` with `sr_period_slots = 10`, `sr_grant_delay_slots = 28`, `k2 = 6`, `ul_harq_rtt_slots = 10`, `proactive_grant = "off"`, `proc_offset_ms = 0`, `bler_target = 0.1`, `ul_mcs_max = 28` and `fading = False`, with the provenance of every field. Two things were set by hand: the HARQ round trip comes from the HARQ runs with a working link (the automatic value, 5 slots, was dominated by the run at 35 dB where the link failed), and the link-level knobs are left out, because the fitted values (a link-adaptation offset of 24 dB, a BLER shift of −12 dB and a slope of 0.1 per dB, all at the edges of their grids) describe rfsim's fixed-point decoding, not a radio link.
 
 ```python
-from isaaclab_net.tools.measure.preset import load_preset
+from isaac_net.tools.measure.preset import load_preset
 cfg = load_preset("benchmarks/oai/presets/oai_rfsim.json")
 ```
 
@@ -281,7 +281,7 @@ The fitted preset gets the medians right wherever access dominates, including th
 python benchmarks/oai/campaign.py --oai oai-src --work campaign --phase all     # about 45 min at speed 1
 python benchmarks/oai/campaign.py --oai oai-src --work campaign --phase dmany   # 6, 8 and 10 UEs
 python benchmarks/oai/analyze.py --work campaign --out benchmarks/oai/results
-python -m isaaclab_net.tools.measure.calibrate campaign/campaign_default --out calib --engine-fit --max-s 10 \
+python -m isaac_net.tools.measure.calibrate campaign/campaign_default --out calib --engine-fit --max-s 10 \
     --grid '{"proactive_grant": ["off"], "sr_grant_delay_slots": [16, 20, 24, 28, 32]}'
 python benchmarks/oai/compare_engine.py --work campaign --preset benchmarks/oai/presets/oai_rfsim.json
 python benchmarks/oai/closed_loop.py --steps 100 --robots 2 --preset benchmarks/oai/presets/oai_rfsim.json

@@ -9,11 +9,11 @@ engine L2 is not shard-invariant (global-RNG stepping draws) and says so.
 import pytest
 import torch
 
-from isaaclab_net.core import NRConfig, Requests, make_engine
-from isaaclab_net.core.background import BackgroundConfig
-from isaaclab_net.core.energy import EnergyConfig
-from isaaclab_net.core.proto.rng import CounterRNG
-from isaaclab_net.core.sharded import ShardedEngine
+from isaac_net.core import NRConfig, Requests, make_engine
+from isaac_net.core.background import BackgroundConfig
+from isaac_net.core.energy import EnergyConfig
+from isaac_net.core.proto.rng import CounterRNG
+from isaac_net.core.sharded import ShardedEngine
 
 E, R = 7, 3
 

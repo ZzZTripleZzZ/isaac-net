@@ -1,10 +1,10 @@
-# isaaclab-net
+# isaac-net
 
 **GPU-batched 5G network simulation for massively parallel robot learning: thousands of Isaac Lab environments, tens to hundreds of robots per cell, one GPU, network state stepped in lockstep with physics.**
 
-Parallel robot learning runs thousands of environments on one GPU, but the network between robots and the edge is usually reduced to a fixed or random delay, if it is modeled at all. Packet-level simulators such as ns-3 capture scheduling, retransmissions and contention, but they run one scenario at a time on a CPU, far from the throughput an RL loop needs. `isaaclab-net` closes that gap. Every piece of network state, from each robot's channel and HARQ process to its queued messages, is a fixed-shape tensor with leading dimensions `[envs, robots]`, and the engine advances the uplinks of all environments slot by slot on the GPU, in lockstep with the physics.
+Parallel robot learning runs thousands of environments on one GPU, but the network between robots and the edge is usually reduced to a fixed or random delay, if it is modeled at all. Packet-level simulators such as ns-3 capture scheduling, retransmissions and contention, but they run one scenario at a time on a CPU, far from the throughput an RL loop needs. `isaac-net` closes that gap. Every piece of network state, from each robot's channel and HARQ process to its queued messages, is a fixed-shape tensor with leading dimensions `[envs, robots]`, and the engine advances the uplinks of all environments slot by slot on the GPU, in lockstep with the physics.
 
-![One control step of isaaclab-net](img/overview.png)
+![One control step of isaac-net](img/overview.png)
 
 *One control step: Isaac Lab submits message classes and robot poses, the engine runs the K uplink slots of the NR MAC with all state in `[envs, robots, ...]` tensors, and per-robot deliveries, delays, AoI and SNR return as observations.*
 
@@ -26,10 +26,10 @@ The package is an early research prototype. These pages are for collaborators wh
 ## Install
 
 ```bash
-git clone git@github.com:ZzZTripleZzZ/isaaclab-net.git && cd isaaclab-net
+git clone git@github.com:ZzZTripleZzZ/isaac-net.git && cd isaac-net
 uv venv --python 3.11 && source .venv/bin/activate
 uv pip install torch                                # CUDA build of PyTorch; Triton ships with it on Linux
-uv pip install -e ".[dev]"                          # the isaaclab_net package, plus pytest and ruff
+uv pip install -e ".[dev]"                          # the isaac_net package, plus pytest and ruff
 ```
 
 The fast backends need Linux with an NVIDIA GPU. The reference engines, the tests and the tutorials also run on a CPU. The Isaac Lab installation is described in [Isaac Lab on Windows](isaac-lab.md).

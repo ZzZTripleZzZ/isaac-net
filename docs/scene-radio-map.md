@@ -1,6 +1,6 @@
 # Radio maps from USD scenes
 
-The shelves, walls and racks of an Isaac Lab scene can become the network's channel. `isaaclab_net/tools/scene/` exports the meshes of a USD stage to a Sionna RT scene with ITU-R P.2040 radio materials, bakes a path-gain map with Sionna RT's `RadioMapSolver`, and writes the file that `NRConfig(channel="radio_map")` loads ([channels.md](channels.md#radio_map)). Inside Isaac Lab, one field of `IsaacNetCfg` does all of this when the env is created, and a map that was already baked for the same geometry is loaded from a cache instead.
+The shelves, walls and racks of an Isaac Lab scene can become the network's channel. `isaac_net/tools/scene/` exports the meshes of a USD stage to a Sionna RT scene with ITU-R P.2040 radio materials, bakes a path-gain map with Sionna RT's `RadioMapSolver`, and writes the file that `NRConfig(channel="radio_map")` loads ([channels.md](channels.md#radio_map)). Inside Isaac Lab, one field of `IsaacNetCfg` does all of this when the env is created, and a map that was already baked for the same geometry is loaded from a cache instead.
 
 ```
 USD stage ──export──> Mitsuba XML + PLY per material ──Sionna RT──> gain_db [C, H, W] + bounds ──> RadioMC
@@ -15,7 +15,7 @@ The map is static. Moving robots are not part of it: their bodies are handled at
 
 ```bash
 pip install usd-core sionna-rt            # plus torch (CPU is enough): the package imports it
-python -m isaaclab_net.tools.scene.bake --usd warehouse.usd --tx -5 -8 7 --tx 5 10 7 \
+python -m isaac_net.tools.scene.bake --usd warehouse.usd --tx -5 -8 7 --tx 5 10 7 \
     --fc 3.5 --cell 0.5 --samples 4e6 --depth 5 --los-map --variant llvm --out warehouse_map.pt
 ```
 
@@ -42,19 +42,19 @@ python -m isaaclab_net.tools.scene.bake --usd warehouse.usd --tx -5 -8 7 --tx 5 
 Then use the map:
 
 ```python
-from isaaclab_net import NRConfig, make_engine
+from isaac_net import NRConfig, make_engine
 cfg = NRConfig(channel="radio_map", radio_map_path="warehouse_map.pt", n_cells=2, cell_layout="custom",
                cell_positions_m=((-5.0, -8.0), (5.0, 10.0)))
 eng = make_engine("L2", E, R, "cuda", cfg)
 ```
 
-Isaac Lab loads its assets from an S3 bucket (`ISAAC_NUCLEUS_DIR`). Inside Isaac Sim the Omniverse resolver opens those URLs. Plain `usd-core` cannot, so `python -m isaaclab_net.tools.scene.fetch <url> <dir>` mirrors a USD file and every layer it composes (sublayers, references, payloads, recursively; textures are skipped) and prints the local path.
+Isaac Lab loads its assets from an S3 bucket (`ISAAC_NUCLEUS_DIR`). Inside Isaac Sim the Omniverse resolver opens those URLs. Plain `usd-core` cannot, so `python -m isaac_net.tools.scene.fetch <url> <dir>` mirrors a USD file and every layer it composes (sublayers, references, payloads, recursively; textures are skipped) and prints the local path.
 
 ### Inside Isaac Lab (at env creation)
 
 ```python
-from isaaclab_net.isaac import IsaacNetCfg
-from isaaclab_net.isaac.scene_map import SceneRadioMapCfg
+from isaac_net.isaac import IsaacNetCfg
+from isaac_net.isaac.scene_map import SceneRadioMapCfg
 
 isaac = IsaacNetCfg(pose_asset="robots", gnb_pos=((-5.0, -8.0, 7.0), (5.0, 10.0, 7.0)),
                     scene_map=SceneRadioMapCfg(root="/World/envs/env_0/Warehouse", frame="/World/envs/env_0",
@@ -62,7 +62,7 @@ isaac = IsaacNetCfg(pose_asset="robots", gnb_pos=((-5.0, -8.0, 7.0), (5.0, 10.0,
 self.net_setup("L2-legacy", R, nr, "reference", isaac=isaac)      # in _setup_scene
 ```
 
-With `scene_map` set, `net_setup` calls `isaac.scene_map.resolve_scene_map` before it builds the network. It exports the subtree `root` of the current stage, hashes the exported geometry and materials together with every bake parameter, and loads `<cache>/<key>.pt` if that file exists. Otherwise it bakes, in the same process when `sionna.rt` imports, or else in the interpreter named by `SceneRadioMapCfg.python` or `$ISAACLAB_NET_SIONNA_PYTHON` (which must have `sionna-rt` and torch). It then returns an `NRConfig` with `channel="radio_map"` and one cell per gNB at the gNB positions, and an `IsaacNetCfg` with `radio="engine"`, so the engine's radio samples the map. The cache is `$ISAACLAB_NET_RADIO_MAPS`, or `~/.cache/isaaclab_net/radio_maps`, and the exported scene is kept next to the map (`scene_<hash>/scene.xml`, `manifest.json`).
+With `scene_map` set, `net_setup` calls `isaac.scene_map.resolve_scene_map` before it builds the network. It exports the subtree `root` of the current stage, hashes the exported geometry and materials together with every bake parameter, and loads `<cache>/<key>.pt` if that file exists. Otherwise it bakes, in the same process when `sionna.rt` imports, or else in the interpreter named by `SceneRadioMapCfg.python` or `$ISAAC_NET_SIONNA_PYTHON` (which must have `sionna-rt` and torch). It then returns an `NRConfig` with `channel="radio_map"` and one cell per gNB at the gNB positions, and an `IsaacNetCfg` with `radio="engine"`, so the engine's radio samples the map. The cache is `$ISAAC_NET_RADIO_MAPS`, or `~/.cache/isaac_net/radio_maps`, and the exported scene is kept next to the map (`scene_<hash>/scene.xml`, `manifest.json`).
 
 `SceneRadioMapCfg` fields that are `None` come from the other configs: the transmitters are `IsaacNetCfg.gnb_positions(nr)` (x, y and mast height), the carrier is `NRConfig.carrier_ghz`, the antenna height is `NRConfig.ue_height_m`, and the offset is `IsaacNetCfg.pose_offset_m`. The default `exclude=("*/robot*",)` keeps the robots out of the static map. All envs share env_0's map, so the envs must be clones of one layout.
 
@@ -108,7 +108,7 @@ The stage hash that keys the cache is the SHA-256 of the exported vertices (roun
 
 ## Validation
 
-`python -m isaaclab_net.tools.scene.validate` builds three USD scenes with known geometry (40 m × 20 m, gNB at (10, 10, 4) m, robot antenna at 1.5 m, 3.5 GHz, 0.5 m cells, 4 × 10⁶ rays, depth 4) and compares the baked map with free-space loss and the ITU-R P.2040 single-slab transmission (`materials.slab_transmission_db`, 10.36 dB for 0.1 m of concrete at normal incidence). `tests/test_scene_bake.py` asserts the same comparisons. Behind the wall the values are power averages over 3 × 3 cells, because only about 20 rays reach one cell there. Results with sionna-rt 2.2.0 on the CPU (LLVM, lab box WSL):
+`python -m isaac_net.tools.scene.validate` builds three USD scenes with known geometry (40 m × 20 m, gNB at (10, 10, 4) m, robot antenna at 1.5 m, 3.5 GHz, 0.5 m cells, 4 × 10⁶ rays, depth 4) and compares the baked map with free-space loss and the ITU-R P.2040 single-slab transmission (`materials.slab_transmission_db`, 10.36 dB for 0.1 m of concrete at normal incidence). `tests/test_scene_bake.py` asserts the same comparisons. Behind the wall the values are power averages over 3 × 3 cells, because only about 20 rays reach one cell there. Results with sionna-rt 2.2.0 on the CPU (LLVM, lab box WSL):
 
 | Scene | Points | Map − expected |
 |:---|:---|:---|
@@ -138,7 +138,7 @@ The bake is short. Most of the wall time is the export (per-prim material bindin
 
 ## Demo: the fleet task in Isaac Lab's warehouse
 
-`isaaclab_net/examples/isaac_warehouse_env.py` moves the fleet task of `isaac_fleet_env.py` into `Simple_Warehouse/warehouse_multiple_shelves.usd` (24 m × 38.8 m, 9.3 m high), spawned in every env. The robots are the same velocity-driven spheres. They collide with the shelves, and they spawn and pick goals only in free floor cells, taken from an occupancy grid of the same exported geometry (66% of the floor is free). Two gNBs hang at 7 m, at (−5, −8) and (5, 10) m. `benchmarks/isaac/warehouse_map_demo.py` bakes the map at env creation, then runs one scripted fleet (drive to goal with noise; no message, a 4 kB message or a 30 kB message with probability 0.6, 0.3 and 0.1) three times with the same seeds, under three channels that differ in nothing else:
+`isaac_net/examples/isaac_warehouse_env.py` moves the fleet task of `isaac_fleet_env.py` into `Simple_Warehouse/warehouse_multiple_shelves.usd` (24 m × 38.8 m, 9.3 m high), spawned in every env. The robots are the same velocity-driven spheres. They collide with the shelves, and they spawn and pick goals only in free floor cells, taken from an occupancy grid of the same exported geometry (66% of the floor is free). Two gNBs hang at 7 m, at (−5, −8) and (5, 10) m. `benchmarks/isaac/warehouse_map_demo.py` bakes the map at env creation, then runs one scripted fleet (drive to goal with noise; no message, a 4 kB message or a 30 kB message with probability 0.6, 0.3 and 0.1) three times with the same seeds, under three channels that differ in nothing else:
 
 - `map`: the baked radio map;
 - `logdist`: the default log-distance channel (40 + 35 log10 d, 6 dB shadowing), same cells;

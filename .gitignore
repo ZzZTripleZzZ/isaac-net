@@ -7,7 +7,7 @@ logs/
 fits/
 data/
 # shipped Sionna BLER tables (Apache-2.0)
-!isaaclab_net/core/data/
+!isaac_net/core/data/
 .DS_Store
 *.egg-info/
 .venv/
@@ -27,3 +27,5 @@ docs-requirements.txt
 build/
 dist/
 *.egg-info/
+# mkdocs-jupyter render cache
+.cache/

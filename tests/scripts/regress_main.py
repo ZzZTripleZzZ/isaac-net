@@ -62,7 +62,7 @@ def params_of(level):
 
 
 def run_case(level, backend, device, E, R, steps):
-    from isaaclab_net.core import NRConfig, Requests, make_engine, multicell
+    from isaac_net.core import NRConfig, Requests, make_engine, multicell
     from dataclasses import fields
     has_rng = "rng" in {f.name for f in fields(NRConfig)}
     kw = {"rng": "global"} if has_rng else {}

@@ -19,11 +19,11 @@ import time
 import torch
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _root)                                   # isaaclab_net without `pip install -e .`
+sys.path.insert(0, _root)                                   # isaac_net without `pip install -e .`
 sys.path.insert(0, os.path.join(_root, "tests", "scripts"))  # testlib
-from isaaclab_net.core.proto import netsim  # noqa: E402
-from isaaclab_net.core.proto.netsim import Requests  # noqa: E402
-from isaaclab_net.core.proto.netsim_fast import NetFast  # noqa: E402
+from isaac_net.core.proto import netsim  # noqa: E402
+from isaac_net.core.proto.netsim import Requests  # noqa: E402
+from isaac_net.core.proto.netsim_fast import NetFast  # noqa: E402
 from testlib import SIZES, synthetic_params  # noqa: E402
 
 

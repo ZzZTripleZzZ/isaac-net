@@ -37,9 +37,9 @@ The templates are in `scripts/hazel/` in the repository. They hard-code the Haze
 | Step | Template | Partition | What it does | Time |
 |:---|:---|:---|:---|---:|
 | 0 | (by hand) | login | copy the code: `git archive main \| ssh hazel "tar x -C $B/repo"` (the repository is private and the cluster has no deploy key) | |
-| 1 | `install_core.sbatch` | xfer | fetches the uv binary, creates a Python 3.11 venv, installs torch cu126 and `isaaclab-net[dev]` | 1.7 min |
+| 1 | `install_core.sbatch` | xfer | fetches the uv binary, creates a Python 3.11 venv, installs torch cu126 and `isaac-net[dev]` | 1.7 min |
 | 2 | `core_gpu.sbatch` | gpu | `pytest -m gpu`, `pytest -m "not gpu"`, `benchmarks/bench.py` fast and reference backends, `bench_nr.py` | 10 min |
-| 3 | `install_isaaclab_kitless.sbatch` | xfer | clones Isaac Lab `release/3.0.0`, pulls `python:3.12-bookworm` as a SIF, runs `uv sync --extra rsl-rl --extra ovphysx` inside it, adds `isaaclab-net` (editable, `--no-deps`) and pytest | 6 min |
+| 3 | `install_isaaclab_kitless.sbatch` | xfer | clones Isaac Lab `release/3.0.0`, pulls `python:3.12-bookworm` as a SIF, runs `uv sync --extra rsl-rl --extra ovphysx` inside it, adds `isaac-net` (editable, `--no-deps`) and pytest | 6 min |
 | 4 | `prefetch_assets.sbatch` | xfer | downloads the cloud USD assets the runs need (ground plane, cartpole) into a local mirror | 1 min |
 | 5 | `isaac_gpu.sbatch` | gpu | official cartpole smoke on Newton and OV PhysX, the fleet env on every physics backend, `pytest -m isaac` on Newton and on OV PhysX, the GPU suite in the Isaac env | 15 min |
 | 6 | `isaac_scale.sbatch` (optional) | gpu | fleet-env throughput grid on both kit-less backends, and `bench_nr.py` without the GPL presets | 25 min |
@@ -57,28 +57,28 @@ The commands inside the container are:
 ```bash
 cd $B/IsaacLab            # git clone --branch release/3.0.0 https://github.com/isaac-sim/IsaacLab.git (GIT_LFS_SKIP_SMUDGE=1)
 UV_PROJECT_ENVIRONMENT=$B/envs/lab_ctr uv sync --extra rsl-rl --extra ovphysx
-uv pip install --python $B/envs/lab_ctr/bin/python --no-deps -e $B/repo      # isaaclab-net, keeps Isaac Lab's torch
+uv pip install --python $B/envs/lab_ctr/bin/python --no-deps -e $B/repo      # isaac-net, keeps Isaac Lab's torch
 uv pip install --python $B/envs/lab_ctr/bin/python pytest
 ```
 
 The container is started with `apptainer exec --nv --bind /gpfs_common,/gpfs_common/share:/share $B/sif/py312-bookworm.sif ...`. `--nv` binds the host driver. Both binds are needed on Hazel because `/share` is a symlink into `/gpfs_common`, and without them the container cannot see the venv or the checkout. The venv's interpreter is uv's standalone CPython under `$B`, so the image only has to supply glibc, git (for the two git-sourced Isaac Lab dependencies) and a shell; `python:3.12-bookworm` (350 MB as a SIF) does. The env is only valid inside the container.
 
-A GPU job then runs, from the `isaaclab-net` checkout:
+A GPU job then runs, from the `isaac-net` checkout:
 
 ```bash
 X="apptainer exec --nv --bind /gpfs_common,/gpfs_common/share:/share --pwd $B/repo \
    --env TMPDIR=$B/tmp,ISAACSIM_ASSET_ROOT=$B/assets/Assets/Isaac/6.1,PATH=$B/envs/lab_ctr/bin:/usr/local/bin:/usr/bin:/bin \
    $B/sif/py312-bookworm.sif"
 $X isaaclab train --rl_library rsl_rl --task Isaac-Cartpole-Direct --num_envs 16 --max_iterations 10 physics=newton_mjwarp
-$X env ISAACLAB_NET_PHYSICS=newton python -m pytest -m isaac tests/test_isaac_env.py
-$X env ISAACLAB_NET_PHYSICS=newton python benchmarks/isaac/bench.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton
+$X env ISAAC_NET_PHYSICS=newton python -m pytest -m isaac tests/test_isaac_env.py
+$X env ISAAC_NET_PHYSICS=newton python benchmarks/isaac/bench.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton
 ```
 
 The templates also set `OMNI_KIT_ACCEPT_EULA=YES` for these processes only. This records the project's acceptance of the NVIDIA Omniverse EULA, given for the Windows install and confirmed for these templates. Whether kit-less runs need the variable was not tested.
 
 ### Choosing the physics backend of the fleet env
 
-The fleet env (`isaaclab_net/examples/isaac_fleet_env.py`) used to hard-code `PhysxCfg`, which is PhysX *through Isaac Sim*, so kit-less Isaac Lab refused it with "Isaac Sim is not installed or not found on PYTHONPATH. ... PhysX backend and Kit visualizer currently requires Isaac Sim." `make_cfg(..., physics=...)`, or the environment variable `ISAACLAB_NET_PHYSICS` when it is not passed, now selects one of:
+The fleet env (`isaac_net/examples/isaac_fleet_env.py`) used to hard-code `PhysxCfg`, which is PhysX *through Isaac Sim*, so kit-less Isaac Lab refused it with "Isaac Sim is not installed or not found on PYTHONPATH. ... PhysX backend and Kit visualizer currently requires Isaac Sim." `make_cfg(..., physics=...)`, or the environment variable `ISAAC_NET_PHYSICS` when it is not passed, now selects one of:
 
 | `physics` | Isaac Lab config | Needs Isaac Sim |
 |:---|:---|:---|
@@ -125,12 +125,12 @@ The `triton` backend costs 0.4–2.4 ms per 100 ms control step up to 65,536 rob
 | `isaaclab train ... Isaac-Cartpole-Direct --num_envs 16 --max_iterations 10 physics=newton_mjwarp` | trains, 886 steps/s, 47.5 s training | 163 s (first run, includes Warp kernel compilation) |
 | same, `physics=ovphysx` | trains, about 540 steps/s, 7.2 s training | 74 s |
 | same, `physics=newton_mjwarp`, 4,096 envs × 30 iterations | trains, about 197,000 steps/s, 15.8 s training | 62 s |
-| fleet env, `ISAACLAB_NET_PHYSICS=isaacsim_physx` | fails as expected: "Isaac Sim is not installed" | 13 s |
+| fleet env, `ISAAC_NET_PHYSICS=isaacsim_physx` | fails as expected: "Isaac Sim is not installed" | 13 s |
 | fleet env, `newton`, 16 × 4, L2-legacy `triton` | runs, finite observations | 37 s |
 | fleet env, 64 × 16, sphere height after 120 steps | Newton 0.30–0.32 m before the gravity fix, 0.5 m after; OV PhysX 0.5 m both ways | 17–33 s |
 | fleet env, `ovphysx`, 16 × 4, L2-legacy `triton` | runs, finite observations | 18 s |
-| `pytest -m isaac tests/test_isaac_env.py`, `ISAACLAB_NET_PHYSICS=newton` | **9 passed** | 179 s |
-| same, `ISAACLAB_NET_PHYSICS=ovphysx` | **9 passed** | 107 s |
+| `pytest -m isaac tests/test_isaac_env.py`, `ISAAC_NET_PHYSICS=newton` | **9 passed** | 179 s |
+| same, `ISAAC_NET_PHYSICS=ovphysx` | **9 passed** | 107 s |
 
 The 9 tests include the three bitwise checks: the fleet env's network, fed by live physics poses, equals a reference-engine replay of the recorded poses, sends, tags and RNG stream through partial resets made by DirectRLEnv, at L2-legacy, L1 and L0DR. The network side is therefore validated on Linux with both kit-less physics backends. The physics side is a different simulator from the Windows validation (PhysX through Isaac Sim), so robot trajectories are not comparable across the two.
 
@@ -158,14 +158,14 @@ Isaac Sim 6.1's pip wheels need glibc 2.35, so on RHEL 9 the only Kit route is a
 `pull_isaaclab_container.sbatch` pulls `3.0.0-rc1` into a 12.1 GB SIF in about 50 minutes on the xfer partition. Its first attempt failed because `mksquashfs` was killed at the partition's default memory; 22 GB (the xfer QOS allows 24 GB per user) was enough. `isaacsim_ctr_gpu.sbatch` runs it with `apptainer exec --nv --writable-tmpfs`, `HOME` and Kit's `cache`, `data` and `logs` directories bound to `$B/kit/`, the local asset root, and `OMNI_KIT_ACCEPT_EULA=YES`. The image contains Isaac Sim `6.1.0-rc.26`, Isaac Lab `3.0.0` rc1 (package `isaaclab` 17.0.2), torch 2.11.0+cu128, Triton 3.6.0 and pytest, and its Python is `/isaac-sim/python.sh`. An NVIDIA Vulkan ICD file (`/etc/vulkan/icd.d/nvidia_icd.json`) is present inside the container. The findings were:
 
 - **Kit starts headless and the official smoke run trains**: `isaaclab.sh train --rl_library rsl_rl --task Isaac-Cartpole-Direct --num_envs 16 --max_iterations 10 physics=isaacsim_physx` reached about 600 steps/s, with 14.8 s of training and 116 s for the whole job step. There was no EGL, Vulkan, driver or NGC-authentication problem. Kit only warned that it could not open an X display.
-- **Our fleet env does not start on this image.** `SimulationApp` fails with `AttributeError: module 'omni.usd' has no attribute 'get_context'`, after the warning "Please check to make sure no extra omniverse or pxr modules are imported before the call to SimulationApp(...)". With rc1's Isaac Lab, importing `isaaclab_net.examples.isaac_fleet_env` loads `pxr` (an import probe showed that `isaaclab.sim`, `isaaclab_physx` and our mixins alone do not), and our scripts import the env module before they launch the app, because they need its config to choose the launcher. With `release/3.0.0` the same import does not load `pxr`, which is why the Windows install and the kit-less runs are unaffected. Kit then exits with status 0, so only the missing `CHECK`/`RESULT` line shows the failure, and `pytest -m isaac` reports all 9 cases as failed.
+- **Our fleet env does not start on this image.** `SimulationApp` fails with `AttributeError: module 'omni.usd' has no attribute 'get_context'`, after the warning "Please check to make sure no extra omniverse or pxr modules are imported before the call to SimulationApp(...)". With rc1's Isaac Lab, importing `isaac_net.examples.isaac_fleet_env` loads `pxr` (an import probe showed that `isaaclab.sim`, `isaaclab_physx` and our mixins alone do not), and our scripts import the env module before they launch the app, because they need its config to choose the launcher. With `release/3.0.0` the same import does not load `pxr`, which is why the Windows install and the kit-less runs are unaffected. Kit then exits with status 0, so only the missing `CHECK`/`RESULT` line shows the failure, and `pytest -m isaac` reports all 9 cases as failed.
 - **Binding the `release/3.0.0` checkout over the image's `/workspace/isaaclab` does not help.** The newer Isaac Lab needs a newer Warp than the image ships, and `import isaaclab` fails in `warp.struct` with `TypeError: issubclass() arg 1 must be a class`.
 
 So the Kit route on this cluster needs an image with Isaac Lab `release/3.0.0` on Isaac Sim 6.1.0: either a final `isaac-lab:3.0.0` tag when NVIDIA publishes one, or an image built with Isaac Lab's own `docker/container.py` on a machine with Docker and converted with `apptainer build x.sif docker-archive://x.tar`. The alternative is to make the fleet env module importable without `pxr` on older Isaac Lab versions. Neither was tried. Until then, use the kit-less route on RHEL-type clusters.
 
 ## Ubuntu without a container
 
-On Ubuntu 22.04 or 24.04 (glibc 2.35/2.39), skip Apptainer and run step 3's commands directly: install uv, clone Isaac Lab `release/3.0.0`, `uv sync --extra rsl-rl --extra ovphysx` (add `--extra isaacsim` for Kit), then `uv pip install --no-deps -e <isaaclab-net>`. This was not run here; the only difference from the tested path is the missing container.
+On Ubuntu 22.04 or 24.04 (glibc 2.35/2.39), skip Apptainer and run step 3's commands directly: install uv, clone Isaac Lab `release/3.0.0`, `uv sync --extra rsl-rl --extra ovphysx` (add `--extra isaacsim` for Kit), then `uv pip install --no-deps -e <isaac-net>`. This was not run here; the only difference from the tested path is the missing container.
 
 ## Failure modes seen
 

@@ -115,7 +115,7 @@ ok &= compare("tcp", parse_replies("".join(buf)))
 # 4) the pool front-end itself (ns3pool.Ns3Pool, W = 1), with its default args (flowmon off,
 #    UE-UE filter on); netslot-ref's own placement, so --init is not passed.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
-from isaaclab_net.bridges.ns3_pool.ns3pool import Ns3Pool  # noqa: E402
+from isaac_net.bridges.ns3_pool.ns3pool import Ns3Pool  # noqa: E402
 pool = Ns3Pool(1, int(arg("nUe", 8)), extra_args=common)
 pool.start([None], runs=[int(arg("run", 1))])
 got = {}

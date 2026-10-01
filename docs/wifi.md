@@ -3,8 +3,8 @@
 Warehouse and factory AMR fleets often run on Wi-Fi rather than private 5G. Level `WIFI` models the 802.11 uplink of such a fleet with the same API as every other level, so a task switches between 5G and Wi-Fi with one argument:
 
 ```python
-from isaaclab_net.core import NRConfig, Requests, make_engine
-from isaaclab_net.core.wifi import WifiConfig
+from isaac_net.core import NRConfig, Requests, make_engine
+from isaac_net.core.wifi import WifiConfig
 
 cfg = NRConfig(channel="tr38901_inf_sh",                      # any channel model of docs/channels.md
                wifi=WifiConfig(standard="ax", bandwidth_mhz=40, carrier_ghz=5.2,
@@ -14,7 +14,7 @@ net.submit(None, Requests(send))          # one message per robot per step, as f
 out = net.step(None, poses)               # poses [E,R,2|3]; or SNR [E,R] with one AP; or rx_dbm=[E,R,A]
 ```
 
-`step` returns the dict of every level (`delivered`, `timed_out`, `delay`, `newest`, `queue_len`, `sinr_db`, ...) plus `serving_cell` (the AP), `wifi_mcs`, `wifi_rate_mbps`, `wifi_access_ms` (mean channel-access time), `wifi_p_fail` (failure probability of an attempt) and `wifi_busy` (channel busy fraction as the robot senses it). Messages, the frame buffer, the application timeout and partial resets behave exactly as at the other levels, because the level reuses their FIFO and bookkeeping (`levels/base.LevelNet`). The code is in `isaaclab_net/core/wifi/`.
+`step` returns the dict of every level (`delivered`, `timed_out`, `delay`, `newest`, `queue_len`, `sinr_db`, ...) plus `serving_cell` (the AP), `wifi_mcs`, `wifi_rate_mbps`, `wifi_access_ms` (mean channel-access time), `wifi_p_fail` (failure probability of an attempt) and `wifi_busy` (channel busy fraction as the robot senses it). Messages, the frame buffer, the application timeout and partial resets behave exactly as at the other levels, because the level reuses their FIFO and bookkeeping (`levels/base.LevelNet`). The code is in `isaac_net/core/wifi/`.
 
 The model is a slot-synchronous, fixed-shape approximation of 802.11 channel access. It is not a packet-level 802.11 simulator, and the section [What the model drops](#what-the-model-drops) lists what it leaves out. Its errors against an exact event-driven CSMA/CA simulator, Bianchi's model and ns-3 are in [Validation](#validation).
 
@@ -87,7 +87,7 @@ In each sub-step, the number of successful accesses of a robot is Poisson with m
 
 ## Validation
 
-All numbers below come from `python -m isaaclab_net.core.wifi.validate` (lab box, 8 CPU workers). The event-driven simulator (`core/wifi/eventsim.py`) is the reference for Tables B to E. It keeps the exact slot-level semantics of 802.11 DCF / EDCA in one BSS: per-station AIFS and backoff counters that freeze while the medium is busy, collisions of stations that reach zero in the same slot, binary exponential backoff with the retry limit, post-backoff and immediate access, and the same channel times per access as the model.
+All numbers below come from `python -m isaac_net.core.wifi.validate` (lab box, 8 CPU workers). The event-driven simulator (`core/wifi/eventsim.py`) is the reference for Tables B to E. It keeps the exact slot-level semantics of 802.11 DCF / EDCA in one BSS: per-station AIFS and backoff counters that freeze while the medium is busy, collisions of stations that reach zero in the same slot, binary exponential backoff with the retry limit, post-backoff and immediate access, and the same channel times per access as the model.
 
 ### A. Bianchi's saturation throughput
 
@@ -219,4 +219,4 @@ For training at scale, `substep_ms=2.0` roughly triples the speed for about 8 % 
 
 `tests/test_wifi.py` checks the PHY tables and access timing against hand values, the solver against the exact scalar fixed point and the τ(*p*) identity, Bianchi's curves (regression values), the event-driven simulator against Bianchi's model and the mean-field model against the simulator in saturation and with EDCA, the model against the recorded ns-3 points (Table F), and the level WIFI against the simulator on periodic messages (the bounds of Table D). It also checks the engine API: dict outputs, clocks, conservation (accepted = delivered + timed out + queued) and exact timeouts under overload with retry-limit losses, and partial resets (index and mask) that leave other envs bitwise unaffected with SNR input, poses, and hidden nodes with several APs and background stations. Further checks cover determinism, delay and failure probability monotone in the number of robots, message size, background load and SNR, out-of-range robots, association, co-channel sharing and roaming, hidden nodes with and without RTS/CTS and a user sensing matrix, and EDCA classes in the engine. On a GPU (`gpu` marker), the `graph` backend is bitwise equal to the reference through a partial reset.
 
-`python -m isaaclab_net.core.wifi.validate` regenerates Tables A to F (about 10 minutes on 8 CPU cores; `--quick` for a short run). Table F uses the recorded ns-3 values in `validate.NS3_WIFI_BIANCHI`, so it runs without ns-3.
+`python -m isaac_net.core.wifi.validate` regenerates Tables A to F (about 10 minutes on 8 CPU cores; `--quick` for a short run). Table F uses the recorded ns-3 values in `validate.NS3_WIFI_BIANCHI`, so it runs without ns-3.

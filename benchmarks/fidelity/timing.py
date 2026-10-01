@@ -14,8 +14,8 @@ import time
 
 import torch
 
-from isaaclab_net.core.config import lena_validation
-from isaaclab_net.core.nr_engine import NRNet
+from isaac_net.core.config import lena_validation
+from isaac_net.core.nr_engine import NRNet
 
 
 def main():

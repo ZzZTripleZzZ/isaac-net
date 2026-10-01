@@ -4,7 +4,7 @@ For every RNTI of every run, the median SINR and the median first-transmission M
 RxPacketTrace (fading off and whole-band power, so every TB of a UE sees the same SINR). The engine's rule
 (PHY.select_mcs, 5G-LENA EESM tables, 10% target, 13 symbols) picks the MCS at that SINR for 1 RBG and for all
 RBGs of the carrier. Unlike benchmarks/fidelity/loadfix/mcs_check.py this needs no RNTI-to-UE map. Needs
-ISAACLAB_NET_LENA_TABLES.
+ISAAC_NET_LENA_TABLES.
 
 usage: python mcs_heldout.py <held-out sweep dir> <n_prb> <rbg_size>
 """
@@ -18,8 +18,8 @@ import torch
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from lena_extract import parse_phy  # noqa: E402
 
-from isaaclab_net.core.config import lena_validation_v2  # noqa: E402
-from isaaclab_net.core.phy import PHY  # noqa: E402
+from isaac_net.core.config import lena_validation_v2  # noqa: E402
+from isaac_net.core.phy import PHY  # noqa: E402
 
 
 def main(sweep, n_prb, rbg):

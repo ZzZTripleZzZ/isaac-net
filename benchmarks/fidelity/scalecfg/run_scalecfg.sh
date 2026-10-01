@@ -7,8 +7,8 @@
 #   v2_lumped40      lena_validation_v2(ul_grant_model="lumped", sr_grant_delay_slots=40): v2 minus the SR / BSR
 #                    grant pipeline, the closest configuration the triton kernel accepts
 #   v2_lumped40_fb16 the same with frame_buffer=16, the task's buffer depth: the configuration of the scale runs
-# Run from a directory holding data/ (lena_extract.py output); REPO points at an isaaclab-net checkout.
-#   ISAACLAB_NET_LENA_TABLES=<local 5G-LENA EESM tables> REPO=... bash run_scalecfg.sh
+# Run from a directory holding data/ (lena_extract.py output); REPO points at an isaac-net checkout.
+#   ISAAC_NET_LENA_TABLES=<local 5G-LENA EESM tables> REPO=... bash run_scalecfg.sh
 set -u
 REPO=${REPO:-repo}
 REPS=${REPS:-4}

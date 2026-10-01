@@ -1,6 +1,6 @@
 """MkDocs hook: replace <!-- NRCONFIG_FIELDS --> with tables of every NRConfig field, generated from config.py.
 
-The field list, defaults and descriptions come from the source of isaaclab_net/core/config.py (the inline
+The field list, defaults and descriptions come from the source of isaac_net/core/config.py (the inline
 comments of the dataclass), and the "read by" column from config.fields_read_by, so the page follows the code
 without a hand-kept copy. config.py is loaded by path, so the docs build needs neither torch nor the package.
 """
@@ -13,7 +13,7 @@ import sys
 
 MARKER = "<!-- NRCONFIG_FIELDS -->"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CONFIG_PY = os.path.join(ROOT, "isaaclab_net", "core", "config.py")
+CONFIG_PY = os.path.join(ROOT, "isaac_net", "core", "config.py")
 FIELD = re.compile(r"^    (\w+): ([^=]+?) = (.+)$")
 SECTION = re.compile(r"^    # -+ (.+?) -+\s*$")
 CONT = re.compile(r"^\s{8,}# ?(.*)$")
@@ -21,7 +21,7 @@ NOTE = re.compile(r"^    # (.*)$")
 
 
 def _load_config():
-    spec = importlib.util.spec_from_file_location("_isaaclab_net_config_for_docs", CONFIG_PY)
+    spec = importlib.util.spec_from_file_location("_isaac_net_config_for_docs", CONFIG_PY)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod          # dataclasses look the module up while building the class
     spec.loader.exec_module(mod)

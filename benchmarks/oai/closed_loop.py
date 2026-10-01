@@ -21,12 +21,12 @@ import torch
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", ".."))
 
-from isaaclab_net.bridges.oai import DockerOaiStack, OaiBridge  # noqa: E402
-from isaaclab_net.bridges.oai.bridge import summarize_steps  # noqa: E402
-from isaaclab_net.bridges.oai.net import OaiNet  # noqa: E402
-from isaaclab_net.core.engine import make_engine  # noqa: E402
-from isaaclab_net.core.proto.netsim import Radio  # noqa: E402
-from isaaclab_net.tools.measure.preset import load_preset  # noqa: E402
+from isaac_net.bridges.oai import DockerOaiStack, OaiBridge  # noqa: E402
+from isaac_net.bridges.oai.bridge import summarize_steps  # noqa: E402
+from isaac_net.bridges.oai.net import OaiNet  # noqa: E402
+from isaac_net.core.engine import make_engine  # noqa: E402
+from isaac_net.core.proto.netsim import Radio  # noqa: E402
+from isaac_net.tools.measure.preset import load_preset  # noqa: E402
 
 SIZES = (4000.0, 30000.0)
 

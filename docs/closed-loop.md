@@ -163,7 +163,7 @@ Mean over 5 seeds ± 95% t interval, with the difference to ns-3 in brackets. "P
 
 ## Reproduce
 
-On a machine with a CUDA GPU, the locally generated 5G-LENA tables (`ISAACLAB_NET_LENA_TABLES`) and the lockstep bridge built as in [bridges.md](bridges.md) (`NS3BRIDGE_ROOT`, `NS3_TOOLCHAIN_ENV`):
+On a machine with a CUDA GPU, the locally generated 5G-LENA tables (`ISAAC_NET_LENA_TABLES`) and the lockstep bridge built as in [bridges.md](bridges.md) (`NS3BRIDGE_ROOT`, `NS3_TOOLCHAIN_ENV`):
 
 ```bash
 python benchmarks/closedloop/run_closedloop.py --out benchmarks/results/closedloop

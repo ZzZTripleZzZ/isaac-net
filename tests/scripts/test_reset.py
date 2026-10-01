@@ -26,9 +26,9 @@ _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
 
-from isaaclab_net.core.proto import netsim
-from isaaclab_net.core.proto.netsim import Requests, S
-from isaaclab_net.core.proto.netsim_fast import NetFast
+from isaac_net.core.proto import netsim
+from isaac_net.core.proto.netsim import Requests, S
+from isaac_net.core.proto.netsim_fast import NetFast
 from testlib import SIZES, Workload, drive, is_ref, same, state_names, synthetic_params
 
 OUT_KEYS = ["delivered", "timed_out", "cap", "cls", "delay", "newest", "det_env", "queue_len", "queue_bytes", "t"]

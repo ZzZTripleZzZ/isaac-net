@@ -1,6 +1,6 @@
 """Griffe extension: render the package's plain-text docstrings faithfully in the API reference.
 
-The docstrings of isaaclab_net are written for `help()`: aligned key / meaning lines, `name: text` paragraphs and
+The docstrings of isaac_net are written for `help()`: aligned key / meaning lines, `name: text` paragraphs and
 wrapped prose. Parsed as Markdown they lose their line structure, and a Google-style parser mistakes lines such
 as "config: ..." for sections. This extension keeps every line break (Markdown hard breaks), keeps indentation,
 and escapes the characters Markdown would reinterpret, outside `code spans`. mkdocs.yml pairs it with

@@ -11,8 +11,8 @@
 """
 import torch
 
-from isaaclab_net.core.config import NRConfig
-from isaaclab_net.core.nr_engine import NRNet
+from isaac_net.core.config import NRConfig
+from isaac_net.core.nr_engine import NRNet
 
 E, R = 4, 6
 SIZES = (4000.0, 30000.0)

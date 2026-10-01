@@ -2,7 +2,7 @@
 import pytest
 import torch
 
-from isaaclab_net.core.proto import netsim as ns
+from isaac_net.core.proto import netsim as ns
 from engine_api import F, FIFO_FIELDS, LEVELS, Workload, make_ref, run
 
 

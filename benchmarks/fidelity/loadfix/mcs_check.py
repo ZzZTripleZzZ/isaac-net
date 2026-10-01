@@ -2,7 +2,7 @@
 
 For every primary-arm UE, the engine's link adaptation (lena_validation(), 5G-LENA EESM tables) picks the MCS
 at the UE's whole-band SNR for 1, 2 and 5 RBGs; the script prints the difference to 5G-LENA's median
-first-transmission MCS (lena_per_ue.csv), overall and by SNR band. Needs ISAACLAB_NET_LENA_TABLES.
+first-transmission MCS (lena_per_ue.csv), overall and by SNR band. Needs ISAAC_NET_LENA_TABLES.
 
 usage: python mcs_check.py <data dir of lena_extract (lena_per_ue.csv)>
 """
@@ -13,8 +13,8 @@ import sys
 import numpy as np
 import torch
 
-from isaaclab_net.core.config import lena_validation
-from isaaclab_net.core.phy import PHY
+from isaac_net.core.config import lena_validation
+from isaac_net.core.phy import PHY
 
 
 def main(data):

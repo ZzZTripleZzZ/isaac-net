@@ -3,10 +3,10 @@ coverage and isolation at C = 3, and handover on a drive through three cells."""
 import pytest
 import torch
 
-from isaaclab_net.core import NRConfig, make_engine, multicell
-from isaaclab_net.core.proto.netsim import NI_DBM, S, UL_PER_STEP, NetSlot, Radio
-from isaaclab_net.core.proto.netsim_mc import NetSlotMC
-from isaaclab_net.core.radio import RadioMC
+from isaac_net.core import NRConfig, make_engine, multicell
+from isaac_net.core.proto.netsim import NI_DBM, S, UL_PER_STEP, NetSlot, Radio
+from isaac_net.core.proto.netsim_mc import NetSlotMC
+from isaac_net.core.radio import RadioMC
 
 SIZES = (4000.0, 30000.0)
 MAC = ["bsr", "sr_t", "avg", "olla", "wait", "hcnt"]

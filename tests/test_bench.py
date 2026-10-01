@@ -1,16 +1,16 @@
-"""Benchmark suite (isaaclab_net.bench): task API, specs, metrics, variants, baselines, runner, report (CPU, small)."""
+"""Benchmark suite (isaac_net.bench): task API, specs, metrics, variants, baselines, runner, report (CPU, small)."""
 import json
 import math
 
 import pytest
 import torch
 
-from isaaclab_net.bench import (TASKS, HeuristicPolicy, RandomPolicy, TaskConfig, background_available, evaluate,
+from isaac_net.bench import (TASKS, HeuristicPolicy, RandomPolicy, TaskConfig, background_available, evaluate,
                                 load_results, make_task, mean_ci95, run, train_ppo, variants, write_result)
-from isaaclab_net.bench.cli import main as cli_main
-from isaaclab_net.bench.metrics import NB, bin_edges_ms, delay_bins, hist_quantile
-from isaaclab_net.bench.report import aggregate, markdown
-from isaaclab_net.bench.runner import calibrate
+from isaac_net.bench.cli import main as cli_main
+from isaac_net.bench.metrics import NB, bin_edges_ms, delay_bins, hist_quantile
+from isaac_net.bench.report import aggregate, markdown
+from isaac_net.bench.runner import calibrate
 
 E, R, T = 3, 4, 12
 ROW_KEYS = ("return", "sent", "refused", "deliveries", "drops", "delivery_ratio", "delay_p50_ms", "delay_p95_ms",
@@ -176,7 +176,7 @@ def test_run_write_report_and_cli(tmp_path):
     outs = []
     for s in (0, 1):
         res = run(cfg("fleet_alert", seed=s), "random", "cpu", label="t")
-        assert res["schema"] == "isaaclab-net-bench/1" and res["eval"]["seed"] == s + 10_000
+        assert res["schema"] == "isaac-net-bench/1" and res["eval"]["seed"] == s + 10_000
         outs.append(write_result(res, str(tmp_path)))
     json.loads(open(outs[0]).read())
     rows = aggregate(load_results([str(tmp_path)]))

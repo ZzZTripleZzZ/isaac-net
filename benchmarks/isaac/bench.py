@@ -2,7 +2,7 @@
 
 Usage (from the repository root with the Isaac venv active):
     python benchmarks/isaac/bench.py --num_envs 256 --num_robots 16 --level L2-legacy --backend triton --steps 300
-Network options (isaaclab_net/examples/fleet_args.py): --obs (observation features), --env_decimation,
+Network options (isaac_net/examples/fleet_args.py): --obs (observation features), --env_decimation,
 --net_decimation, --net_substeps, --dr (network domain randomization).
 Random actions (uniform in [-1,1]), so about 1/3 of robot-steps send nothing, 1/3 small, 1/3 large.
 --repeats k times k windows of --steps steps and reports the median window (all windows are kept).
@@ -39,8 +39,8 @@ parser.add_argument("--nr_cfg", default="default", choices=["default", "v2l"],
 add_launcher_args(parser)
 _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root
 if _root not in sys.path:
-    sys.path.insert(0, _root)                     # isaaclab_net without `pip install -e .`
-from isaaclab_net.examples.fleet_args import add_net_args, isaac_cfg_from_args  # noqa: E402
+    sys.path.insert(0, _root)                     # isaac_net without `pip install -e .`
+from isaac_net.examples.fleet_args import add_net_args, isaac_cfg_from_args  # noqa: E402
 
 add_net_args(parser)
 args = parser.parse_args()
@@ -83,10 +83,10 @@ class Sampler(threading.Thread):
 
 def main():
     import torch
-    from isaaclab_net.examples.isaac_fleet_env import NetFleetEnv, make_cfg
+    from isaac_net.examples.isaac_fleet_env import NetFleetEnv, make_cfg
 
-    from isaaclab_net.core.config import lena_validation_v2
-    from isaaclab_net.examples.isaac_fleet_env import F_DEPTH, SIZES, TIMEOUT
+    from isaac_net.core.config import lena_validation_v2
+    from isaac_net.examples.isaac_fleet_env import F_DEPTH, SIZES, TIMEOUT
 
     u_before, m_before = gpu_query()
     nr = None
@@ -160,7 +160,7 @@ def main():
         )
         if env.net is not None:
             # isolated network cost: submit + step on the live module (state keeps evolving; harmless at the end)
-            from isaaclab_net.isaac import TrafficRequest
+            from isaac_net.isaac import TrafficRequest
             with torch.inference_mode():
                 p3 = torch.cat([env._pos_radio(), torch.full((E, args.num_robots, 1), 0.5, device=dev)], -1)
                 send = torch.randint(0, 3, (E, args.num_robots), device=dev)

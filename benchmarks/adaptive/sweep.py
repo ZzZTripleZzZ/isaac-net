@@ -34,9 +34,9 @@ import torch
 
 _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _root)
-from isaaclab_net.core import NRConfig, make_engine  # noqa: E402
-from isaaclab_net.core.adaptive import FidelityConfig, make_adaptive  # noqa: E402
-from isaaclab_net.core.proto.netsim import Requests  # noqa: E402
+from isaac_net.core import NRConfig, make_engine  # noqa: E402
+from isaac_net.core.adaptive import FidelityConfig, make_adaptive  # noqa: E402
+from isaac_net.core.proto.netsim import Requests  # noqa: E402
 
 NB = 40 * 20 + 2            # delay histogram bins: UL slots 0 .. 800 (timeout 20 steps), last bin = overflow
 

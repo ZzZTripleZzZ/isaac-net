@@ -4,11 +4,11 @@ This page says what the repository contains under which license, what you must g
 
 ## The package
 
-`isaaclab-net` is licensed under the BSD 3-Clause License ([`LICENSE`](https://github.com/ZzZTripleZzZ/isaaclab-net/blob/main/LICENSE) at the repository root). This covers all Python code in `isaaclab_net/`, the tests, benchmarks, scripts, documentation and tutorials, and the C++ bridge programs described below.
+`isaac-net` is licensed under the BSD 3-Clause License ([`LICENSE`](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/LICENSE) at the repository root). This covers all Python code in `isaac_net/`, the tests, benchmarks, scripts, documentation and tutorials, and the C++ bridge programs described below.
 
 ## Shipped third-party data: Sionna BLER tables
 
-The only third-party data in the repository are the PHY tables in `isaaclab_net/core/data/sionna_phy_tables.npz`: block error rate curves per MCS and code-block size, and the EESM beta values. They were exported from **NVIDIA Sionna SYS 2.2.0** with `python -m isaaclab_net.tools.export_sionna_tables`, and they are licensed under the **Apache License 2.0**, copyright NVIDIA Corporation & Affiliates. The license text ships next to the data as `isaaclab_net/core/data/LICENSE-sionna-Apache-2.0`, and the package data configuration installs both files together. Keep the license file with the tables whenever you redistribute them. The engine itself never imports Sionna.
+The only third-party data in the repository are the PHY tables in `isaac_net/core/data/sionna_phy_tables.npz`: block error rate curves per MCS and code-block size, and the EESM beta values. They were exported from **NVIDIA Sionna SYS 2.2.0** with `python -m isaac_net.tools.export_sionna_tables`, and they are licensed under the **Apache License 2.0**, copyright NVIDIA Corporation & Affiliates. The license text ships next to the data as `isaac_net/core/data/LICENSE-sionna-Apache-2.0`, and the package data configuration installs both files together. Keep the license file with the tables whenever you redistribute them. The engine itself never imports Sionna.
 
 ## 5G-LENA tables: generated locally, never committed
 
@@ -16,14 +16,14 @@ The `lena_like()` and `lena_validation()` presets (`bler_source="lena"`) use the
 
 ```bash
 git clone https://gitlab.com/cttc-lena/nr.git ~/src/nr
-python -m isaaclab_net.tools.extract_lena_tables ~/src/nr   # writes ~/.cache/isaaclab_net/lena_eesm_tables.npz
+python -m isaac_net.tools.extract_lena_tables ~/src/nr   # writes ~/.cache/isaac_net/lena_eesm_tables.npz
 ```
 
-The extraction script is our own code and copies no 5G-LENA code. It parses the numeric curves from your checkout and writes the table outside the source tree (`~/.cache/isaaclab_net/`, or `$ISAACLAB_NET_LENA_TABLES`). `.gitignore` blocks `*lena_eesm_tables*.npz`. Never commit the generated file and never include it in a redistribution of this package.
+The extraction script is our own code and copies no 5G-LENA code. It parses the numeric curves from your checkout and writes the table outside the source tree (`~/.cache/isaac_net/`, or `$ISAAC_NET_LENA_TABLES`). `.gitignore` blocks `*lena_eesm_tables*.npz`. Never commit the generated file and never include it in a redistribution of this package.
 
 ## ns-3 bridge programs: BSD-3 source, GPL-bound binaries
 
-The C++ programs in `isaaclab_net/bridges/ns3/` (`lockstep/netslot-bridge.cc`, `pool/netslot-bridge.cc`) and their build scripts are our own code, written against the ns-3 and 5G-LENA APIs, and are licensed under BSD-3 like the rest of the repository. No ns-3 or 5G-LENA source is copied into them or vendored anywhere in the repository.
+The C++ programs in `isaac_net/bridges/ns3/` (`lockstep/netslot-bridge.cc`, `pool/netslot-bridge.cc`) and their build scripts are our own code, written against the ns-3 and 5G-LENA APIs, and are licensed under BSD-3 like the rest of the repository. No ns-3 or 5G-LENA source is copied into them or vendored anywhere in the repository.
 
 To run them, you compile them against a local ns-3.48 + 5G-LENA v5.1 build. ns-3 and 5G-LENA are licensed under GPL-2.0, so **a binary built from these programs is a combined work covered by the GPL**, even though the source in this repository is not. Build such binaries locally and do not distribute them with this package. If you do distribute one, the GPL obligations of ns-3 and 5G-LENA apply to it. The same holds for the ns3-ai shared-memory module used by the optional shared-memory transport. `.gitignore` blocks the build outputs (`bin/`, `obj/`, `*.so`).
 

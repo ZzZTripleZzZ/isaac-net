@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Full fidelity campaign on the lab box (CPU only, reference backend). Run from the directory that holds
-# data/ (lena_extract.py output); REPO points at an isaaclab-net checkout. Results go to replay/<arm>/.
-#   ISAACLAB_NET_LENA_TABLES=<local 5G-LENA EESM tables> REPO=... bash run_all.sh
+# data/ (lena_extract.py output); REPO points at an isaac-net checkout. Results go to replay/<arm>/.
+#   ISAAC_NET_LENA_TABLES=<local 5G-LENA EESM tables> REPO=... bash run_all.sh
 set -u
 REPO=${REPO:-repo}
 REPS=${REPS:-4}

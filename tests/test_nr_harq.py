@@ -21,9 +21,9 @@ is resolved (decoded, or lost in drop mode). Checks:
 import pytest
 import torch
 
-from isaaclab_net.core.config import NRConfig, oai_like
-from isaaclab_net.core.mac import MacLink
-from isaaclab_net.core.nr_engine import NRNet
+from isaac_net.core.config import NRConfig, oai_like
+from isaac_net.core.mac import MacLink
+from isaac_net.core.nr_engine import NRNet
 
 dev = "cpu"
 E, R = 8, 6

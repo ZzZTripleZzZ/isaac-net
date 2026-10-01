@@ -1,4 +1,4 @@
-"""USD scene -> Sionna RT scene -> radio map (isaaclab_net/tools/scene, isaaclab_net/isaac/scene_map.py).
+"""USD scene -> Sionna RT scene -> radio map (isaac_net/tools/scene, isaac_net/isaac/scene_map.py).
 
 Pure-numpy parts (material rules, slab formula, PLY/XML writer, hole filling, map files, the Isaac config hook) run
 everywhere. The exporter tests need `pxr` (usd-core) and are skipped without it; the bake validation needs sionna-rt
@@ -11,11 +11,11 @@ import numpy as np
 import pytest
 import torch
 
-from isaaclab_net import NRConfig
-from isaaclab_net.tools.scene.bake import bake_key, fill_holes, read_map, write_map
-from isaaclab_net.tools.scene.materials import (MaterialRules, free_space_gain_db, keyword_material,
+from isaac_net import NRConfig
+from isaac_net.tools.scene.bake import bake_key, fill_holes, read_map, write_map
+from isaac_net.tools.scene.materials import (MaterialRules, free_space_gain_db, keyword_material,
                                                 slab_transmission_db, tokens)
-from isaaclab_net.tools.scene.mitsuba_writer import read_ply, write_ply, write_scene
+from isaac_net.tools.scene.mitsuba_writer import read_ply, write_ply, write_scene
 
 
 # ------------------------------------------------------------------------------------------------ materials
@@ -100,7 +100,7 @@ def _fake_map(C=2, H=6, W=8):
 
 @pytest.mark.parametrize("suffix", [".pt", ".npz"])
 def test_map_file_roundtrip(tmp_path, suffix):
-    from isaaclab_net.core.channels.radio_map import RadioMap
+    from isaac_net.core.channels.radio_map import RadioMap
     m = _fake_map()
     p = write_map(str(tmp_path / f"m{suffix}"), m)
     d = read_map(p)
@@ -114,9 +114,9 @@ def test_map_file_roundtrip(tmp_path, suffix):
 
 # ------------------------------------------------------------------------------------------------ Isaac hook
 def test_apply_scene_radio_map_and_engine(tmp_path):
-    from isaaclab_net import make_engine
-    from isaaclab_net.isaac import IsaacNetCfg
-    from isaaclab_net.isaac.scene_map import SceneRadioMapCfg, apply_scene_radio_map
+    from isaac_net import make_engine
+    from isaac_net.isaac import IsaacNetCfg
+    from isaac_net.isaac.scene_map import SceneRadioMapCfg, apply_scene_radio_map
 
     p = write_map(str(tmp_path / "m.pt"), _fake_map())
     isaac = IsaacNetCfg(gnb_pos=((2.0, 5.0, 6.0), (12.0, 5.0, 6.0)), scene_map=SceneRadioMapCfg())
@@ -131,9 +131,9 @@ def test_apply_scene_radio_map_and_engine(tmp_path):
 
 def test_mixin_hook_uses_cached_map(tmp_path, monkeypatch):
     """net_setup with IsaacNetCfg.scene_map: resolve_scene_map runs before the network is built."""
-    import isaaclab_net.isaac.scene_map as sm
-    from isaaclab_net.isaac import IsaacNetCfg
-    from isaaclab_net.isaac.mixins import NetEnvMixin
+    import isaac_net.isaac.scene_map as sm
+    from isaac_net.isaac import IsaacNetCfg
+    from isaac_net.isaac.mixins import NetEnvMixin
 
     p = write_map(str(tmp_path / "m.pt"), _fake_map())
     calls = []
@@ -162,7 +162,7 @@ def test_mixin_hook_uses_cached_map(tmp_path, monkeypatch):
 # ------------------------------------------------------------------------------------------------ exporter (pxr)
 def _arena(tmp_path, name="a.usda", **kw):
     pytest.importorskip("pxr")
-    from isaaclab_net.tools.scene.synthetic import box_arena_usd
+    from isaac_net.tools.scene.synthetic import box_arena_usd
     path = str(tmp_path / name)
     box_arena_usd(path, **kw)
     return path
@@ -175,7 +175,7 @@ def _corners(scene_dir, mat):
 
 
 def test_export_synthetic_arena(tmp_path):
-    from isaaclab_net.tools.scene.usd_export import export_usd
+    from isaac_net.tools.scene.usd_export import export_usd
     usd = _arena(tmp_path, L=40, W=20, H=6, wall_x=20.0, wall_y1=14.0)
     r = export_usd(usd, str(tmp_path / "s"))
     assert r.n_prims == 6 and r.n_triangles == 2 + 5 * 12
@@ -191,7 +191,7 @@ def test_export_synthetic_arena(tmp_path):
 
 
 def test_export_units_up_axis_frame_offset(tmp_path):
-    from isaaclab_net.tools.scene.usd_export import export_usd
+    from isaac_net.tools.scene.usd_export import export_usd
     a = export_usd(_arena(tmp_path, "z.usda"), str(tmp_path / "z"))
     b = export_usd(_arena(tmp_path, "y.usda", meters_per_unit=0.01, up_axis="Y"), str(tmp_path / "y"))
     assert b.meters_per_unit == 0.01 and b.up_axis == "Y"
@@ -219,7 +219,7 @@ def test_export_filters_and_mapping(tmp_path):
     pytest.importorskip("pxr")
     from pxr import Usd, UsdGeom
 
-    from isaaclab_net.tools.scene.usd_export import export_usd
+    from isaac_net.tools.scene.usd_export import export_usd
     usd = _arena(tmp_path, extra={"Shelf_01": (10, 5, 1, 1, 4, 2, "rack"), "Box_02": (30, 5, 0.5, 1, 1, 1, "")})
     r = export_usd(usd, str(tmp_path / "a"))
     assert r.materials["metal"]["prims"] == 1 and r.materials["wood"]["prims"] == 1
@@ -246,7 +246,7 @@ def test_export_point_instancer_and_gprims(tmp_path):
     pytest.importorskip("pxr")
     from pxr import Gf, Usd, UsdGeom, Vt
 
-    from isaaclab_net.tools.scene.usd_export import export_usd
+    from isaac_net.tools.scene.usd_export import export_usd
     st = Usd.Stage.CreateInMemory()
     UsdGeom.SetStageUpAxis(st, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(st, 1.0)
@@ -267,7 +267,7 @@ def test_export_point_instancer_and_gprims(tmp_path):
 
 
 def test_cli_export_only(tmp_path, capsys):
-    from isaaclab_net.tools.scene.bake import main
+    from isaac_net.tools.scene.bake import main
     usd = _arena(tmp_path)
     main(["--usd", usd, "--scene-dir", str(tmp_path / "s"), "--export-only", "--map", "*/innerwall=glass",
           "--thickness", "glass=0.01"])

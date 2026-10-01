@@ -19,7 +19,7 @@ import time
 
 import sys  # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))  # repo root
-from isaaclab_net.bridges.ns3_pool.ns3pool import BIN, DEFAULT_ARGS  # noqa: E402
+from isaac_net.bridges.ns3_pool.ns3pool import BIN, DEFAULT_ARGS  # noqa: E402
 
 
 def run(R, dur, port, seed=0, p_small=0.25, p_large=0.05, hold_ms=20.0, L=60.0, move=True, lag_file=None):

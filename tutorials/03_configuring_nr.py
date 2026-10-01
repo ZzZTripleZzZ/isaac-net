@@ -28,9 +28,9 @@
 # %%
 import torch
 
-from isaaclab_net import NRConfig, Requests, make_engine
-from isaaclab_net.core import lena_like, multicell, netslot_compat, oai_like, srsran_like
-from isaaclab_net.core.config import fields_read_by
+from isaac_net import NRConfig, Requests, make_engine
+from isaac_net.core import lena_like, multicell, netslot_compat, oai_like, srsran_like
+from isaac_net.core.config import fields_read_by
 
 E, R, dev = 4, 6, torch.device("cpu")
 

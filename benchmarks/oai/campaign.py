@@ -26,10 +26,10 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", ".."))
 
-from isaaclab_net.bridges.oai import DockerOaiStack, OaiBridge  # noqa: E402
-from isaaclab_net.bridges.oai.deploy import make_configs  # noqa: E402
-from isaaclab_net.bridges.oai.vclock import load_vtime_csv, map_wall_to_virtual  # noqa: E402
-from isaaclab_net.tools.measure import probe  # noqa: E402
+from isaac_net.bridges.oai import DockerOaiStack, OaiBridge  # noqa: E402
+from isaac_net.bridges.oai.deploy import make_configs  # noqa: E402
+from isaac_net.bridges.oai.vclock import load_vtime_csv, map_wall_to_virtual  # noqa: E402
+from isaac_net.tools.measure import probe  # noqa: E402
 
 T_EVENTS = ["GNB_MAC_UL", "GNB_MAC_UL_PDU_WITH_DATA", "GNB_MAC_PUSCH_POWER_CONTROL", "GNB_MAC_LCID_UL"]
 MAC_CFGS = {"default": {}, "sr": {"ulsch_max_frame_inactivity": "1000"},

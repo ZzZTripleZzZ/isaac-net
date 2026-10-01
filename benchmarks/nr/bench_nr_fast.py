@@ -24,7 +24,7 @@ import time
 
 import torch
 
-from isaaclab_net.core import NRConfig, Requests, make_engine, multicell
+from isaac_net.core import NRConfig, Requests, make_engine, multicell
 
 SIZES = (4000.0, 30000.0)
 CFGS = {"ul": lambda: NRConfig(), "ul_dl": lambda: NRConfig(dl=True),

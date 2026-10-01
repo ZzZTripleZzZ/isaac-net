@@ -15,8 +15,8 @@ import time
 
 import torch
 
-from isaaclab_net.core import NRConfig, Requests, make_engine
-from isaaclab_net.core.sharded import ShardedEngine
+from isaac_net.core import NRConfig, Requests, make_engine
+from isaac_net.core.sharded import ShardedEngine
 
 
 def drive(net, E, R, dev, steps, seed=0, resets=True):

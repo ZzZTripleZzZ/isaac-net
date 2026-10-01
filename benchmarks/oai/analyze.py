@@ -28,8 +28,8 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", ".."))
 
-from isaaclab_net.tools.measure import ingest, owd  # noqa: E402
-from isaaclab_net.tools.measure.calibrate import harq_chains  # noqa: E402
+from isaac_net.tools.measure import ingest, owd  # noqa: E402
+from isaac_net.tools.measure.calibrate import harq_chains  # noqa: E402
 
 SLOT_MS = 0.5
 
@@ -88,7 +88,7 @@ def air_time(rows, rd):
     (vtime.csv: v = absolute slot index x 0.5 ms), so a row's frame / slot, unwrapped near its own mapped timestamp,
     gives the time of that slot on the same axis as the probe timestamps. The rows' own timestamps are the gNB's
     processing times, which lead the air time for scheduling decisions and trail it for decoding."""
-    from isaaclab_net.bridges.oai.vclock import load_vtime_csv
+    from isaac_net.bridges.oai.vclock import load_vtime_csv
     w, v = load_vtime_csv(os.path.join(rd, "vtime.csv"))
     w0, v0 = int(w[0]) / 1e9, float(v[0])
     cyc = 1024 * 20
@@ -224,7 +224,7 @@ def main(argv=None):
     runs, tabs = [], {}
     for cfg, rd in runs_of(a.work):
         if a.no_reparse and os.path.isdir(os.path.join(rd, "unified")):
-            from isaaclab_net.tools.measure.schema import TABLES, read_table
+            from isaac_net.tools.measure.schema import TABLES, read_table
             tabs[rd] = {t: read_table(os.path.join(rd, "unified", f"{t}.csv"), t) for t in TABLES}
         else:
             tabs[rd], _ = ingest.ingest_run(rd)

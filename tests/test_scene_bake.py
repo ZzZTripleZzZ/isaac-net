@@ -18,15 +18,15 @@ import os
 import numpy as np
 import pytest
 
-VARIANT = os.environ.get("ISAACLAB_NET_SIONNA_VARIANT", "llvm")   # llvm = CPU; cuda needs OptiX
+VARIANT = os.environ.get("ISAAC_NET_SIONNA_VARIANT", "llvm")   # llvm = CPU; cuda needs OptiX
 pytest.importorskip("pxr")
 pytest.importorskip("mitsuba").set_variant(f"{VARIANT}_ad_mono_polarized")   # before Sionna registers its plugins
 pytest.importorskip("sionna.rt")
 
-from isaaclab_net.tools.scene.bake import bake_scene  # noqa: E402
-from isaaclab_net.tools.scene.materials import free_space_gain_db, slab_transmission_db  # noqa: E402
-from isaaclab_net.tools.scene.synthetic import box_arena_usd  # noqa: E402
-from isaaclab_net.tools.scene.usd_export import export_usd  # noqa: E402
+from isaac_net.tools.scene.bake import bake_scene  # noqa: E402
+from isaac_net.tools.scene.materials import free_space_gain_db, slab_transmission_db  # noqa: E402
+from isaac_net.tools.scene.synthetic import box_arena_usd  # noqa: E402
+from isaac_net.tools.scene.usd_export import export_usd  # noqa: E402
 
 pytestmark = pytest.mark.slow
 

@@ -9,9 +9,9 @@ import json
 import torch
 
 from common import MC, SIZES, Traffic
-from isaaclab_net.core.nr_engine import NRNet
-from isaaclab_net.core.proto.netsim_mc import NetSlotMC
-from isaaclab_net.core.radio import RadioMC
+from isaac_net.core.nr_engine import NRNet
+from isaac_net.core.proto.netsim_mc import NetSlotMC
+from isaac_net.core.radio import RadioMC
 
 LOADS = {"L1.2k": (0.3, 0.0), "L4k": (1.0, 0.0), "L8.4k": (0.6, 0.2), "L15k": (0.0, 0.5), "L30k": (0.0, 1.0)}
 

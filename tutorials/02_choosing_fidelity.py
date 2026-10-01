@@ -26,7 +26,7 @@ import tempfile
 
 import torch
 
-from isaaclab_net import LEVELS, NRConfig, Requests, make_engine
+from isaac_net import LEVELS, NRConfig, Requests, make_engine
 
 print("levels:", LEVELS)
 E, R, T, dev = 8, 4, 60, torch.device("cpu")
@@ -117,7 +117,7 @@ for level in ("ORACLE", "NOCOMM"):
 # command-line tool writes one parameter file outside the repository:
 #
 # ```bash
-# python -m isaaclab_net.tools.fit_levels --source L2-legacy --task T1 --device cuda --backend graph
+# python -m isaac_net.tools.fit_levels --source L2-legacy --task T1 --device cuda --backend graph
 # ```
 #
 # The same fit is available as a function. The call below uses a toy size (4 envs, 2 training episodes of 30
@@ -125,7 +125,7 @@ for level in ("ORACLE", "NOCOMM"):
 # defaults (64 envs x 16 robots, 12 episodes of 300 steps) and takes minutes on a GPU.
 
 # %%
-from isaaclab_net.tools import fit_levels as fl  # noqa: E402
+from isaac_net.tools import fit_levels as fl  # noqa: E402
 
 fit, info = fl.fit_levels("L2-legacy", E=4, R=4, episodes=2, test_episodes=1, T=30, sizes=cfg.msg_sizes,
                           device="cpu", nn_steps=20, qa_envs=4, qa_etas=(0.7, 1.0), log=lambda *a: None)
@@ -134,7 +134,7 @@ print("fitted levels:", sorted(k for k in fit if k != "meta"), "| meta:", fit["m
 # %% [markdown]
 # `save_fit` writes the file and a JSON summary next to it, and it refuses any path inside the source tree:
 # fitted parameters never go into the repository. The default location is
-# `~/.cache/isaaclab_net/levels/<source>_<task>.pt`, or `$ISAACLAB_NET_LEVELS_DIR`.
+# `~/.cache/isaac_net/levels/<source>_<task>.pt`, or `$ISAAC_NET_LEVELS_DIR`.
 
 # %%
 tmp = tempfile.mkdtemp()

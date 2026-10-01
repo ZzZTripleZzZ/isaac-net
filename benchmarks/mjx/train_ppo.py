@@ -40,7 +40,7 @@ def main():
     from brax.training.agents.ppo import train as ppo
     from mujoco_playground import wrapper
 
-    from isaaclab_net.examples.mjx_fleet_env import MJXFleetEnv, default_config
+    from isaac_net.examples.mjx_fleet_env import MJXFleetEnv, default_config
 
     def make(n):
         c = default_config()

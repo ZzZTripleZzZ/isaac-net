@@ -1,6 +1,6 @@
 # Real-network measurement protocol
 
-This page is a runbook for one afternoon of measurements on a private 5G cell (srsRAN Project or OpenAirInterface, up to 4 UEs) and on POWDER (up to 2 UEs). The data it produces calibrates and validates the three layers of the NR engine (`L2`) that public data could not reach ([calibration-public-data.md](calibration-public-data.md), "What public data could not validate", items 1–4 and 7): the uplink latency structure (SR, grants, HARQ timing, processing offset), link adaptation and HARQ statistics against SINR, and multi-UE contention. The parsers, the probe tool and the calibration script are in `isaaclab_net/tools/measure/`, and the calibration writes an `NRConfig` preset file that `make_engine` loads directly.
+This page is a runbook for one afternoon of measurements on a private 5G cell (srsRAN Project or OpenAirInterface, up to 4 UEs) and on POWDER (up to 2 UEs). The data it produces calibrates and validates the three layers of the NR engine (`L2`) that public data could not reach ([calibration-public-data.md](calibration-public-data.md), "What public data could not validate", items 1–4 and 7): the uplink latency structure (SR, grants, HARQ timing, processing offset), link adaptation and HARQ statistics against SINR, and multi-UE contention. The parsers, the probe tool and the calibration script are in `isaac_net/tools/measure/`, and the calibration writes an `NRConfig` preset file that `make_engine` loads directly.
 
 The channel layers (items 5 and 6: indoor path loss, shadowing, fading against speed) need a spatial survey and are outside this afternoon. An optional add-on is sketched at the end.
 
@@ -112,9 +112,9 @@ One-way delay needs the sender and receiver clocks to agree to well below the qu
 
 ```bash
 # receiver on the core host, data-network side of the UPF
-python -m isaaclab_net.tools.measure.probe recv --port 5201 --duration 75 --out rx_ue1.csv
+python -m isaac_net.tools.measure.probe recv --port 5201 --duration 75 --out rx_ue1.csv
 # sender on the UE side, bound to the PDU-session address
-python -m isaaclab_net.tools.measure.probe send --dst 10.45.0.1 --bind 10.45.0.2 --profile cbr \
+python -m isaac_net.tools.measure.probe send --dst 10.45.0.1 --bind 10.45.0.2 --profile cbr \
     --size 1000 --rate 50 --duration 60 --out tx_ue1.csv
 ```
 
@@ -219,7 +219,7 @@ The OpenTwin POWDER profile (`NICELabExp,opentwin-matrix`, source in the OpenTwi
 
 ## Unified schema
 
-`python -m isaaclab_net.tools.measure.ingest CAMPAIGN` parses every run and writes four tables to `CAMPAIGN/unified/` as CSV (and Parquet when `pyarrow` is installed), plus `runs.json` with the manifests. Missing values are -1 (integers), empty (floats, read back as NaN) and "" (strings). The column list with units is in `isaaclab_net/tools/measure/schema.py`.
+`python -m isaac_net.tools.measure.ingest CAMPAIGN` parses every run and writes four tables to `CAMPAIGN/unified/` as CSV (and Parquet when `pyarrow` is installed), plus `runs.json` with the manifests. Missing values are -1 (integers), empty (floats, read back as NaN) and "" (strings). The column list with units is in `isaac_net/tools/measure/schema.py`.
 
 | Table | One row per | Sources | Key columns |
 |:---|:---|:---|:---|
@@ -233,14 +233,14 @@ Which source fills which column differs by stack: srsRAN's info-level PHY log ha
 ## Calibration
 
 ```bash
-python -m isaaclab_net.tools.measure.calibrate CAMPAIGN --out CAMPAIGN/calib --engine-fit
+python -m isaac_net.tools.measure.calibrate CAMPAIGN --out CAMPAIGN/calib --engine-fit
 ```
 
 Per stack it writes `params_latency_<stack>.json`, `params_link_<stack>.json`, `params_contention_<stack>.json` (the same three families as the public-data calibration) and `preset_<stack>.json`. The preset starts from `srsran_like()` or `oai_like()` and overrides the fields the afternoon determined, and every override carries its provenance (configuration, direct measurement, or engine replay fit with its W1 and KS). Quantities without an `NRConfig` field (η, the link-adaptation offset, the BLER SINR shift and slope) go into `calibration_knobs`, as η ≈ 0.8 did for the public data.
 
 ```python
-from isaaclab_net import make_engine
-from isaaclab_net.tools.measure.preset import load_preset
+from isaac_net import make_engine
+from isaac_net.tools.measure.preset import load_preset
 cfg = load_preset("CAMPAIGN/calib/preset_srsran.json")          # an NRConfig
 net = make_engine("L2", 256, 4, "cuda", cfg)
 ```

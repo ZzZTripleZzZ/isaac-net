@@ -23,9 +23,9 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_net import SIZES, Sampler, wait_idle  # noqa: E402
 
-from isaaclab_net.core import NRConfig, make_engine  # noqa: E402
-from isaaclab_net.core.proto.netsim import TIMEOUT  # noqa: E402
-from isaaclab_net.examples.fleet_task import FleetEnv  # noqa: E402
+from isaac_net.core import NRConfig, make_engine  # noqa: E402
+from isaac_net.core.proto.netsim import TIMEOUT  # noqa: E402
+from isaac_net.examples.fleet_task import FleetEnv  # noqa: E402
 
 
 class NoNet:

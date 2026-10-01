@@ -24,7 +24,7 @@ collect_ignore = ["scripts", "bridges"]
 
 def pytest_configure(config):
     # The tensors are tiny; intra-op threading only adds overhead (and contends on shared machines).
-    torch.set_num_threads(int(os.environ.get("ISAACLAB_NET_TEST_THREADS", "1")))
+    torch.set_num_threads(int(os.environ.get("ISAAC_NET_TEST_THREADS", "1")))
     config.addinivalue_line("markers", "gpu: needs a CUDA GPU (skipped automatically without one)")
     config.addinivalue_line("markers", "slow: longer runs (deselect with -m 'not slow')")
     config.addinivalue_line("markers", "isaac: needs Isaac Lab 3.0 and a GPU (skipped automatically without them)")

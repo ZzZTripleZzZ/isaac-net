@@ -16,13 +16,13 @@ import numpy as np
 import pytest
 import torch
 
-from isaaclab_net.bridges.oai import FakeStack, OaiBridge, VClock
-from isaaclab_net.bridges.oai.deploy import make_configs as MC
-from isaaclab_net.bridges.oai.net import OaiNet, make_oai_netmodule
-from isaaclab_net.bridges.oai.telnet import OaiTelnet
-from isaaclab_net.bridges.oai.vclock import map_wall_to_virtual
-from isaaclab_net.core.config import NRConfig
-from isaaclab_net.tools.measure import owd
+from isaac_net.bridges.oai import FakeStack, OaiBridge, VClock
+from isaac_net.bridges.oai.deploy import make_configs as MC
+from isaac_net.bridges.oai.net import OaiNet, make_oai_netmodule
+from isaac_net.bridges.oai.telnet import OaiTelnet
+from isaac_net.bridges.oai.vclock import map_wall_to_virtual
+from isaac_net.core.config import NRConfig
+from isaac_net.tools.measure import owd
 
 DT = 0.05
 
@@ -125,7 +125,7 @@ def test_netmodule_front_end(stack2):
     mod = make_oai_netmodule(br, num_robots=2, config=cfg, pose_chunks=1)
     mod.reset()
     got = torch.zeros(1, 2, dtype=torch.bool)
-    from isaaclab_net.isaac.net_module import TrafficRequest
+    from isaac_net.isaac.net_module import TrafficRequest
     for k in range(10):
         send = torch.ones(1, 2, dtype=torch.long) if k == 0 else torch.zeros(1, 2, dtype=torch.long)
         mod.submit(None, TrafficRequest(send))

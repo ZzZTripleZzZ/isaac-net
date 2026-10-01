@@ -43,8 +43,8 @@ for p in (_root, os.path.join(_root, "tests", "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from isaaclab_net.core import NRConfig, Requests, make_engine, multicell  # noqa: E402
-from isaaclab_net.core.config import lena_validation_v2  # noqa: E402
+from isaac_net.core import NRConfig, Requests, make_engine, multicell  # noqa: E402
+from isaac_net.core.config import lena_validation_v2  # noqa: E402
 
 SIZES = (4000.0, 30000.0)
 POOL = 16
@@ -97,7 +97,7 @@ def synth(level):
         from testlib import synthetic_params
         return synthetic_params(level, "cuda") if level != "L0" else None
     if level == "TR":                     # synthetic frames through the real fit (as tests/test_levels.py)
-        from isaaclab_net.tools.fit_levels import fit_tr
+        from isaac_net.tools.fit_levels import fit_tr
         g = torch.Generator().manual_seed(0)
         n = 400
         delay = 0.05 + 3 * torch.rand(n, generator=g)
@@ -115,7 +115,7 @@ def synth(level):
     if level == "QA":
         return {"eta": 1.0, "pf": True}
     if level == "NN":
-        from isaaclab_net.core.levels import DelayNet
+        from isaac_net.core.levels import DelayNet
         torch.manual_seed(0)
         net = DelayNet(13, 8, 16)
         return {"state": net.state_dict(), "xm": torch.zeros(13), "xs": torch.ones(13), "din": 13, "Q": 8, "h": 16}
@@ -137,11 +137,11 @@ def config(cfg_name):
 def build(case, backend, cfg, E, R, wrap_graph):
     dev = "cuda"
     if case == "L2-legacy+edge":
-        from isaaclab_net.core.config import EdgeConfig
-        from isaaclab_net.core.edge import EdgeLoop
+        from isaac_net.core.config import EdgeConfig
+        from isaac_net.core.edge import EdgeLoop
         return EdgeLoop(make_engine("L2-legacy", E, R, dev, cfg, backend, seed=1), EdgeConfig(), graph=wrap_graph)
     if case == "L2-legacy+energy":
-        from isaaclab_net.core.energy import EnergyConfig, EnergyLoop
+        from isaac_net.core.energy import EnergyConfig, EnergyLoop
         return EnergyLoop(make_engine("L2-legacy", E, R, dev, cfg, backend, seed=1), EnergyConfig(),
                           graph=wrap_graph, seed=1, config=cfg)
     return make_engine(case, E, R, dev, cfg, backend, params=synth(case), seed=1)

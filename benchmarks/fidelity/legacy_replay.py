@@ -18,7 +18,7 @@ import time
 import numpy as np
 import torch
 
-from isaaclab_net.core.engine import make_engine
+from isaac_net.core.engine import make_engine
 
 DRAIN_STEPS = 22
 AIR = (4150.0, 31100.0)

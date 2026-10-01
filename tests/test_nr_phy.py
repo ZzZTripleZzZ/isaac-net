@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 import torch
 
-from isaaclab_net.core.config import NRConfig, netslot_compat
-from isaaclab_net.core.phy import MCS_TABLES, PHY, lena_tables_path, segment, segment_ldpc_k, tbs_38214, tbs_lena
+from isaac_net.core.config import NRConfig, netslot_compat
+from isaac_net.core.phy import MCS_TABLES, PHY, lena_tables_path, segment, segment_ldpc_k, tbs_38214, tbs_lena
 
 dev = "cpu"
 T = lambda *a: torch.tensor(a, device=dev)
@@ -121,8 +121,8 @@ def test_c_lena_tbs_and_cb_size_examples():
 
 
 def test_c_lena_tables_missing_gives_instructions(tmp_path, monkeypatch):
-    from isaaclab_net.core import phy as phy_mod
-    monkeypatch.setenv("ISAACLAB_NET_LENA_TABLES", str(tmp_path / "none.npz"))
+    from isaac_net.core import phy as phy_mod
+    monkeypatch.setenv("ISAAC_NET_LENA_TABLES", str(tmp_path / "none.npz"))
     phy_mod._TAB_CACHE.clear()
     with pytest.raises(FileNotFoundError, match="extract_lena_tables"):
         PHY("ul", 1, dev, source="lena")

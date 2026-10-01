@@ -59,7 +59,7 @@ The two residuals fit together: 5G-LENA's link adaptation settles one MCS below 
 On the lab box, with the 5G-LENA reference program of the validation built (see [validation-5g-lena.md](validation-5g-lena.md)) and the local 5G-LENA tables:
 
 ```bash
-export REPO=/path/to/isaaclab-net ISAACLAB_NET_LENA_TABLES=/path/to/lena_eesm_tables.npz
+export REPO=/path/to/isaac-net ISAAC_NET_LENA_TABLES=/path/to/lena_eesm_tables.npz
 export NETSLOT_REF_BIN=/path/to/ns3.48-netslot-ref-optimized PARSE_RUN=/path/to/parse_run.py
 mkdir heldout && cd heldout && bash $REPO/benchmarks/fidelity/heldout/run_heldout.sh
 ```

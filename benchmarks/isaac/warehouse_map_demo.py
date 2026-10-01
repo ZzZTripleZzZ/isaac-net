@@ -3,10 +3,10 @@ log-distance default.
 
     python benchmarks/isaac/warehouse_map_demo.py --num_envs 8 --num_robots 8 --steps 300 --out warehouse_demo.json
 
-Builds WarehouseFleetEnv (isaaclab_net/examples/isaac_warehouse_env.py) with IsaacNetCfg.scene_map set, so
+Builds WarehouseFleetEnv (isaac_net/examples/isaac_warehouse_env.py) with IsaacNetCfg.scene_map set, so
 net_setup exports env_0's warehouse and bakes the radio map with Sionna RT (or loads it from the cache when the stage
-did not change). Sionna RT must be importable, or $ISAACLAB_NET_SIONNA_PYTHON must name an interpreter that has it
-($ISAACLAB_NET_SIONNA_VARIANT picks the Mitsuba variant, e.g. cuda). Then it runs the same scripted fleet (drive to
+did not change). Sionna RT must be importable, or $ISAAC_NET_SIONNA_PYTHON must name an interpreter that has it
+($ISAAC_NET_SIONNA_VARIANT picks the Mitsuba variant, e.g. cuda). Then it runs the same scripted fleet (drive to
 goal, random sends, same seeds) under three channels that differ in nothing else:
 
     map           channel="radio_map" from the bake
@@ -100,9 +100,9 @@ def run_arm(env, steps, seed, R):
 def main():
     import torch
 
-    from isaaclab_net.examples.isaac_warehouse_env import (WAREHOUSE_USD, WarehouseFleetEnv, make_warehouse_cfg,
+    from isaac_net.examples.isaac_warehouse_env import (WAREHOUSE_USD, WarehouseFleetEnv, make_warehouse_cfg,
                                                           warehouse_isaac_cfg, warehouse_net_config)
-    from isaaclab_net.isaac.scene_map import resolve_scene_map
+    from isaac_net.isaac.scene_map import resolve_scene_map
 
     E, R = args.num_envs, args.num_robots
     cfg = make_warehouse_cfg(E, R, args.level, device=getattr(args, "device", None) or "cuda:0",
@@ -120,7 +120,7 @@ def main():
                                                       "coverage", "summary")}
         rec["occupancy_free_frac"] = env.occ_free_frac
         nr_map, isaac = env.net.config, env.net.isaac
-        from isaaclab_net.core.channels.radio_map import RadioMap
+        from isaac_net.core.channels.radio_map import RadioMap
         m = RadioMap.load(nr_map.radio_map_path)
         g = m.gain.view(m.C, m.H, m.W)
         rec["map"] = dict(C=m.C, H=m.H, W=m.W, bounds=m.bounds, gain_min_db=float(g.min()), gain_max_db=float(g.max()),

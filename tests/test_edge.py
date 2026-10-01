@@ -10,7 +10,7 @@ import math
 import pytest
 import torch
 
-from isaaclab_net.core import EdgeConfig, EdgeLoop, NRConfig, Requests, make_engine, netslot_compat
+from isaac_net.core import EdgeConfig, EdgeLoop, NRConfig, Requests, make_engine, netslot_compat
 
 CFG = NRConfig(frame_buffer=4)
 

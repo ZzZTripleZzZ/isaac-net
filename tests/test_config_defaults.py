@@ -10,10 +10,10 @@ from dataclasses import fields
 import pytest
 import torch
 
-from isaaclab_net import NRConfig, make_engine
-from isaaclab_net.core import multicell
-from isaaclab_net.core.config import FIELD_GROUPS, fading_rho_from_speed
-from isaaclab_net.core.proto import netsim as ns
+from isaac_net import NRConfig, make_engine
+from isaac_net.core import multicell
+from isaac_net.core.config import FIELD_GROUPS, fading_rho_from_speed
+from isaac_net.core.proto import netsim as ns
 
 E, R = 4, 6
 

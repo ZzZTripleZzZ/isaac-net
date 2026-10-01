@@ -3,8 +3,8 @@
 Three additions that sit on top of the engines and leave them unchanged. Background users load every cell with UEs the policy does not control (`core/background.py`). The energy model turns each robot's radio activity into joules and a battery state (`core/energy.py`). `ShardedEngine` splits a batch of envs over several GPUs behind the API of one engine (`core/sharded.py`). The first two are set through `NRConfig` and applied by `make_engine`, and all three keep the engine contract (fixed shapes, partial resets; see [the engine reference](reference/engine.md)).
 
 ```python
-from isaaclab_net import NRConfig, make_engine
-from isaaclab_net.core import BackgroundConfig, EnergyConfig, ShardedEngine, TrafficModel
+from isaac_net import NRConfig, make_engine
+from isaac_net.core import BackgroundConfig, EnergyConfig, ShardedEngine, TrafficModel
 
 cfg = NRConfig(background=BackgroundConfig(n_background=8, traffic=(TrafficModel.video(fps=30, mean_frame_bytes=4000),),
                                            mobility="random_waypoint", speed_mps=1.5),

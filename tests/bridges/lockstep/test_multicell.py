@@ -13,8 +13,8 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
-from isaaclab_net.bridges.ns3_lockstep import protocol as P  # noqa: E402
-from isaaclab_net.bridges.ns3_lockstep.core import BRIDGE_ROOT, Ns3Lockstep  # noqa: E402
+from isaac_net.bridges.ns3_lockstep import protocol as P  # noqa: E402
+from isaac_net.bridges.ns3_lockstep.core import BRIDGE_ROOT, Ns3Lockstep  # noqa: E402
 
 R = 8
 ARGS = {"placement": "dists", "dists": "20,30,40,50,60,70,80,90", "shadowStd": 0}

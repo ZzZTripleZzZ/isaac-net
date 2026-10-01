@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>isaaclab-net</h1>
+<h1>isaac-net</h1>
 
 <p><b>GPU-batched 5G and Wi-Fi network simulation for massively parallel robot learning: thousands of Isaac Lab environments, tens to hundreds of robots per cell, one GPU, network state stepped in lockstep with physics.</b></p>
 
@@ -11,7 +11,7 @@
   <a href="https://triton-lang.org/"><img alt="Triton" src="https://img.shields.io/badge/kernels-Triton-2F5C9E?style=flat-square"></a>
   <a href="https://isaac-sim.github.io/IsaacLab/"><img alt="Isaac Lab" src="https://img.shields.io/badge/Isaac%20Lab-3.0-76B900?style=flat-square&logo=nvidia&logoColor=white"></a>
   <a href="https://github.com/google-deepmind/mujoco_playground"><img alt="MuJoCo Playground" src="https://img.shields.io/badge/MuJoCo%20Playground-MJX-1F6FEB?style=flat-square"></a>
-  <a href="https://github.com/ZzZTripleZzZ/isaaclab-net/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ZzZTripleZzZ/isaaclab-net/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/ZzZTripleZzZ/isaac-net/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ZzZTripleZzZ/isaac-net/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://isaacnet.zifanzhang.com"><img alt="Website" src="https://img.shields.io/badge/website-isaacnet.zifanzhang.com-0B7285?style=flat-square&logo=cloudflare&logoColor=white"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-BSD--3--Clause-yellow?style=flat-square&logo=opensourceinitiative&logoColor=white"></a>
   <img alt="Status" src="https://img.shields.io/badge/status-research%20prototype-B7791F?style=flat-square">
@@ -28,25 +28,25 @@
 </div>
 
 <p align="center">
-  <img src="docs/img/overview.png" alt="One control step of isaaclab-net: Isaac Lab environments submit message classes and robot poses, the GPU network engine runs K uplink slots of NR MAC against PHY tables, and per-robot deliveries, delays, AoI and SNR return as observations" width="100%">
+  <img src="docs/img/overview.png" alt="One control step of isaac-net: Isaac Lab environments submit message classes and robot poses, the GPU network engine runs K uplink slots of NR MAC against PHY tables, and per-robot deliveries, delays, AoI and SNR return as observations" width="100%">
 </p>
 
 *One control step. Isaac Lab (left) submits a message class and the robot poses for every environment. The engine (right) keeps queues, radio state and the NR MAC in `[envs, robots, ...]` tensors, runs the K uplink slots of the step, and returns per-robot deliveries, delays, AoI, queue lengths and SNR. The strip shows how D physics substeps and K uplink slots share one control step.*
 
-Parallel robot learning runs thousands of environments on one GPU, but the network between robots and the edge is usually reduced to a fixed or random delay, if it is modeled at all. Packet-level simulators such as ns-3 capture scheduling, retransmissions and contention, but they run one scenario at a time on a CPU, far from the throughput an RL loop needs. `isaaclab-net` closes that gap. Every piece of network state, from each robot's channel and HARQ process to its queued messages, is a fixed-shape tensor with leading dimensions `[envs, robots]`. The engine advances all environments' uplinks slot by slot on the GPU, in lockstep with the physics. A policy therefore trains against queues that build up when the team transmits together, links that degrade as robots move, and retransmissions that stretch delay tails.
+Parallel robot learning runs thousands of environments on one GPU, but the network between robots and the edge is usually reduced to a fixed or random delay, if it is modeled at all. Packet-level simulators such as ns-3 capture scheduling, retransmissions and contention, but they run one scenario at a time on a CPU, far from the throughput an RL loop needs. `isaac-net` closes that gap. Every piece of network state, from each robot's channel and HARQ process to its queued messages, is a fixed-shape tensor with leading dimensions `[envs, robots]`. The engine advances all environments' uplinks slot by slot on the GPU, in lockstep with the physics. A policy therefore trains against queues that build up when the team transmits together, links that degrade as robots move, and retransmissions that stretch delay tails.
 
-**Status.** Research prototype, version 0.1.0, packaged as `isaaclab_net`. One factory builds every fidelity level behind one API: the configurable NR engine with multiple cells, the frozen legacy slot model, a Wi-Fi level, cheaper fluid and delay levels, fitted surrogates and two bounds. Around them sit selectable channel models and radio maps baked from USD scenes, traffic generators, an edge-computing loop, background users, a radio energy model, adaptive fidelity per env and multi-GPU sharding. The Isaac Lab layer and a MuJoCo Playground / MJX backend run all of it, the benchmark suite defines four network-aware multi-robot tasks, and ns-3 5G-LENA and OAI 5G bridges check the engine against a packet-level simulator and a real protocol stack. Two pieces of work are still in flight: an uncontended re-run of the speed and scale benchmarks, and the load-gap fixes that fold 5G-LENA's scheduler sharing and grant pipeline into the NR engine as switches. [docs/STATUS.md](docs/STATUS.md) has the details and the open items, and [CHANGELOG.md](CHANGELOG.md) lists what 0.1.0 contains.
+**Status.** Research prototype, version 0.1.0, packaged as `isaac_net`. One factory builds every fidelity level behind one API: the configurable NR engine with multiple cells, the frozen legacy slot model, a Wi-Fi level, cheaper fluid and delay levels, fitted surrogates and two bounds. Around them sit selectable channel models and radio maps baked from USD scenes, traffic generators, an edge-computing loop, background users, a radio energy model, adaptive fidelity per env and multi-GPU sharding. The Isaac Lab layer and a MuJoCo Playground / MJX backend run all of it, the benchmark suite defines four network-aware multi-robot tasks, and ns-3 5G-LENA and OAI 5G bridges check the engine against a packet-level simulator and a real protocol stack. Two pieces of work are still in flight: an uncontended re-run of the speed and scale benchmarks, and the load-gap fixes that fold 5G-LENA's scheduler sharing and grant pipeline into the NR engine as switches. [docs/STATUS.md](docs/STATUS.md) has the details and the open items, and [CHANGELOG.md](CHANGELOG.md) lists what 0.1.0 contains.
 
 ## Install
 
 ```bash
-git clone git@github.com:ZzZTripleZzZ/isaaclab-net.git && cd isaaclab-net
+git clone git@github.com:ZzZTripleZzZ/isaac-net.git && cd isaac-net
 uv venv --python 3.11 && source .venv/bin/activate
 uv pip install torch                                # CUDA build of PyTorch; Triton ships with it on Linux
-uv pip install -e ".[dev]"                          # the isaaclab_net package, plus pytest, ruff and build
+uv pip install -e ".[dev]"                          # the isaac_net package, plus pytest, ruff and build
 ```
 
-Linux with an NVIDIA GPU is the main target, and Python 3.10 to 3.12 is supported. Every reference engine also runs on a CPU (`pip install torch --index-url https://download.pytorch.org/whl/cpu`), which is enough for the CPU test suite. The package is not on PyPI while the repository is private. A release wheel installs the same way: `pip install "isaaclab_net-0.1.0-py3-none-any.whl[dev]"`. Scripts in `prototype/` still work, as thin shims over the package.
+Linux with an NVIDIA GPU is the main target, and Python 3.10 to 3.12 is supported. Every reference engine also runs on a CPU (`pip install torch --index-url https://download.pytorch.org/whl/cpu`), which is enough for the CPU test suite. The package is not on PyPI while the repository is private. A release wheel installs the same way: `pip install "isaac_net-0.1.0-py3-none-any.whl[dev]"`. Scripts in `prototype/` still work, as thin shims over the package.
 
 | Extra | Adds | For |
 |:---|:---|:---|
@@ -60,13 +60,13 @@ Linux with an NVIDIA GPU is the main target, and Python 3.10 to 3.12 is supporte
 | `wifi` | nothing | level `WIFI` needs only the core dependencies |
 | `all` | every extra above except `isaac` | everything pip can install on Linux without Isaac |
 
-Three console scripts come with the package: `isaaclab-net-bench` (the benchmark suite), `isaaclab-net-bake` (bake a radio map from a USD scene) and `isaaclab-net-measure` (probe, ingest and calibrate for gNB measurement campaigns).
+Three console scripts come with the package: `isaac-net-bench` (the benchmark suite), `isaac-net-bake` (bake a radio map from a USD scene) and `isaac-net-measure` (probe, ingest and calibrate for gNB measurement campaigns).
 
 ## Put a network in your environment
 
 ```python
 import torch
-from isaaclab_net import NRConfig, Requests, make_engine
+from isaac_net import NRConfig, Requests, make_engine
 
 E, R, dev = 256, 16, torch.device("cuda")          # 256 envs, 16 robots each
 net = make_engine("L2-legacy", E, R, dev, backend="graph")    # slot-level uplink, CUDA-graph backend
@@ -86,11 +86,11 @@ for _ in range(300):                                # one control step = 100 ms 
     last[done] = -1
 ```
 
-`make_engine(level, E, R, device, config, backend)` builds every fidelity level, and every engine has the same API. `step` also returns, per message slot, the `delivered` and `timed_out` masks, the `delay` in control steps and the `cap`/`cls` of each message, plus `queue_bytes`, `sinr_db` and, if `Requests(send, det, hid)` carried an application tag, `det_env`. `reset(env_ids)` takes an index tensor, a list or a bool mask and leaves every other env bit-for-bit unaffected. The earlier calls `add_frames(t, send, det, hid, snr)` and `step(t, snr, hid) -> (newest, det_env)` still work. `aoi` and `queued` go straight into observations. The example task in [`isaaclab_net/examples/fleet_task.py`](isaaclab_net/examples/fleet_task.py) uses the application tag to mark frames that captured a hazard. [`isaaclab_net/isaac/mixins.py`](isaaclab_net/isaac/mixins.py) wires a network into an Isaac Lab `DirectRLEnv` with four hook calls (see [Isaac Lab quick start](#isaac-lab-quick-start)).
+`make_engine(level, E, R, device, config, backend)` builds every fidelity level, and every engine has the same API. `step` also returns, per message slot, the `delivered` and `timed_out` masks, the `delay` in control steps and the `cap`/`cls` of each message, plus `queue_bytes`, `sinr_db` and, if `Requests(send, det, hid)` carried an application tag, `det_env`. `reset(env_ids)` takes an index tensor, a list or a bool mask and leaves every other env bit-for-bit unaffected. The earlier calls `add_frames(t, send, det, hid, snr)` and `step(t, snr, hid) -> (newest, det_env)` still work. `aoi` and `queued` go straight into observations. The example task in [`isaac_net/examples/fleet_task.py`](isaac_net/examples/fleet_task.py) uses the application tag to mark frames that captured a hazard. [`isaac_net/isaac/mixins.py`](isaac_net/isaac/mixins.py) wires a network into an Isaac Lab `DirectRLEnv` with four hook calls (see [Isaac Lab quick start](#isaac-lab-quick-start)).
 
 ## Isaac Lab quick start
 
-Tested natively on Windows 11 with an RTX 4090 (driver 617.14; the CUDA 13.0 build of PyTorch needs 580.88 or newer). For Linux, including clusters without root or with a glibc older than 2.35, see [docs/isaac-lab-linux.md](docs/isaac-lab-linux.md): kit-less Isaac Lab 3.0 on Newton or OV PhysX, where `ISAACLAB_NET_PHYSICS=newton` (or `ovphysx`) selects the fleet env's physics backend.
+Tested natively on Windows 11 with an RTX 4090 (driver 617.14; the CUDA 13.0 build of PyTorch needs 580.88 or newer). For Linux, including clusters without root or with a glibc older than 2.35, see [docs/isaac-lab-linux.md](docs/isaac-lab-linux.md): kit-less Isaac Lab 3.0 on Newton or OV PhysX, where `ISAAC_NET_PHYSICS=newton` (or `ovphysx`) selects the fleet env's physics backend.
 
 | Component | Version |
 |:---|:---|
@@ -118,7 +118,7 @@ powershell -File scripts\windows\04_triton_windows.ps1     # triton-windows, for
 
 ```powershell
 . C:\isaac5g\env.ps1                                       # activates the Isaac venv
-cd C:\isaac5g\isaaclab-net                                 # this repository
+cd C:\isaac5g\isaac-net                                 # this repository
 uv pip install --no-deps -e .                              # --no-deps keeps Isaac's CUDA build of torch
 uv pip install pytest
 python -m pytest -m isaac tests\test_isaac_env.py
@@ -132,8 +132,8 @@ Isaac Lab 3.0 runs headless by default. The Isaac tests launch one Isaac Sim pro
 
 ```python
 from isaaclab.envs import DirectRLEnv
-from isaaclab_net import NRConfig
-from isaaclab_net.isaac import IsaacNetCfg, NetEnvMixin
+from isaac_net import NRConfig
+from isaac_net.isaac import IsaacNetCfg, NetEnvMixin
 
 NR = NRConfig(msg_sizes=(4000.0, 30000.0))                  # the network: one config, as for make_engine
 ISAAC = IsaacNetCfg(pose_asset="robots",                     # poses from the scene's "robots" collection
@@ -158,7 +158,7 @@ class MyFleetEnv(NetEnvMixin, DirectRLEnv):
         ...
 ```
 
-`net_setup` takes any level of `make_engine` (`"off"` for an ideal link), an `NRConfig`, a backend and an `IsaacNetCfg`. The observation features are chosen from the delivered mask and the delay of each message slot, age of information, queue length and bytes, SINR and RSRP, the serving cell, a last-delivery flag, the delays of the last k delivered messages, and a blockage flag, all with one normalization. The domain-randomization ranges cover the radio (transmit power, noise floor, path loss, shadowing sigma, blockage loss), the gNB placement, and the delay and loss of L0 and L0DR, and `dr_support(level)` tells which of them a level honors. `net_decimation` and `net_substeps` run the network slower or faster than the env step. `net_step(pos, send, tag, cur_tag)` also carries a per-message tag, such as the id of the hazard a frame captured, and returns `tag_delivered` per env. The fields, the feature table and the randomization table are in [docs/isaac-lab.md](docs/isaac-lab.md#configuring-the-network). The earlier `NetConfig` is a deprecated alias. [`isaac_fleet_env.py`](isaaclab_net/examples/isaac_fleet_env.py) is the complete example: E envs × R robots in a 150 m arena, with hazards that the whole fleet learns about only when a detection frame is delivered.
+`net_setup` takes any level of `make_engine` (`"off"` for an ideal link), an `NRConfig`, a backend and an `IsaacNetCfg`. The observation features are chosen from the delivered mask and the delay of each message slot, age of information, queue length and bytes, SINR and RSRP, the serving cell, a last-delivery flag, the delays of the last k delivered messages, and a blockage flag, all with one normalization. The domain-randomization ranges cover the radio (transmit power, noise floor, path loss, shadowing sigma, blockage loss), the gNB placement, and the delay and loss of L0 and L0DR, and `dr_support(level)` tells which of them a level honors. `net_decimation` and `net_substeps` run the network slower or faster than the env step. `net_step(pos, send, tag, cur_tag)` also carries a per-message tag, such as the id of the hazard a frame captured, and returns `tag_delivered` per env. The fields, the feature table and the randomization table are in [docs/isaac-lab.md](docs/isaac-lab.md#configuring-the-network). The earlier `NetConfig` is a deprecated alias. [`isaac_fleet_env.py`](isaac_net/examples/isaac_fleet_env.py) is the complete example: E envs × R robots in a 150 m arena, with hazards that the whole fleet learns about only when a detection frame is delivered.
 
 **Scale.** These numbers come from the fleet env with random actions, which saturate the uplink from 16 robots per env, measured on an idle RTX 4090 (0% utilization before every run; each process reports its median of 3 windows). The NR engine runs `ul_v2l`, the configuration validated against 5G-LENA except for the buffer-report grant pipeline, which the fused kernel lacks (median delay error −3.5% / −5.7% / −0.8% at light / moderate / saturated load). Network off and NR are the mean of 3 processes with the range in parentheses, `L2-legacy` is a single process from the first campaign (conditions in [docs/performance.md](docs/performance.md#isaac-lab-scale)):
 
@@ -170,15 +170,15 @@ class MyFleetEnv(NetEnvMixin, DirectRLEnv):
 
 One control step is 0.1 s of simulated time. At about one million robots the network runs in the loop at 1.59 million (legacy) and 1.30 million (NR) robot-steps per second, in at most 20 GiB of device memory. The Isaac step is bound by host work. From 524k robots up the validated NR uplink lengthens the step by 40–86% of its isolated cost (about 30% of its GPU work overlaps with host work on average), and the network-off rate varies by 8–14% between processes, so single-run on / off differences of a few percent are not meaningful. Use `graph` for bitwise-reference runs and `triton` for scale. Startup grows about linearly with the number of robots (PhysX cloning), 17–26 minutes at one million robots. End-to-end PPO (rsl_rl, 1,024 × 16, L2-legacy `triton`) ran 30 iterations in 241 s on the earlier shared GPU.
 
-**A second backend: MuJoCo Playground / MJX.** The same `NetModule` runs inside jitted, vmapped JAX code: [`isaaclab_net.mjx.NetModuleMJX`](isaaclab_net/mjx/net_module.py) hands the MJX poses to the torch engine through `jax.experimental.buffer_callback` with zero-copy DLPack views on XLA's own CUDA stream, and [`mjx_fleet_env.py`](isaaclab_net/examples/mjx_fleet_env.py) is the fleet task as a Playground env that Brax PPO trains. The in-env network is bitwise equal to a direct torch replay of the same poses on `graph`, `triton` and the reference engine; versions, costs and limits are in [docs/backends-mjx.md](docs/backends-mjx.md).
+**A second backend: MuJoCo Playground / MJX.** The same `NetModule` runs inside jitted, vmapped JAX code: [`isaac_net.mjx.NetModuleMJX`](isaac_net/mjx/net_module.py) hands the MJX poses to the torch engine through `jax.experimental.buffer_callback` with zero-copy DLPack views on XLA's own CUDA stream, and [`mjx_fleet_env.py`](isaac_net/examples/mjx_fleet_env.py) is the fleet task as a Playground env that Brax PPO trains. The in-env network is bitwise equal to a direct torch replay of the same poses on `graph`, `triton` and the reference engine; versions, costs and limits are in [docs/backends-mjx.md](docs/backends-mjx.md).
 
 ## Configure the network
 
 One `NRConfig` dataclass configures every module: numerology, carrier and TDD pattern, MAC timing, HARQ and RLC, the PHY tables, the radio and cell layout, and the application fields (frame buffer, timeout, message sizes). The configurable NR engine is level `L2`:
 
 ```python
-from isaaclab_net import NRConfig, make_engine
-from isaaclab_net.core import lena_validation, multicell, netslot_compat, oai_like, srsran_like
+from isaac_net import NRConfig, make_engine
+from isaac_net.core import lena_validation, multicell, netslot_compat, oai_like, srsran_like
 
 cfg = NRConfig(mu=1, bandwidth_mhz=20, tdd_pattern="DDDSU", n_harq=16, mcs_table=2, dl=True)
 net = make_engine("L2", E, R, dev, cfg)             # 51 PRB in 13 RBGs, 16 HARQ processes, EESM, uplink + downlink
@@ -190,14 +190,14 @@ out = net.step(None, pos)                           # several cells take poses (
 
 Presets: `netslot_compat()` (the legacy L2 geometry and timing with the 3GPP PHY), `lena_like()` and `lena_validation()` (the ns-3 5G-LENA reference scenario), `srsran_like()` and `oai_like()` (latency fitted to public srsRAN and OAI measurements), and `multicell(n)` (hexagonal cells at 100 m spacing, thermal noise, uplink fractional power control on). Uplink power control is on by default whenever `n_cells > 1`: without it, full-power robots next to their own gNB dominate the interference, and three cells carry less than one. Multi-cell configurations run on `L2` (per-cell schedulers and HARQ, uplink and downlink interference) and on `L2-legacy` (NetSlotMC, uplink only). The NR engine runs on the `reference`, `graph` (bitwise equal to it) and `triton` (single cell, equal to rounding) backends.
 
-**PHY tables and licensing.** The BLER tables shipped in `isaaclab_net/core/data/` are exported from Sionna SYS 2.2.0 (Apache-2.0, license file alongside). The 5G-LENA tables used by `bler_source="lena"` (the `lena_like` presets) are GPL-2.0 data and are never shipped or committed. Generate them from your own 5G-LENA checkout; the script asks for its location if you omit it:
+**PHY tables and licensing.** The BLER tables shipped in `isaac_net/core/data/` are exported from Sionna SYS 2.2.0 (Apache-2.0, license file alongside). The 5G-LENA tables used by `bler_source="lena"` (the `lena_like` presets) are GPL-2.0 data and are never shipped or committed. Generate them from your own 5G-LENA checkout; the script asks for its location if you omit it:
 
 ```bash
 git clone https://gitlab.com/cttc-lena/nr.git ~/src/nr
-python -m isaaclab_net.tools.extract_lena_tables ~/src/nr   # writes ~/.cache/isaaclab_net/lena_eesm_tables.npz
+python -m isaac_net.tools.extract_lena_tables ~/src/nr   # writes ~/.cache/isaac_net/lena_eesm_tables.npz
 ```
 
-`ISAACLAB_NET_LENA_TABLES` points the engine to another location. Keep the generated file out of any redistribution.
+`ISAAC_NET_LENA_TABLES` points the engine to another location. Keep the generated file out of any redistribution.
 
 ## What the engine models
 
@@ -226,7 +226,7 @@ Stages on top of the levels are set through `NRConfig` as well, keep the engine 
 | Adaptive fidelity | a cheap and an expensive level side by side, chosen per env: a static mix, switching on a load indicator with queue handoff, or a curriculum over training iterations | cheap `L0` to `L1`, expensive `L1`, `L2-legacy` or `L2` | `make_adaptive(E, R, dev, FidelityConfig(...))`, [adaptive-fidelity.md](docs/adaptive-fidelity.md) |
 | Sharding | the envs split over several GPUs behind the API of one engine; two shards are bitwise equal to one engine on the prototype levels and `L2-legacy` | every level (`L2` is not shard-invariant) | `ShardedEngine(level, E, R, devices, config, backend)` |
 
-Without these fields nothing changes. [`examples/edge_control.py`](isaaclab_net/examples/edge_control.py) is edge-offloaded tracking with a hold or zero rule for stale actions, and [`examples/traffic_models.py`](isaaclab_net/examples/traffic_models.py) shows the traffic generators. Level `WIFI` takes its settings from `NRConfig(wifi=WifiConfig(...))` and is described, with its validation and what it leaves out, in [docs/wifi.md](docs/wifi.md).
+Without these fields nothing changes. [`examples/edge_control.py`](isaac_net/examples/edge_control.py) is edge-offloaded tracking with a hold or zero rule for stale actions, and [`examples/traffic_models.py`](isaac_net/examples/traffic_models.py) shows the traffic generators. Level `WIFI` takes its settings from `NRConfig(wifi=WifiConfig(...))` and is described, with its validation and what it leaves out, in [docs/wifi.md](docs/wifi.md).
 
 ## Fidelity levels
 
@@ -253,11 +253,11 @@ Every level exposes the same API, so a task switches fidelity by changing one ar
 `TR`, `GE`, `QA` and `NN` are fitted from `L2` or `L2-legacy` rollouts of the example fleet task. The fit writes one parameter file outside the repository, and every engine loads it:
 
 ```bash
-python -m isaaclab_net.tools.fit_levels --source L2-legacy --task T1 --backend graph   # ~/.cache/isaaclab_net/levels/L2-legacy_T1.pt
+python -m isaac_net.tools.fit_levels --source L2-legacy --task T1 --backend graph   # ~/.cache/isaac_net/levels/L2-legacy_T1.pt
 ```
 
 ```python
-net = make_engine("NN", E, R, dev, params="~/.cache/isaaclab_net/levels/L2-legacy_T1.pt", backend="graph")
+net = make_engine("NN", E, R, dev, params="~/.cache/isaac_net/levels/L2-legacy_T1.pt", backend="graph")
 ```
 
 `ORACLE` and `NOCOMM` are value-of-information bounds for task design. Run a task under both first: a task in which network fidelity can matter must show a large gap between its `ORACLE` and `NOCOMM` returns. If the gap is small, the policy gains little from what the network delivers, and the task cannot tell fidelity levels apart.
@@ -266,7 +266,7 @@ net = make_engine("NN", E, R, dev, params="~/.cache/isaaclab_net/levels/L2-legac
 
 ## Backends and speed
 
-Every prototype level (`L0` to `L1`, `L2-legacy`) has a readable eager reference in `isaaclab_net/core/proto/netsim.py` and graph-safe fast versions in `isaaclab_net/core/proto/netsim_fast.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference at every level (per-message outputs, every queue and MAC state, with random partial resets). `triton` (`L1`, `L2-legacy`) runs all 40 slots of a control step in one fused kernel and matches the reference to rounding: from an identical state every finish time agrees, and over long runs aggregate delivery and delay agree to three or four significant digits. `compile` (torch.compile + CUDA graph) also agrees to rounding. The NR engine (`L2`) has `graph` (one or several cells, bitwise identical to its reference, including with random partial resets) and `triton` (one cell, one fused kernel per control step, equal to rounding); both need its engine RNG (`rng="engine"`, the default). The legacy multi-cell engine has only the `reference` backend. The surrogate and bound levels (`TR` to `NOCOMM`) are written once with graph-safe ops, so their `reference` backend runs the same operations as `graph`, which is bitwise identical to it. On an idle GPU the NR uplink costs about 3.5 times the legacy reference per step and 4–6 times the legacy `triton` kernel.
+Every prototype level (`L0` to `L1`, `L2-legacy`) has a readable eager reference in `isaac_net/core/proto/netsim.py` and graph-safe fast versions in `isaac_net/core/proto/netsim_fast.py`. `graph` records the same operations once as a CUDA graph and is **bitwise identical** to the reference at every level (per-message outputs, every queue and MAC state, with random partial resets). `triton` (`L1`, `L2-legacy`) runs all 40 slots of a control step in one fused kernel and matches the reference to rounding: from an identical state every finish time agrees, and over long runs aggregate delivery and delay agree to three or four significant digits. `compile` (torch.compile + CUDA graph) also agrees to rounding. The NR engine (`L2`) has `graph` (one or several cells, bitwise identical to its reference, including with random partial resets) and `triton` (one cell, one fused kernel per control step, equal to rounding); both need its engine RNG (`rng="engine"`, the default). The legacy multi-cell engine has only the `reference` backend. The surrogate and bound levels (`TR` to `NOCOMM`) are written once with graph-safe ops, so their `reference` backend runs the same operations as `graph`, which is bitwise identical to it. On an idle GPU the NR uplink costs about 3.5 times the legacy reference per step and 4–6 times the legacy `triton` kernel.
 
 Network step time (`submit` + `step`, dict outputs) in ms on an idle RTX 4090, median of 3 processes ([docs/performance.md](docs/performance.md) has every level, backend and size, the memory and the spreads):
 
@@ -287,31 +287,31 @@ Network step time (`submit` + `step`, dict outputs) in ms on an idle RTX 4090, m
 The engine is checked in four independent ways. Each check is a tool in the package or in `benchmarks/`, and each page lists its setup, its numbers and where the model still differs.
 
 - **Backend equivalence.** Every fast backend is tested against the readable reference of its level: `graph` bitwise (per-message outputs, every queue and MAC state, through random partial resets), `triton` and `compile` to rounding. The same holds for the NR engine, the surrogates, the Wi-Fi level, the edge stage, adaptive fidelity and sharding, and the Isaac Lab and MJX layers replay bitwise against a direct engine run. `pytest -m gpu` runs these tests ([docs/performance.md](docs/performance.md), [tests/README.md](tests/README.md)).
-- **ns-3 5G-LENA.** ns-3.48 with 5G-LENA v5.1 is the packet-level reference. A 186-run sweep over 1 to 64 UEs, two frame sizes and 13–160% offered load is replayed in the NR engine with the same per-UE link budgets and offered traffic (`lena_validation()`, `python -m isaaclab_net.bridges.ns3_offline.lena_replay`). The formal comparison reports delay quantiles, KS and Wasserstein distances, drops, goodput, HARQ and PRB use per run, with a fit and hold-out split for the one fitted parameter. Over the 153 runs of the no-fading arm the median p95-delay error is −7.8% and the median drop-rate difference −0.63 pp, and the engine is optimistic in loaded cells. A follow-up traced that gap to 5G-LENA's scheduler sharing, grant pipeline and RLC timing, and these mechanisms are being folded into the engine ([docs/validation-5g-lena.md](docs/validation-5g-lena.md), [docs/fidelity-vs-lena.md](docs/fidelity-vs-lena.md), [docs/fidelity-load-gap.md](docs/fidelity-load-gap.md)). Co-simulation bridges (lockstep, process pool, offline replay) run a task against ns-3 directly ([docs/bridges.md](docs/bridges.md)).
+- **ns-3 5G-LENA.** ns-3.48 with 5G-LENA v5.1 is the packet-level reference. A 186-run sweep over 1 to 64 UEs, two frame sizes and 13–160% offered load is replayed in the NR engine with the same per-UE link budgets and offered traffic (`lena_validation()`, `python -m isaac_net.bridges.ns3_offline.lena_replay`). The formal comparison reports delay quantiles, KS and Wasserstein distances, drops, goodput, HARQ and PRB use per run, with a fit and hold-out split for the one fitted parameter. Over the 153 runs of the no-fading arm the median p95-delay error is −7.8% and the median drop-rate difference −0.63 pp, and the engine is optimistic in loaded cells. A follow-up traced that gap to 5G-LENA's scheduler sharing, grant pipeline and RLC timing, and these mechanisms are being folded into the engine ([docs/validation-5g-lena.md](docs/validation-5g-lena.md), [docs/fidelity-vs-lena.md](docs/fidelity-vs-lena.md), [docs/fidelity-load-gap.md](docs/fidelity-load-gap.md)). Co-simulation bridges (lockstep, process pool, offline replay) run a task against ns-3 directly ([docs/bridges.md](docs/bridges.md)).
 - **OAI 5G rfsim.** OpenAirInterface's gNB, nr-UE and core network, connected through the RF simulator, run behind a lockstep bridge with 1 to 10 UEs. The measured uplink access, HARQ and contention are compared with the engine's presets, and the fitted `oai_rfsim` preset matches the stock stack's single-UE small-frame delays to a median Wasserstein-1 distance of 2.5 ms ([docs/bridges-oai.md](docs/bridges-oai.md)).
-- **Public data and real cells.** Uplink latency fits to srsRAN and OAI measurements, a contention check on ColO-RAN and channel fits on POWDER drive tests produced the `srsran_like` and `oai_like` presets ([docs/calibration-public-data.md](docs/calibration-public-data.md)). The measurement protocol and its tools (`isaaclab-net-measure`) are ready for a lab gNB and POWDER, for the layers public data cannot reach ([docs/measurement-protocol.md](docs/measurement-protocol.md)).
+- **Public data and real cells.** Uplink latency fits to srsRAN and OAI measurements, a contention check on ColO-RAN and channel fits on POWDER drive tests produced the `srsran_like` and `oai_like` presets ([docs/calibration-public-data.md](docs/calibration-public-data.md)). The measurement protocol and its tools (`isaac-net-measure`) are ready for a lab gNB and POWDER, for the layers public data cannot reach ([docs/measurement-protocol.md](docs/measurement-protocol.md)).
 
 The Wi-Fi level is validated separately against Bianchi's model, an exact slot-level CSMA/CA simulator and ns-3's 802.11ax model ([docs/wifi.md](docs/wifi.md#validation)). All bridges and measurement tools are for validation only and are never needed for training. The ns-3 bridges need a local ns-3 + 5G-LENA build, which is not part of this package, and binaries built from them are GPL-covered ([docs/licensing.md](docs/licensing.md)).
 
 ## Benchmark suite
 
-`isaaclab_net.bench` gives network-aware multi-robot learning a common set of tasks, metrics and baselines. Four tasks run E envs of R robots on one GPU and talk to the network only through the `NetModule` of the Isaac Lab layer: `fleet_alert` (detection frames warn the fleet of hazards), `coop_map` (map patches keep an edge map fresh), `coverage_nav` (navigation under a remote supervisor that stops robots it has not heard from) and `edge_control` (tracking with an edge-offloaded controller). Every task has `default`, `light` and `background` variants and runs on any level and backend, and every run writes one versioned JSON result file.
+`isaac_net.bench` gives network-aware multi-robot learning a common set of tasks, metrics and baselines. Four tasks run E envs of R robots on one GPU and talk to the network only through the `NetModule` of the Isaac Lab layer: `fleet_alert` (detection frames warn the fleet of hazards), `coop_map` (map patches keep an edge map fresh), `coverage_nav` (navigation under a remote supervisor that stops robots it has not heard from) and `edge_control` (tracking with an edge-offloaded controller). Every task has `default`, `light` and `background` variants and runs on any level and backend, and every run writes one versioned JSON result file.
 
 ```bash
-isaaclab-net-bench list                                         # tasks, variants, levels, presets, baselines
-isaaclab-net-bench run --task coop_map --level L2-legacy --backend triton \
+isaac-net-bench list                                         # tasks, variants, levels, presets, baselines
+isaac-net-bench run --task coop_map --level L2-legacy --backend triton \
     --baselines random,heuristic,ppo_mlp --seeds 0,1,2 --out results/
-isaaclab-net-bench report results/                              # mean ± 95% CI over seeds, as a Markdown table
-isaaclab-net-bench calibrate --task all --level L2-legacy --backend triton   # offered vs delivered load
+isaac-net-bench report results/                              # mean ± 95% CI over seeds, as a Markdown table
+isaac-net-bench calibrate --task all --level L2-legacy --backend triton   # offered vs delivered load
 ```
 
-`python -m isaaclab_net.bench` is the same command. The suite ships random, heuristic and PPO (MLP and GRU) baselines and sanity numbers that show the pipeline works, not tuned results. The task API, the metrics, the result format and how to add a task or submit a baseline are in [docs/benchmark-suite.md](docs/benchmark-suite.md).
+`python -m isaac_net.bench` is the same command. The suite ships random, heuristic and PPO (MLP and GRU) baselines and sanity numbers that show the pipeline works, not tuned results. The task API, the metrics, the result format and how to add a task or submit a baseline are in [docs/benchmark-suite.md](docs/benchmark-suite.md).
 
 ## Roadmap
 
 - [x] Slot-level uplink engine and lower fidelity levels
 - [x] `graph` backend, bitwise equal to the reference, and `triton` backend for scale
-- [x] Package layout `isaaclab_net/` (core, isaac, mjx, bridges, bench, examples, tools) per [ARCHITECTURE.md](ARCHITECTURE.md)
+- [x] Package layout `isaac_net/` (core, isaac, mjx, bridges, bench, examples, tools) per [ARCHITECTURE.md](ARCHITECTURE.md)
 - [x] Partial resets per env, per-env clocks and the `submit` / `step` dict API, at every level and backend
 - [x] Engine-owned random streams at every level
 - [x] Configurable NR: numerology, TDD patterns, 3GPP MCS/TBS and BLER tables, multiple HARQ processes, downlink, schedulers
@@ -339,8 +339,8 @@ isaaclab-net-bench calibrate --task all --level L2-legacy --backend triton   # o
 ## Repository layout
 
 ```
-isaaclab-net/
-├── isaaclab_net/
+isaac-net/
+├── isaac_net/
 │   ├── core/                     # backend-agnostic engines, no simulator imports
 │   │   ├── config.py             #   NRConfig, the one config dataclass, and its presets
 │   │   ├── engine.py             #   make_engine(level, ...) and NREngine, the contract API of every level
@@ -371,8 +371,8 @@ isaaclab-net/
 │   ├── examples/                 # fleet_task.py (pure torch), edge_control.py, traffic_models.py,
 │   │                             # isaac_fleet_env.py, isaac_warehouse_env.py (Isaac Lab), mjx_fleet_env.py (MJX)
 │   └── tools/                    # PHY table export, local 5G-LENA table extraction, surrogate fits (fit_levels),
-│       ├── scene/                #   USD export, Sionna RT bake (isaaclab-net-bake), synthetic scenes
-│       └── measure/              #   gNB log parsers, UDP probe, calibration (isaaclab-net-measure)
+│       ├── scene/                #   USD export, Sionna RT bake (isaac-net-bake), synthetic scenes
+│       └── measure/              #   gNB log parsers, UDP probe, calibration (isaac-net-measure)
 ├── tests/                        # pytest suite; scripts/ (equivalence scripts), mjx/, bridges/ (need ns-3 or OAI)
 ├── benchmarks/                   # engine, NR, multi-cell, sharding, adaptive, differentiable, fidelity, Isaac,
 │                                 # MJX, ns-3 and OAI benchmarks and campaigns, with their small result CSVs
@@ -400,4 +400,4 @@ A paper describing the engine is in preparation. A citation and an arXiv link wi
 
 ## License
 
-BSD-3-Clause, see [LICENSE](LICENSE). The shipped Sionna tables are Apache-2.0 (`isaaclab_net/core/data/LICENSE-sionna-Apache-2.0`). No ns-3 or 5G-LENA code or data and no OAI configuration files are included. [docs/licensing.md](docs/licensing.md) covers the locally generated 5G-LENA tables, the GPL status of binaries built from the ns-3 bridge programs, Isaac Sim and the Omniverse EULA, and the licenses of the public datasets used for calibration.
+BSD-3-Clause, see [LICENSE](LICENSE). The shipped Sionna tables are Apache-2.0 (`isaac_net/core/data/LICENSE-sionna-Apache-2.0`). No ns-3 or 5G-LENA code or data and no OAI configuration files are included. [docs/licensing.md](docs/licensing.md) covers the locally generated 5G-LENA tables, the GPL status of binaries built from the ns-3 bridge programs, Isaac Sim and the Omniverse EULA, and the licenses of the public datasets used for calibration.

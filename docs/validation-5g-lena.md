@@ -1,6 +1,6 @@
 # Validation against ns-3 5G-LENA
 
-The configurable NR engine (`L2`) is validated against ns-3 with the 5G-LENA NR module, the most widely used open 5G system-level simulator. This page describes the reference setup, the sweep that was run on it, the model differences that had to be resolved and how, and how closely the NR engine reproduces the sweep when it is fed the same per-UE link budgets. The reference work was done on 2026-09-29 on the lab box (WSL, Ubuntu 20.04). The standalone scenario, its patch script and the sweep scripts live in the project's research workspace, not yet in this repository (open item 13 in [STATUS.md](STATUS.md)). The two bridge programs derived from the scenario are in `isaaclab_net/bridges/ns3/` and are described in [bridges.md](bridges.md).
+The configurable NR engine (`L2`) is validated against ns-3 with the 5G-LENA NR module, the most widely used open 5G system-level simulator. This page describes the reference setup, the sweep that was run on it, the model differences that had to be resolved and how, and how closely the NR engine reproduces the sweep when it is fed the same per-UE link budgets. The reference work was done on 2026-09-29 on the lab box (WSL, Ubuntu 20.04). The standalone scenario, its patch script and the sweep scripts live in the project's research workspace, not yet in this repository (open item 13 in [STATUS.md](STATUS.md)). The two bridge programs derived from the scenario are in `isaac_net/bridges/ns3/` and are described in [bridges.md](bridges.md).
 
 ## Reference setup
 
@@ -105,7 +105,7 @@ Nineteen aspects were compared between the legacy slot-level model (NetSlot, now
 
 ## NR engine replay of the sweep
 
-`python -m isaaclab_net.bridges.ns3_offline.lena_replay` replays all 153 primary-arm runs in the NR engine, 4 replicas each. Each run's per-UE `snr1_db` is the SNR input, the configuration is `lena_validation()`, and traffic is in phase every 100 ms for 30 s plus a 2.5 s drain. This covers every matched-configuration switch above except a TBS and overhead check against LENA's `NrUlMacStats.txt`, which was not available locally; `tbs_mode="lena"` implements LENA's TBS formula instead. Differences are NR engine minus 5G-LENA, per run:
+`python -m isaac_net.bridges.ns3_offline.lena_replay` replays all 153 primary-arm runs in the NR engine, 4 replicas each. Each run's per-UE `snr1_db` is the SNR input, the configuration is `lena_validation()`, and traffic is in phase every 100 ms for 30 s plus a 2.5 s drain. This covers every matched-configuration switch above except a TBS and overhead check against LENA's `NrUlMacStats.txt`, which was not available locally; `tbs_mode="lena"` implements LENA's TBS formula instead. Differences are NR engine minus 5G-LENA, per run:
 
 | Subset | Runs | Drop rate | p50 delay | p95 delay | PRB use, NR / LENA | First-tx BLER, LENA / NR |
 |:---|---:|:---|---:|---:|---:|:---|

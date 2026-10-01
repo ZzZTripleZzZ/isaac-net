@@ -22,7 +22,7 @@ Every speed number on this page comes from one campaign on 2026-09-30 (scripts i
 
 ## Backends
 
-Every prototype level (`L0`, `L0DR`, `L05`, `L05Q`, `L1`, `L2-legacy`) has an eager reference in `isaaclab_net/core/proto/netsim.py` and graph-safe fast versions in `netsim_fast.py`. The reference is slow because each control step of the slot-level engine runs 40 UL slots of about 25 small operations plus a 5-iteration PF loop, about 3,000 kernel launches, and its boolean-mask writes call `nonzero` and force a host sync each. At 16×16 the GPU work per kernel is a few microseconds, so the step is launch- and sync-bound.
+Every prototype level (`L0`, `L0DR`, `L05`, `L05Q`, `L1`, `L2-legacy`) has an eager reference in `isaac_net/core/proto/netsim.py` and graph-safe fast versions in `netsim_fast.py`. The reference is slow because each control step of the slot-level engine runs 40 UL slots of about 25 small operations plus a 5-iteration PF loop, about 3,000 kernel launches, and its boolean-mask writes call `nonzero` and force a host sync each. At 16×16 the GPU work per kernel is a few microseconds, so the step is launch- and sync-bound.
 
 The fast rewrite replaces every mask write with `torch.where` or a one-hot select, replaces `argsort` compaction with a stable cumsum scatter that yields the same permutation, computes the step index and slot times on the device, and keeps all state in persistent buffers updated in place so captured graph addresses stay valid across `reset`. Three backends are built on it:
 
@@ -246,7 +246,7 @@ Multi-cell costs about 20% more kernel launches and 20–27% more GPU time, inde
 
 ## Full environment step with the fleet task
 
-The pure-torch fleet task (`isaaclab_net/examples/fleet_task.py`: E envs of R robots, goals, hazards, detection frames over the uplink, random actions that send w.p. 0.15) with the network off (a stub that never delivers) or with an engine behind its `add_frames` / `step` calls. Milliseconds per full env step, same conditions and format as above (`benchmarks/uncontended/bench_env.py`, results in `env_rtx4090.csv`):
+The pure-torch fleet task (`isaac_net/examples/fleet_task.py`: E envs of R robots, goals, hazards, detection frames over the uplink, random actions that send w.p. 0.15) with the network off (a stub that never delivers) or with an engine behind its `add_frames` / `step` calls. Milliseconds per full env step, same conditions and format as above (`benchmarks/uncontended/bench_env.py`, results in `env_rtx4090.csv`):
 
 | Network | Backend | 256 × 16 | 1024 × 32 | 4096 × 16 | 4096 × 100 | Peak MiB, 4096 × 100 |
 |:---|:---|---:|---:|---:|---:|---:|

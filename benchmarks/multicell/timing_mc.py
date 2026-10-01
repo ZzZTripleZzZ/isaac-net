@@ -9,9 +9,9 @@ import time
 import torch
 
 from common import MC, Traffic, SIZES
-from isaaclab_net.core.proto.netsim import NetSlot, Radio
-from isaaclab_net.core.proto.netsim_mc import NetSlotMC
-from isaaclab_net.core.radio import RadioMC
+from isaac_net.core.proto.netsim import NetSlot, Radio
+from isaac_net.core.proto.netsim_mc import NetSlotMC
+from isaac_net.core.radio import RadioMC
 
 
 def engines(E, R, dev):

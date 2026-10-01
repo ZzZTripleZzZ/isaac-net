@@ -14,10 +14,10 @@ import warnings
 import pytest
 import torch
 
-from isaaclab_net import NRConfig
-from isaaclab_net.isaac import (DR_KEYS, OBS_FEATURES, IsaacNetCfg, NetModule, NetObs, TrafficRequest, dr_support,
+from isaac_net import NRConfig
+from isaac_net.isaac import (DR_KEYS, OBS_FEATURES, IsaacNetCfg, NetModule, NetObs, TrafficRequest, dr_support,
                                 dr_table, obs_dim)
-from isaaclab_net.isaac.mixins import NetEnvMixin
+from isaac_net.isaac.mixins import NetEnvMixin
 
 E, R = 6, 4
 SIZES = (4000.0, 30000.0)

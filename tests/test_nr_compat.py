@@ -5,8 +5,8 @@ report found loss within about 5 points and goodput within about 10%."""
 import pytest
 import torch
 
-from isaaclab_net.core import make_engine, netslot_compat
-from isaaclab_net.core.proto.netsim import Radio
+from isaac_net.core import make_engine, netslot_compat
+from isaac_net.core.proto.netsim import Radio
 
 E, R, T, WARM = 16, 16, 80, 20
 

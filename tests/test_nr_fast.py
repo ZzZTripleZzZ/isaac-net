@@ -25,9 +25,9 @@ import pytest
 import torch
 
 import nr_equiv
-from isaaclab_net.core import NRConfig, make_engine
-from isaaclab_net.core import nr_rng as RNG
-from isaaclab_net.core.nr_engine import NRNet
+from isaac_net.core import NRConfig, make_engine
+from isaac_net.core import nr_rng as RNG
+from isaac_net.core.nr_engine import NRNet
 
 SIZES = (4000.0, 30000.0)
 
@@ -176,7 +176,7 @@ def test_g4_triton_hash_equals_torch():
 @pytest.mark.gpu
 @pytest.mark.parametrize("backend", ["graph", "triton"])
 def test_g5_netmodule_backend(backend):
-    from isaaclab_net.isaac.net_module import NetModule, TrafficRequest
+    from isaac_net.isaac.net_module import NetModule, TrafficRequest
     E, R = 4, 3
     m = NetModule("L2", E, R, "cuda", NRConfig(msg_sizes=SIZES), backend, radio="engine", seed=1)
     ref = NetModule("L2", E, R, "cuda", NRConfig(msg_sizes=SIZES), "reference", radio="engine", seed=1)
@@ -198,7 +198,7 @@ def test_g5_netmodule_backend(backend):
 def test_g6_slot_tap_wrapper_on_graph():
     """The energy wrapper's per-slot tap (core/slot_tap.py, a SINR hook) is captured by graph: its per-robot counters
     and the engine outputs equal the reference bitwise. The fused triton kernel refuses such hooks."""
-    from isaaclab_net.core.energy import EnergyConfig
+    from isaac_net.core.energy import EnergyConfig
     E, R = 4, 3
     cfg = NRConfig(msg_sizes=SIZES, energy=EnergyConfig(battery_j=500.0), dl=True)
     ref = make_engine("L2", E, R, "cuda", cfg, "reference", seed=2)

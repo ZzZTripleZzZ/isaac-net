@@ -11,7 +11,7 @@
 | add-on per-robot Doppler | AR(1) fading correlation from each robot's speed (NR engine) | `fading_doppler="per_robot"`, `doppler_min_speed_mps` |
 
 ```python
-from isaaclab_net import NRConfig, make_engine
+from isaac_net import NRConfig, make_engine
 
 cfg = NRConfig(channel="tr38901_inf_sh", blockage=True, fading_doppler="per_robot")   # indoor factory
 eng = make_engine("L2", E, R, "cuda", cfg)
@@ -60,22 +60,22 @@ The InF LOS probability is `exp(-d_2D / k_subsce)` with `k_subsce = -d_clutter /
 
 A map is an `.npz` (or `.pt`) with `gain_db [C, H, W]`, the path gain in dB between cell `c` and a robot antenna at grid point `(x_j, y_i)`, and `bounds = (x0, y0, x1, y1)`, the coordinates of the first and last grid points. Rows run along y and columns along x. `RadioMap.sample(pos)` interpolates bilinearly in dB and clamps to the border outside the bounds. A map may carry `gnb_xy` metadata, and `RadioMC` then checks that `cell_positions_m` matches it, because association, interference and blockage use the configured positions. The map has no per-env randomness: a partial reset changes nothing, and fast fading is the only random part of the link.
 
-`radio_map_path="synthetic"` loads the tiny map shipped in `core/data/radio_map_synthetic.npz` (two gNBs at (25, 75) and (125, 75) m, 16 × 16 points over 150 m, log-distance loss plus a 10 dB wall at x = 75 m; `python -m isaaclab_net.tools.make_synthetic_radio_map` regenerates it):
+`radio_map_path="synthetic"` loads the tiny map shipped in `core/data/radio_map_synthetic.npz` (two gNBs at (25, 75) and (125, 75) m, 16 × 16 points over 150 m, log-distance loss plus a 10 dB wall at x = 75 m; `python -m isaac_net.tools.make_synthetic_radio_map` regenerates it):
 
 ```python
 cfg = NRConfig(channel="radio_map", radio_map_path="synthetic", n_cells=2,
                cell_positions_m=((25.0, 75.0), (125.0, 75.0)), noise_model="thermal")
 ```
 
-**Baking a map with Sionna RT.** `isaaclab_net/tools/bake_radio_map_sionna.py` runs Sionna RT's `RadioMapSolver` and writes the file. It needs only numpy and `sionna-rt`, so run it as a script in a separate environment. Without `--scene` it builds a simple warehouse (concrete floor and walls, a row of metal shelves, no ceiling). It was tested on the lab box with sionna-rt 2.2.0 (Mitsuba 3.9.1, Dr.Jit 1.5.0) in a side conda env: a 60 × 40 m map at 1 m cells with two gNBs at 6 m, 2 × 10^6 samples per gNB and 4 bounces took 4.4 s on the CPU (`--variant llvm`). In the open parts of the hall the map lies within 0.4–1.7 dB of free-space loss, as expected for LOS plus reflections. The CUDA variant needs OptiX, which WSL 2 does not expose without extra setup, hence the CPU variant there.
+**Baking a map with Sionna RT.** `isaac_net/tools/bake_radio_map_sionna.py` runs Sionna RT's `RadioMapSolver` and writes the file. It needs only numpy and `sionna-rt`, so run it as a script in a separate environment. Without `--scene` it builds a simple warehouse (concrete floor and walls, a row of metal shelves, no ceiling). It was tested on the lab box with sionna-rt 2.2.0 (Mitsuba 3.9.1, Dr.Jit 1.5.0) in a side conda env: a 60 × 40 m map at 1 m cells with two gNBs at 6 m, 2 × 10^6 samples per gNB and 4 bounces took 4.4 s on the CPU (`--variant llvm`). In the open parts of the hall the map lies within 0.4–1.7 dB of free-space loss, as expected for LOS plus reflections. The CUDA variant needs OptiX, which WSL 2 does not expose without extra setup, hence the CPU variant there.
 
 ```bash
 python -m venv rtenv && rtenv/bin/pip install sionna-rt
-rtenv/bin/python isaaclab_net/tools/bake_radio_map_sionna.py --out warehouse.npz --arena 60 40 \
+rtenv/bin/python isaac_net/tools/bake_radio_map_sionna.py --out warehouse.npz --arena 60 40 \
     --gnb 15 20 6 --gnb 45 20 6 --fc 3.5 --cell 1.0 --samples 2000000 --depth 4 --variant llvm
 ```
 
-**From an Isaac Sim USD stage.** `python -m isaaclab_net.tools.scene.bake --usd scene.usd ...` exports the stage with ITU radio materials and bakes the map, and `IsaacNetCfg(scene_map=...)` does the same at env creation from the running stage. See [scene-radio-map.md](scene-radio-map.md).
+**From an Isaac Sim USD stage.** `python -m isaac_net.tools.scene.bake --usd scene.usd ...` exports the stage with ITU radio materials and bakes the map, and `IsaacNetCfg(scene_map=...)` does the same at env creation from the running stage. See [scene-radio-map.md](scene-radio-map.md).
 
 ## Blockage
 

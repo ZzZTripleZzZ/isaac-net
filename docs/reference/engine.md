@@ -4,7 +4,7 @@
 
 ```python
 import torch
-from isaaclab_net import NRConfig, Requests, make_engine
+from isaac_net import NRConfig, Requests, make_engine
 
 net = make_engine("L2-legacy", E=256, R=16, device="cuda", config=NRConfig(), backend="graph", seed=0)
 net.submit(None, Requests(send))          # send [E,R] long: 0 nothing, c >= 1 one message of class c
@@ -67,7 +67,7 @@ Capture steps in every output are in the environment's own clock, so after a res
 
 Which backend is available for which level is listed on [Fidelity levels](levels.md#backends-per-level).
 
-::: isaaclab_net.core.engine.make_engine
+::: isaac_net.core.engine.make_engine
     options:
       heading_level: 2
 
@@ -75,7 +75,7 @@ Which backend is available for which level is listed on [Fidelity levels](levels
 
 The prototype levels (`L0` to `L1`, `L2-legacy`), the surrogates and the bounds all derive from `NetBase`, whose docstrings define the contract calls in detail.
 
-::: isaaclab_net.core.proto.netsim.NetBase
+::: isaac_net.core.proto.netsim.NetBase
     options:
       members: [reset, submit, step, attach_radio, add_frames]
 
@@ -83,6 +83,6 @@ The prototype levels (`L0` to `L1`, `L2-legacy`), the surrogates and the bounds 
 
 `make_engine("L2", ...)` returns an `NREngine`, which wraps the configurable NR engine `NRNet` in the contract API. Attributes it does not define itself, such as the per-direction MAC objects `ul` and `dl`, are forwarded to the wrapped `NRNet`.
 
-::: isaaclab_net.core.engine.NREngine
+::: isaac_net.core.engine.NREngine
     options:
       members: [clock, reset, submit, step, add_dl_frames, attach_radio, set_sinr_hook, add_frames]

@@ -9,9 +9,9 @@ import pytest
 import torch
 
 from engine_api import Workload
-from isaaclab_net.core import BOUND_LEVELS, SURROGATE_LEVELS, NRConfig, Requests, make_engine
-from isaaclab_net.core.levels import CLASSES, DelayNet
-from isaaclab_net.core.proto import netsim
+from isaac_net.core import BOUND_LEVELS, SURROGATE_LEVELS, NRConfig, Requests, make_engine
+from isaac_net.core.levels import CLASSES, DelayNet
+from isaac_net.core.proto import netsim
 
 NEW = SURROGATE_LEVELS + BOUND_LEVELS
 SIZES = (4000.0, 30000.0)
@@ -32,7 +32,7 @@ def synth_frames(n_ep=2, En=3, T=12, n=400, seed=0):
 
 def synth_params(level, seed=0):
     if level == "TR":
-        from isaaclab_net.tools.fit_levels import fit_tr
+        from isaac_net.tools.fit_levels import fit_tr
         return fit_tr(synth_frames(seed=seed), 3, 2, 12)[0]
     if level == "GE":
         K = 3
@@ -193,7 +193,7 @@ def test_tr_matching_rule():
     """Trace 0 has class-1 outcomes at steps 2 (0.5) and 5 (1.25) and no class-2 frame; trace 1 has one class-2
     frame (0.75). Nearest step with data, ties to the earlier step; beyond the horizon the last step; a class
     missing from the trace falls back to the pooled class outcomes."""
-    from isaaclab_net.tools.fit_levels import fit_tr
+    from isaac_net.tools.fit_levels import fit_tr
     fr = {"ep": torch.tensor([0, 0, 0]), "env": torch.tensor([0, 0, 1]), "cls": torch.tensor([1, 1, 2]),
           "cap": torch.tensor([2, 5, 3]), "delay": torch.tensor([0.5, 1.25, 0.75])}
     p, info = fit_tr(fr, 2, 1, 10)
@@ -323,7 +323,7 @@ def test_params_loading_and_rejections(tmp_path, monkeypatch):
 
 def test_fit_smoke_cpu(tmp_path):
     """A tiny end-to-end fit from L2-legacy rollouts on CPU, saved outside the repo and loaded by make_engine."""
-    from isaaclab_net.tools import fit_levels as fl
+    from isaac_net.tools import fit_levels as fl
     fit, info = fl.fit_levels("L2-legacy", E=4, R=4, episodes=2, test_episodes=1, T=30, sizes=SIZES, device="cpu",
                               nn_steps=20, qa_envs=4, qa_etas=(0.7, 1.0), log=lambda *a: None)
     assert set(fit) == {"TR", "GE", "QA", "NN", "meta"} and fit["meta"]["source"] == "L2-legacy"
@@ -344,7 +344,7 @@ def test_fit_smoke_cpu(tmp_path):
 def test_logger_features_match_engine_state(seeded):
     """RolloutLogger computes the NN features through the API only; they must equal the engine's own
     frame features (own queue, backlogged robots, SNR) for the prototype L2-legacy engine."""
-    from isaaclab_net.tools.fit_levels import RolloutLogger
+    from isaac_net.tools.fit_levels import RolloutLogger
     net = make_engine("L2-legacy", 3, 4, "cpu", sizes=SIZES, seed=0)
     log = RolloutLogger(net, SIZES, cap_max=10 ** 9)
     log.reset()

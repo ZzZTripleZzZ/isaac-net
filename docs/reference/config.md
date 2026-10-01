@@ -3,8 +3,8 @@
 One dataclass, `NRConfig`, configures every module: numerology, carrier and TDD pattern, MAC timing, HARQ and RLC, the PHY tables, the radio and cell layout, and the application fields. Do not add a second config class; new options become `NRConfig` fields.
 
 ```python
-from isaaclab_net import NRConfig, make_engine
-from isaaclab_net.core import multicell, netslot_compat
+from isaac_net import NRConfig, make_engine
+from isaac_net.core import multicell, netslot_compat
 
 cfg = NRConfig(mu=1, bandwidth_mhz=20, tdd_pattern="DDDSU", n_harq=16, mcs_table=2, dl=True)
 print(cfg.summary())                     # 51 PRB in 13 RBGs, 200 slots per 100 ms step, ...
@@ -39,49 +39,49 @@ Independently of strict mode, the prototype levels, the surrogates and the bound
 
 ## All fields
 
-The tables below are generated from `isaaclab_net/core/config.py` when the docs are built. "Read by" names the engines that read the field: the application fields are read by every level, and "L2-legacy multi-cell" is `L2-legacy` with a non-legacy cell setting such as `multicell(n)`. [Configurability](../configurability.md) discusses the modelling choices behind many of them.
+The tables below are generated from `isaac_net/core/config.py` when the docs are built. "Read by" names the engines that read the field: the application fields are read by every level, and "L2-legacy multi-cell" is `L2-legacy` with a non-legacy cell setting such as `multicell(n)`. [Configurability](../configurability.md) discusses the modelling choices behind many of them.
 
 <!-- NRCONFIG_FIELDS -->
 
 ## Class and functions
 
-::: isaaclab_net.core.config.NRConfig
+::: isaac_net.core.config.NRConfig
     options:
       heading_level: 3
       members: [summary, with_, unused_fields, is_legacy_cell, gnb_xy, scs_khz, slot_ms, nprb, rbg, n_subbands, subband_prbs, slots_per_step, ul_slots_per_step, dl_slots_per_step, sr_delay, ul_rtt, slot_symbols, ul_capable, noise_dbm_per_prb, subband_noise_dbm, ul_pc_on, ul_slot_ms, ttt_slots, ho_int_slots]
 
-::: isaaclab_net.core.config.fields_read_by
+::: isaac_net.core.config.fields_read_by
     options:
       heading_level: 3
 
-::: isaaclab_net.core.config.netslot_compat
+::: isaac_net.core.config.netslot_compat
     options:
       heading_level: 3
 
-::: isaaclab_net.core.config.lena_like
+::: isaac_net.core.config.lena_like
     options:
       heading_level: 3
 
-::: isaaclab_net.core.config.lena_validation
+::: isaac_net.core.config.lena_validation
     options:
       heading_level: 3
 
-::: isaaclab_net.core.config.srsran_like
+::: isaac_net.core.config.srsran_like
     options:
       heading_level: 3
 
-::: isaaclab_net.core.config.oai_like
+::: isaac_net.core.config.oai_like
     options:
       heading_level: 3
 
-::: isaaclab_net.core.config.multicell
+::: isaac_net.core.config.multicell
     options:
       heading_level: 3
 
-::: isaaclab_net.core.config.fading_rho_from_speed
+::: isaac_net.core.config.fading_rho_from_speed
     options:
       heading_level: 3
 
-::: isaaclab_net.core.config.rbg_size_38214
+::: isaac_net.core.config.rbg_size_38214
     options:
       heading_level: 3

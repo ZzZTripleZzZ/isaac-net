@@ -1,6 +1,6 @@
 # Differentiable network models
 
-`isaaclab_net.core.diff` holds differentiable versions of two of the fluid levels, so that gradients can flow from network KPIs back to the decisions that caused them. This is exploratory research infrastructure. It is not an engine level: `make_engine` does not build it, it has no CUDA-graph backend, and the engine levels do not depend on it.
+`isaac_net.core.diff` holds differentiable versions of two of the fluid levels, so that gradients can flow from network KPIs back to the decisions that caused them. This is exploratory research infrastructure. It is not an engine level: `make_engine` does not build it, it has no CUDA-graph backend, and the engine levels do not depend on it.
 
 | What | Module | Relaxes | Gradients with respect to |
 |:---|:---|:---|:---|
@@ -14,7 +14,7 @@ KPIs (per robot `[E,R]` and as batch means): mean delay of the delivered message
 
 ```python
 import torch
-from isaaclab_net.core.diff import DiffFluid, rollout
+from isaac_net.core.diff import DiffFluid, rollout
 
 E, R, T = 64, 8, 100
 p = torch.full((E, R), 0.4, requires_grad=True)          # send probability per robot

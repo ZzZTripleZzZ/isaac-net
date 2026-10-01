@@ -24,12 +24,12 @@ tests/test_nr_fast.py.
 import pytest
 import torch
 
-from isaaclab_net.core import make_engine, multicell
-from isaaclab_net.core.config import LENA_MAC_V2, NRConfig, lena_like, lena_match, lena_match_v2, lena_validation, \
+from isaac_net.core import make_engine, multicell
+from isaac_net.core.config import LENA_MAC_V2, NRConfig, lena_like, lena_match, lena_match_v2, lena_validation, \
     lena_validation_v2
-from isaaclab_net.core.mac_ul import AMC_STATE, BSR_LEVELS, BSR_STATE
-from isaaclab_net.core.nr_engine import NRNet
-from isaaclab_net.core.nr_loadfix import LoadFixConfig, LoadFixNet, apply_loadfix
+from isaac_net.core.mac_ul import AMC_STATE, BSR_LEVELS, BSR_STATE
+from isaac_net.core.nr_engine import NRNet
+from isaac_net.core.nr_loadfix import LoadFixConfig, LoadFixNet, apply_loadfix
 from nr_frozen.loadfix_proto import LoadFixNet as ProtoNet
 from nr_frozen.loadfix_proto import make_arm as proto_arm
 
@@ -311,7 +311,7 @@ def test_l9_three_cells_with_every_switch():
         retx = ((ul.h_ntx > h0) & (h0 > 0)).any(-1)            # robots that sent a retransmission
         per_slot.append((member & retx[:, None, :]).sum(-1))   # [E, C]
     ul.slot = chk
-    from isaaclab_net.core.traffic import Requests
+    from isaac_net.core.traffic import Requests
     g = torch.Generator().manual_seed(0)
     pos = torch.rand(E, R, 2, generator=g) * 150
     delivered = 0

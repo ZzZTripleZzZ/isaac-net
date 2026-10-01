@@ -7,11 +7,11 @@ import sys
 import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
-from isaaclab_net.bridges.ns3_lockstep.lockstep_net import Ns3Net  # noqa: E402
+from isaac_net.bridges.ns3_lockstep.lockstep_net import Ns3Net  # noqa: E402
 REPO = os.environ["NS3BRIDGE_REPO"]   # training repo with train.py and pilot/ (required)
 
 sys.path.insert(0, REPO)
-from isaaclab_net.core.proto.netsim import Radio  # noqa: E402
+from isaac_net.core.proto.netsim import Radio  # noqa: E402
 
 
 class FakeEnv:

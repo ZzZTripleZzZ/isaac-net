@@ -1,13 +1,13 @@
-"""Differentiable fluid models (isaaclab_net.core.diff): tau = 0 equals the discrete L1 / QA levels, the relaxation
+"""Differentiable fluid models (isaac_net.core.diff): tau = 0 equals the discrete L1 / QA levels, the relaxation
 converges to them as tau -> 0, autograd gradients pass gradcheck (float64, tiny sizes) and match central finite
 differences at realistic sizes, mass is conserved at any temperature, partial resets are isolated."""
 import pytest
 import torch
 
-from isaaclab_net.core.config import NRConfig
-from isaaclab_net.core.diff import DiffFluid, discrete_rollout, make_discrete, relaxed_bernoulli, rollout
-from isaaclab_net.core.diff import relax as rx
-from isaaclab_net.core.proto.netsim import Radio
+from isaac_net.core.config import NRConfig
+from isaac_net.core.diff import DiffFluid, discrete_rollout, make_discrete, relaxed_bernoulli, rollout
+from isaac_net.core.diff import relax as rx
+from isaac_net.core.proto.netsim import Radio
 
 LEVEL = {"L1": "L1", "QA": "QA"}
 
@@ -182,7 +182,7 @@ def test_relaxations():
 
 def test_proxy_recipe_smoke():
     """The neural-proxy recipe: dataset from L2-legacy rollouts, fit, and per-robot gradients (tiny CPU run)."""
-    from isaaclab_net.core.diff import proxy
+    from isaac_net.core.diff import proxy
     X, Y = proxy.collect(n_batches=2, E=8, R=4, T=30, warmup=5, device="cpu", seed=0)
     assert X.shape[0] == Y.shape[0] == 2 * 8 * 4 and X.shape[1] == proxy.N_FEAT
     model = proxy.fit(X, Y, epochs=5, device="cpu")

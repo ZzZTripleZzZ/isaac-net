@@ -10,9 +10,9 @@ from torch.profiler import profile, ProfilerActivity
 
 from common import Traffic, SIZES
 from timing_mc import engines
-from isaaclab_net.core.proto.netsim import NetSlot, Radio
-from isaaclab_net.core.proto.netsim_mc import NetSlotMC
-from isaaclab_net.core.radio import RadioMC
+from isaac_net.core.proto.netsim import NetSlot, Radio
+from isaac_net.core.proto.netsim_mc import NetSlotMC
+from isaac_net.core.radio import RadioMC
 
 
 def prof(name, cfg, E, R, dev="cuda", warm=10, n=5):

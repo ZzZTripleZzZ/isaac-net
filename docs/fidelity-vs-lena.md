@@ -1,6 +1,6 @@
 # Fidelity of the NR engine against ns-3 5G-LENA
 
-This page is the formal comparison between the NR engine (level `L2`, `isaaclab_net/core/nr_engine.py`) and ns-3.48 with 5G-LENA v5.1. It replays every run of the 5G-LENA sweep described in [validation-5g-lena.md](validation-5g-lena.md) with identical per-UE link budgets and identical offered traffic, compares delay, delivery, throughput, HARQ and PRB use per run and over the sweep, splits the one fitted parameter into a fit set and a hold-out set, ablates the alignment switches one at a time, adds the legacy slot-level engine (`L2-legacy`) and the 5G-LENA fading arm as separate rows, and reports simulation speed. It makes no claim about RL policies. Every number below is in a CSV under `benchmarks/fidelity/results/`, and `python benchmarks/fidelity/report.py` regenerates every table from those files.
+This page is the formal comparison between the NR engine (level `L2`, `isaac_net/core/nr_engine.py`) and ns-3.48 with 5G-LENA v5.1. It replays every run of the 5G-LENA sweep described in [validation-5g-lena.md](validation-5g-lena.md) with identical per-UE link budgets and identical offered traffic, compares delay, delivery, throughput, HARQ and PRB use per run and over the sweep, splits the one fitted parameter into a fit set and a hold-out set, ablates the alignment switches one at a time, adds the legacy slot-level engine (`L2-legacy`) and the 5G-LENA fading arm as separate rows, and reports simulation speed. It makes no claim about RL policies. Every number below is in a CSV under `benchmarks/fidelity/results/`, and `python benchmarks/fidelity/report.py` regenerates every table from those files.
 
 ## Summary
 
@@ -306,7 +306,7 @@ The reference NR engine costs about 0.5 s per simulated second whatever N is, be
 On the lab box, from a working directory of your choice (each arm takes about 40 minutes of wall time on 2 threads per job with 8 jobs in parallel, dominated by N = 64):
 
 ```bash
-export ISAACLAB_NET_LENA_TABLES=<path to lena_eesm_tables.npz> REPO=<isaaclab-net checkout> PYTHONPATH=$REPO
+export ISAAC_NET_LENA_TABLES=<path to lena_eesm_tables.npz> REPO=<isaac-net checkout> PYTHONPATH=$REPO
 python $REPO/benchmarks/fidelity/lena_extract.py <ns3ref>/sweep/nofade data        # 5G-LENA per-frame / per-UE / SR data
 python $REPO/benchmarks/fidelity/lena_extract.py <ns3ref>/sweep/fade data_fade
 bash $REPO/benchmarks/fidelity/run_all.sh        # primary + 8 ablation arms, 4 replicas, CPU, reference backend

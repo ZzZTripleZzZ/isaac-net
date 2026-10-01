@@ -41,9 +41,9 @@ import os  # noqa: E402
 import sys  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # without pip install -e .
-from isaaclab_net.core.proto.netsim import NetSlot  # noqa: E402
-from isaaclab_net.core.proto.netsim_fast import NetSlotFast  # noqa: E402
-from isaaclab_net.examples.fleet_task import TASK_SIZES, FleetEnv  # noqa: E402
+from isaac_net.core.proto.netsim import NetSlot  # noqa: E402
+from isaac_net.core.proto.netsim_fast import NetSlotFast  # noqa: E402
+from isaac_net.examples.fleet_task import TASK_SIZES, FleetEnv  # noqa: E402
 
 
 def main():

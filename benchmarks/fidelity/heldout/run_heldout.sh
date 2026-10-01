@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Held-out 5G-LENA scenario, end to end (lab box). Needs the 5G-LENA reference program of the validation
-# (NETSLOT_REF_BIN), its parse_run.py (PARSE_RUN), the local 5G-LENA tables (ISAACLAB_NET_LENA_TABLES) and REPO
-# pointing at an isaaclab-net checkout. Run from an empty directory; ns-3 runs 8 at a time.
+# (NETSLOT_REF_BIN), its parse_run.py (PARSE_RUN), the local 5G-LENA tables (ISAAC_NET_LENA_TABLES) and REPO
+# pointing at an isaac-net checkout. Run from an empty directory; ns-3 runs 8 at a time.
 set -u
 REPO=${REPO:-repo}
 H=$REPO/benchmarks/fidelity/heldout

@@ -219,7 +219,7 @@ The engine RNG changes the draws but not the result: moderate p50 −1.2% (proto
 On the lab box, in a directory holding the `data/` of `lena_extract.py` and a checkout in `repo/`:
 
 ```bash
-export ISAACLAB_NET_LENA_TABLES=<path to lena_eesm_tables.npz> REPO=$PWD/repo PYTHONPATH=$PWD/repo
+export ISAAC_NET_LENA_TABLES=<path to lena_eesm_tables.npz> REPO=$PWD/repo PYTHONPATH=$PWD/repo
 python repo/benchmarks/fidelity/loadfix/lena_pipeline.py <ns3ref>/sweep/nofade data results      # 5G-LENA grant accounting
 mkdir -p replay && ln -s <fidelity study replay>/primary replay/primary                          # the base arm
 bash repo/benchmarks/fidelity/loadfix/run_loadfix.sh                                              # 9 arms (prototype names, via the shim)

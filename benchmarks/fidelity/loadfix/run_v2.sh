@@ -3,8 +3,8 @@
 #   v2           lena_validation_v2() (every switch on, engine RNG: the default)
 #   v2_global    the same with rng="global" (the prototype's random stream: bitwise the prototype's `all` arm)
 #   primary_eng  lena_validation() with the engine RNG (the v1 baseline under today's default RNG)
-# Run from a directory holding data/ (lena_extract.py output); REPO points at an isaaclab-net checkout.
-#   ISAACLAB_NET_LENA_TABLES=<local 5G-LENA EESM tables> REPO=... bash run_v2.sh
+# Run from a directory holding data/ (lena_extract.py output); REPO points at an isaac-net checkout.
+#   ISAAC_NET_LENA_TABLES=<local 5G-LENA EESM tables> REPO=... bash run_v2.sh
 set -u
 REPO=${REPO:-repo}
 REPS=${REPS:-4}

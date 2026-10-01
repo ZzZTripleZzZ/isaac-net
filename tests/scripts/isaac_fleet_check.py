@@ -24,8 +24,8 @@ parser.add_argument("--steps", type=int, default=60)
 add_launcher_args(parser)
 _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root
 if _root not in sys.path:
-    sys.path.insert(0, _root)                     # isaaclab_net without `pip install -e .`
-from isaaclab_net.examples.fleet_args import add_net_args, isaac_cfg_from_args  # noqa: E402
+    sys.path.insert(0, _root)                     # isaac_net without `pip install -e .`
+from isaac_net.examples.fleet_args import add_net_args, isaac_cfg_from_args  # noqa: E402
 
 add_net_args(parser)
 args = parser.parse_args()
@@ -37,8 +37,8 @@ KEYS = ("newest_cap", "last_cap", "aoi_s", "queue_len", "queue_bytes", "delivere
 def main():
     import torch
 
-    from isaaclab_net.examples.isaac_fleet_env import NetFleetEnv, make_cfg
-    from isaaclab_net.isaac import NetModule, TrafficRequest
+    from isaac_net.examples.isaac_fleet_env import NetFleetEnv, make_cfg
+    from isaac_net.isaac import NetModule, TrafficRequest
 
     cfg = make_cfg(args.num_envs, args.num_robots, args.level, device="cuda:0", backend=args.backend,
                    isaac=isaac_cfg_from_args(args))

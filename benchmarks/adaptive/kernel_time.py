@@ -19,9 +19,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _root)
 from sweep import workload  # noqa: E402
-from isaaclab_net.core import NRConfig, make_engine  # noqa: E402
-from isaaclab_net.core.adaptive import FidelityConfig, make_adaptive  # noqa: E402
-from isaaclab_net.core.proto.netsim import Requests  # noqa: E402
+from isaac_net.core import NRConfig, make_engine  # noqa: E402
+from isaac_net.core.adaptive import FidelityConfig, make_adaptive  # noqa: E402
+from isaac_net.core.proto.netsim import Requests  # noqa: E402
 
 
 def kernel_ms(net, wl, warm=20, n=10):

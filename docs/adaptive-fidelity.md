@@ -1,14 +1,14 @@
 # Adaptive and mixed fidelity
 
-`AdaptiveEngine` (`isaaclab_net/core/adaptive.py`) runs a cheap level and an expensive level behind one engine API and decides, per env, which of them simulates each control step. Three uses share the same machinery:
+`AdaptiveEngine` (`isaac_net/core/adaptive.py`) runs a cheap level and an expensive level behind one engine API and decides, per env, which of them simulates each control step. Three uses share the same machinery:
 
 1. **Static mixed fidelity.** A fixed random subset of the envs, for example 10%, runs on `L2-legacy` for the whole run, and the other envs run on `L1`.
 2. **Load-triggered switching.** An env runs on the cheap level while its load indicator stays low and moves to the expensive level while the cell is congested, which is where the cheap levels diverge from `L2-legacy`.
 3. **Curriculum.** A schedule over training iterations, such as `L1` for the first k iterations and `L2-legacy` afterwards, applied through a callback.
 
 ```python
-from isaaclab_net.core import NRConfig, Requests
-from isaaclab_net.core.adaptive import FidelityConfig, FidelityCurriculum, make_adaptive
+from isaac_net.core import NRConfig, Requests
+from isaac_net.core.adaptive import FidelityConfig, FidelityCurriculum, make_adaptive
 
 fid = FidelityConfig(cheap="L1", expensive="L2-legacy", cheap_backend="triton", expensive_backend="triton",
                      mode="load", indicator="backlog", up_threshold=4000.0, active_budget=0.25)

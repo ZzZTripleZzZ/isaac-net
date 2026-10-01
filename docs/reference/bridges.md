@@ -7,7 +7,7 @@ The bridges run a task's network through ns-3.48 with 5G-LENA v5.1 instead of th
 | lockstep (TCP, Unix socket or ns3-ai shared memory) | `bridges.ns3_lockstep.lockstep_net.Ns3Net`, `bridges.ns3_lockstep.netmodule_ns3.Ns3NetModule` | `bridges/ns3/lockstep/netslot-bridge.cc` | closed-loop co-simulation of a few environments |
 | process pool | `bridges.ns3_pool.poolnet.PoolNet` | `bridges/ns3/pool/netslot-bridge.cc` | one ns-3 process per environment, the CPU co-simulation baseline |
 | offline replay | `bridges.ns3_offline` (`rollout`, `offline_ns3`, `ReplayNet`) | the pool program in file mode | ns-3 after the fact on a recorded rollout |
-| 5G-LENA sweep replay | `python -m isaaclab_net.bridges.ns3_offline.lena_replay` | none | replays a 5G-LENA sweep in the NR engine with identical link budgets |
+| 5G-LENA sweep replay | `python -m isaac_net.bridges.ns3_offline.lena_replay` | none | replays a 5G-LENA sweep in the NR engine with identical link budgets |
 
 ## Environment variables
 
@@ -17,15 +17,15 @@ The bridges run a task's network through ns-3.48 with 5G-LENA v5.1 instead of th
 | `NS3_TOOLCHAIN_ENV` | lockstep | the conda environment whose `lib/` the ns-3 build links against |
 | `BRIDGE_ROOT` | pool, offline | directory with the pool's `bin/netslot-bridge` |
 
-The defaults are paths on the lab machine. Build instructions and the wire protocol are in `isaaclab_net/bridges/ns3/lockstep/README.md` and `isaaclab_net/bridges/ns3/pool/README.md`.
+The defaults are paths on the lab machine. Build instructions and the wire protocol are in `isaac_net/bridges/ns3/lockstep/README.md` and `isaac_net/bridges/ns3/pool/README.md`.
 
 ## Usage
 
 `Ns3Net` and `PoolNet` implement the engine contract on top of ns-3, so they replace `make_engine(...)` in a loop that drives the engine. Their positions come from an environment object with a `pos [E, R, 2]` attribute, attached with `bind_env(env)` or `attach_env(env)`:
 
 ```python
-from isaaclab_net import Requests
-from isaaclab_net.bridges.ns3_lockstep.lockstep_net import Ns3Net
+from isaac_net import Requests
+from isaac_net.bridges.ns3_lockstep.lockstep_net import Ns3Net
 
 net = Ns3Net(E, R, "cpu", (4000.0, 30000.0), mode="procs", transport="tcp").bind_env(env)
 net.reset()                                   # full resets only
@@ -45,27 +45,27 @@ The Isaac-style `Ns3NetModule` takes a `NetConfig` and `step(poses_end, TrafficR
 
 ## Classes
 
-::: isaaclab_net.bridges.ns3_lockstep.lockstep_net.Ns3Net
+::: isaac_net.bridges.ns3_lockstep.lockstep_net.Ns3Net
     options:
       heading_level: 3
       members: [bind_env, close]
 
-::: isaaclab_net.bridges.ns3_lockstep.netmodule_ns3.Ns3NetModule
+::: isaac_net.bridges.ns3_lockstep.netmodule_ns3.Ns3NetModule
     options:
       heading_level: 3
       members: [reset, step, close]
 
-::: isaaclab_net.bridges.ns3_lockstep.core.Ns3Lockstep
+::: isaac_net.bridges.ns3_lockstep.core.Ns3Lockstep
     options:
       heading_level: 3
       members: [reset, step, close]
 
-::: isaaclab_net.bridges.ns3_pool.poolnet.PoolNet
+::: isaac_net.bridges.ns3_pool.poolnet.PoolNet
     options:
       heading_level: 3
       members: [attach_env, close]
 
-::: isaaclab_net.bridges.ns3_offline.replaynet.ReplayNet
+::: isaac_net.bridges.ns3_offline.replaynet.ReplayNet
     options:
       heading_level: 3
       members: false

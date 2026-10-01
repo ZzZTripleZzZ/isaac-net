@@ -9,9 +9,9 @@ import time
 import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # without pip install -e .
-from isaaclab_net.core.config import NRConfig, lena_like, netslot_compat  # noqa: E402
-from isaaclab_net.core.nr_engine import NRNet  # noqa: E402
-from isaaclab_net.core.proto.netsim import NetSlot  # noqa: E402
+from isaac_net.core.config import NRConfig, lena_like, netslot_compat  # noqa: E402
+from isaac_net.core.nr_engine import NRNet  # noqa: E402
+from isaac_net.core.proto.netsim import NetSlot  # noqa: E402
 
 dev = "cuda"
 R = 16

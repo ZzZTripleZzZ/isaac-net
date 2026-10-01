@@ -1,4 +1,4 @@
-"""Replay the primary-arm 5G-LENA runs through LoadFixNet (isaaclab_net/core/nr_loadfix.py) for one arm.
+"""Replay the primary-arm 5G-LENA runs through LoadFixNet (isaac_net/core/nr_loadfix.py) for one arm.
 LoadFixNet is now NRNet on the NRConfig switches that the prototype names map to (the shim in nr_loadfix.py); the
 engine-integrated v2 preset is replayed by nr_replay.py with NRF_PRESET=lena_validation_v2 (run_v2.sh).
 
@@ -23,8 +23,8 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 from nr_replay import DRAIN_STEPS, TbAcc, parse_overrides  # noqa: E402
 
-from isaaclab_net.core.config import lena_validation  # noqa: E402
-from isaaclab_net.core.nr_loadfix import LoadFixNet, make_arm  # noqa: E402
+from isaac_net.core.config import lena_validation  # noqa: E402
+from isaac_net.core.nr_loadfix import LoadFixNet, make_arm  # noqa: E402
 
 
 def main():

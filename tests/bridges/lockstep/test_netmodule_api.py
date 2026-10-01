@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
-from isaaclab_net.bridges.ns3_lockstep.netmodule_ns3 import NetConfig, Ns3NetModule, TrafficRequest  # noqa: E402
+from isaac_net.bridges.ns3_lockstep.netmodule_ns3 import NetConfig, Ns3NetModule, TrafficRequest  # noqa: E402
 
 
 def main():

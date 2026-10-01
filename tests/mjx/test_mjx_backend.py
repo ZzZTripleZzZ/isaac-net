@@ -26,7 +26,7 @@ E, R, T, EP = 24, 6, 70, 25
 def _rollout(level, backend, impl="warp", seed=3):
     from mujoco_playground import wrapper
 
-    from isaaclab_net.examples.mjx_fleet_env import MJXFleetEnv, default_config
+    from isaac_net.examples.mjx_fleet_env import MJXFleetEnv, default_config
     c = default_config()
     c.num_envs, c.num_robots, c.net_level, c.net_backend, c.net_seed, c.net_record, c.impl = \
         E, R, level, backend, seed, True, impl
@@ -78,7 +78,7 @@ def test_buffer_callback_is_zero_copy_on_xla_stream():
 def test_in_env_network_equals_direct_replay(level, backend, ref_backend):
     if backend == "triton":
         pytest.importorskip("triton")
-    from isaaclab_net.mjx import NET_OUTPUTS, replay
+    from isaac_net.mjx import NET_OUTPUTS, replay
     env, net, fresh = _rollout(level, backend)
     m = env.net
     assert m.calls == T and len(m.records) == T

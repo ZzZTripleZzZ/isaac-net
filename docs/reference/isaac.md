@@ -1,6 +1,6 @@
 # Isaac Lab layer
 
-`isaaclab_net.isaac` puts a network into an Isaac Lab task. Only `rigid_positions_local` and the `mdp` event term touch Isaac Lab objects, and nothing in the package imports Isaac Lab at import time, so `NetModule`, `MessageHistory` and the mixin hooks also run on a CPU without Isaac ([Tutorial 04](../tutorials/04_isaac_lab_integration.ipynb) does exactly that).
+`isaac_net.isaac` puts a network into an Isaac Lab task. Only `rigid_positions_local` and the `mdp` event term touch Isaac Lab objects, and nothing in the package imports Isaac Lab at import time, so `NetModule`, `MessageHistory` and the mixin hooks also run on a CPU without Isaac ([Tutorial 04](../tutorials/04_isaac_lab_integration.ipynb) does exactly that).
 
 | Name | Role |
 |:---|:---|
@@ -42,47 +42,47 @@
 | `msg_delivered`, `timed_out`, `cap`, `cls`, `delay_s` | `[E, R, F]` | per message slot, as in the engine; `delay_s` in seconds |
 | `t` | `[E]` long | the clock value of this step |
 
-::: isaaclab_net.isaac.net_module.NetModule
+::: isaac_net.isaac.net_module.NetModule
     options:
       heading_level: 2
       members: [clock, reset, submit, step, set_params, sample_params, queued]
 
-::: isaaclab_net.isaac.net_module.TrafficRequest
+::: isaac_net.isaac.net_module.TrafficRequest
     options:
       heading_level: 2
 
-::: isaaclab_net.isaac.mixins.NetEnvMixin
+::: isaac_net.isaac.mixins.NetEnvMixin
     options:
       heading_level: 2
       members: [net_setup, net_step, net_reset, net_obs]
 
-::: isaaclab_net.isaac.mixins.rigid_positions_local
+::: isaac_net.isaac.mixins.rigid_positions_local
     options:
       heading_level: 2
 
-::: isaaclab_net.isaac.net_module.MessageHistory
+::: isaac_net.isaac.net_module.MessageHistory
     options:
       heading_level: 2
       members: [push, update, reset]
 
-::: isaaclab_net.isaac.net_module.net_features
+::: isaac_net.isaac.net_module.net_features
     options:
       heading_level: 2
 
-::: isaaclab_net.isaac.radio.IsaacRadio
+::: isaac_net.isaac.radio.IsaacRadio
     options:
       heading_level: 2
       members: [reset, set_params, sample_params, params, snr_db]
 
-::: isaaclab_net.isaac.radio.ParamRanges
+::: isaac_net.isaac.radio.ParamRanges
     options:
       heading_level: 2
 
-::: isaaclab_net.isaac.mdp.events.randomize_network
+::: isaac_net.isaac.mdp.events.randomize_network
     options:
       heading_level: 2
 
-::: isaaclab_net.isaac.net_module.NetConfig
+::: isaac_net.isaac.net_module.NetConfig
     options:
       heading_level: 2
       members: false

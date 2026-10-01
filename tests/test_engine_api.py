@@ -5,8 +5,8 @@ import pytest
 import torch
 
 from engine_api import default_params
-from isaaclab_net.core import SIM_LEVELS, Requests, make_engine, netslot_compat
-from isaaclab_net.core.proto import netsim
+from isaac_net.core import SIM_LEVELS, Requests, make_engine, netslot_compat
+from isaac_net.core.proto import netsim
 
 E, R = 4, 5
 KEYS = {"delivered", "timed_out", "cap", "cls", "delay", "newest", "det_env", "queue_len", "queue_bytes", "sinr_db", "t"}
@@ -116,7 +116,7 @@ def test_nr_legacy_calls_and_time_checks(seeded):
 def test_nr_poses_match_snr_input(seeded):
     """With the default single-cell config, poses go through RadioMC (gNB at the origin, fixed noise) and give
     the same SNR as the prototype Radio's snr_db on the same shadowing field."""
-    from isaaclab_net.core.radio import Radio, RadioMC
+    from isaac_net.core.radio import Radio, RadioMC
     net = _engine("L2")
     pos = torch.rand(E, R, 2) * 150
     radio = Radio(E, "cpu", generator=torch.Generator().manual_seed(9))

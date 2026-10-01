@@ -8,9 +8,9 @@ import random
 import pytest
 import torch
 
-from isaaclab_net import NRConfig
-from isaaclab_net.core.phy import MCS_TABLES, PHY, tbs_38214
-from isaaclab_net.tools.measure import calibrate, preset, replay
+from isaac_net import NRConfig
+from isaac_net.core.phy import MCS_TABLES, PHY, tbs_38214
+from isaac_net.tools.measure import calibrate, preset, replay
 
 GNB = {"mu": 1, "bandwidth_mhz": 20, "tdd_pattern": "DDDSU", "special_split": [10, 2, 2], "sr_period_ms": 20,
        "min_k2": 2, "olla_target_bler": 0.01, "mcs_table": 1, "metrics_period_ms": 1000}
@@ -188,7 +188,7 @@ def test_preset_rejects_unknown_fields(tmp_path):
 
 
 def test_harq_chains_ignore_decoded_only_sources():
-    from isaaclab_net.tools.measure.schema import new_row
+    from isaac_net.tools.measure.schema import new_row
     base = dict(run_id="r", ue="ue1", dir="UL", event="rx", harq_id=0)
     rows = [new_row("sched", **base, source="srsran_phylog", slot_abs=0, rv=0, crc=0, mcs=5),
             new_row("sched", **base, source="srsran_phylog", slot_abs=8, rv=2, crc=1, mcs=5),

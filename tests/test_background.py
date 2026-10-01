@@ -8,8 +8,8 @@ stay in their region; unsupported levels refuse the config.
 import pytest
 import torch
 
-from isaaclab_net.core import NRConfig, Requests, TrafficModel, make_engine, multicell
-from isaaclab_net.core.background import BackgroundConfig, BackgroundLoop
+from isaac_net.core import NRConfig, Requests, TrafficModel, make_engine, multicell
+from isaac_net.core.background import BackgroundConfig, BackgroundLoop
 
 E, R = 4, 3
 LEVELS = ("L2", "L1", "L2-legacy")

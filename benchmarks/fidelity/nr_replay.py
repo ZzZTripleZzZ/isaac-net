@@ -27,8 +27,8 @@ import time
 import numpy as np
 import torch
 
-from isaaclab_net.core import config as C
-from isaaclab_net.core.nr_engine import NRNet
+from isaac_net.core import config as C
+from isaac_net.core.nr_engine import NRNet
 
 DRAIN_STEPS = 22          # LENA: traffic 0.5..30.5 s, simulation ends at 32.7 s
 

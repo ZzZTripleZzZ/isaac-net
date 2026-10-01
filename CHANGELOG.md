@@ -1,10 +1,14 @@
 # Changelog
 
-All notable changes to `isaaclab-net` are listed here, grouped by area. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/) from 0.1.0 on: while the major version is 0, a minor release may change the API, and every such change is listed under **Changed**. [RELEASE.md](RELEASE.md) describes how a release is cut.
+All notable changes to `isaac-net` are listed here, grouped by area. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/) from 0.1.0 on: while the major version is 0, a minor release may change the API, and every such change is listed under **Changed**. [RELEASE.md](RELEASE.md) describes how a release is cut.
 
 ## [0.1.0] - unreleased
 
 The first packaged release. It collects everything built since the initial prototype.
+
+### Changed
+
+- The project is renamed from `isaaclab-net` to `isaac-net`: the distribution is `isaac-net`, the package is `isaac_net` (`import isaaclab_net` no longer works), the console scripts are `isaac-net-bench`, `isaac-net-bake` and `isaac-net-measure`, the environment variables are `ISAAC_NET_*` (formerly `ISAACLAB_NET_*`), and the default cache directory is `~/.cache/isaac_net/` (move files from `~/.cache/isaaclab_net/` or point the variables at them). NVIDIA's Isaac Lab and its `isaaclab` packages keep their names.
 
 ### Engine and API
 
@@ -18,7 +22,7 @@ The first packaged release. It collects everything built since the initial proto
 - Prototype levels `L0`, `L0DR`, `L05`, `L05Q`, `L1` and the slot-level uplink, now `L2-legacy` (frozen, with the multi-cell `NetSlotMC`).
 - The configurable NR engine as level `L2`: numerology 0 to 2, any FR1 bandwidth and TDD pattern, 3GPP MCS/TBS tables, EESM with Sionna or locally generated 5G-LENA BLER tables, multiple HARQ processes with chase or IR combining, RLC AM retry or UM loss, OLLA, downlink with delayed CQI, and the schedulers `pf`, `pf_wideband`, `maxci` and `rr`.
 - Multi-cell NR: up to 7 cells, a PF scheduler and HARQ per cell, same-slot uplink and downlink interference, fractional uplink power control and A3 handover.
-- Fitted surrogate levels `TR`, `GE`, `QA`, `NN`, the bounds `ORACLE` and `NOCOMM`, and the fit tool `python -m isaaclab_net.tools.fit_levels`.
+- Fitted surrogate levels `TR`, `GE`, `QA`, `NN`, the bounds `ORACLE` and `NOCOMM`, and the fit tool `python -m isaac_net.tools.fit_levels`.
 - Level `WIFI`: a mean-field 802.11 DCF / EDCA uplink with 802.11ax / ac / a rates, A-MPDU, RTS/CTS, several APs with RSSI association and optional hidden nodes, plus an exact slot-level CSMA/CA event simulator for validation (`core/wifi`).
 - Adaptive and mixed fidelity (`core/adaptive.py`): a cheap and an expensive level behind one engine, per env, with static mixes, load-triggered switching with queue handoff, and curricula.
 - Differentiable fluid models `L1D` and `QAD` (`core/diff`), with gradients of delay, delivery, AoI and energy with respect to send probability, message size, transmit power and position, and a neural-proxy recipe. Exploratory; not a `make_engine` level.
@@ -47,8 +51,8 @@ The first packaged release. It collects everything built since the initial proto
 ### Simulator integration
 
 - Isaac Lab 3.0 layer on `make_engine`: `NetModule`, the `NetEnvMixin` for `DirectRLEnv` with four hook calls, `IsaacNetCfg` (pose source, network rate, blockage, domain randomization, observation selection), mdp terms and the fleet and warehouse demo envs.
-- Install scripts for Windows (`scripts/windows/`) and a Linux / HPC recipe with kit-less Isaac Lab on Newton or OV PhysX in Apptainer (`scripts/hazel/`, `ISAACLAB_NET_PHYSICS`).
-- MuJoCo Playground / MJX backend (`isaaclab_net.mjx.NetModuleMJX`) through `jax.experimental.buffer_callback` with zero-copy DLPack views, an MJX fleet env and Brax PPO.
+- Install scripts for Windows (`scripts/windows/`) and a Linux / HPC recipe with kit-less Isaac Lab on Newton or OV PhysX in Apptainer (`scripts/hazel/`, `ISAAC_NET_PHYSICS`).
+- MuJoCo Playground / MJX backend (`isaac_net.mjx.NetModuleMJX`) through `jax.experimental.buffer_callback` with zero-copy DLPack views, an MJX fleet env and Brax PPO.
 
 ### Validation and measurement tools
 
@@ -59,13 +63,13 @@ The first packaged release. It collects everything built since the initial proto
 
 ### Benchmark suite
 
-- `isaaclab_net.bench`: four network-aware multi-robot tasks (`fleet_alert`, `coop_map`, `coverage_nav`, `edge_control`) with `default`, `light` and `background` variants, shared metrics, random / heuristic / PPO (MLP and GRU) baselines, a versioned result format, a load-calibration command and a report command with 95% confidence intervals.
+- `isaac_net.bench`: four network-aware multi-robot tasks (`fleet_alert`, `coop_map`, `coverage_nav`, `edge_control`) with `default`, `light` and `background` variants, shared metrics, random / heuristic / PPO (MLP and GRU) baselines, a versioned result format, a load-calibration command and a report command with 95% confidence intervals.
 
 ### Packaging
 
-- Version 0.1.0, single-sourced from `isaaclab_net.__version__`. Full project metadata, BSD-3-Clause license expression, and the Sionna table license shipped as a license file.
+- Version 0.1.0, single-sourced from `isaac_net.__version__`. Full project metadata, BSD-3-Clause license expression, and the Sionna table license shipped as a license file.
 - Extras: `dev`, `docs`, `mjx`, `isaac`, `ns3`, `oai`, `sionna`, `wifi` and `all`.
-- Console scripts: `isaaclab-net-bench`, `isaaclab-net-bake` and `isaaclab-net-measure` (probe, ingest and calibrate subcommands).
+- Console scripts: `isaac-net-bench`, `isaac-net-bake` and `isaac-net-measure` (probe, ingest and calibrate subcommands).
 - The wheel ships the Sionna BLER tables with their Apache-2.0 license, the synthetic radio map, the BSD-3 ns-3 bridge sources and the OAI compose file. GPL-derived 5G-LENA tables are excluded from both the wheel and the sdist.
 
 ### Documentation

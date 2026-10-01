@@ -15,20 +15,20 @@ LEVELS=("L0 graph" "L2-legacy triton")
 
 for lb in "${LEVELS[@]}"; do
   set -- $lb
-  python -m isaaclab_net.bench calibrate --task all --level "$1" --backend "$2" --envs 64 --robots 16 \
+  python -m isaac_net.bench calibrate --task all --level "$1" --backend "$2" --envs 64 --robots 16 \
     > "$OUT/calibration_$1_$2.jsonl"
-  python -m isaaclab_net.bench calibrate --task all --variant light --level "$1" --backend "$2" --envs 64 \
+  python -m isaac_net.bench calibrate --task all --variant light --level "$1" --backend "$2" --envs 64 \
     --robots 16 > "$OUT/calibration_light_$1_$2.jsonl"
 done
 # the same with one robot per env: no contention, so what remains is the per-robot link (coverage)
-python -m isaaclab_net.bench calibrate --task all --level L2-legacy --backend triton --envs 64 --robots 1 \
+python -m isaac_net.bench calibrate --task all --level L2-legacy --backend triton --envs 64 --robots 1 \
   > "$OUT/calibration_R1_L2-legacy_triton.jsonl"
 for lb in "${LEVELS[@]}"; do
   set -- $lb
-  python -m isaaclab_net.bench run --task all --level "$1" --backend "$2" \
+  python -m isaac_net.bench run --task all --level "$1" --backend "$2" \
     --baselines random,heuristic,ppo_mlp,ppo_gru "${COMMON[@]}"
-  python -m isaaclab_net.bench run --task all --variant light --level "$1" --backend "$2" \
+  python -m isaac_net.bench run --task all --variant light --level "$1" --backend "$2" \
     --baselines random,heuristic "${COMMON[@]}"
 done
-python -m isaaclab_net.bench report "$OUT" --json "$OUT/aggregate.json" > "$OUT/report.md"
+python -m isaac_net.bench report "$OUT" --json "$OUT/aggregate.json" > "$OUT/report.md"
 echo DONE > "$OUT/DONE"

@@ -1,7 +1,7 @@
 """T-tracer parser extensions used by the OAI bridge campaign: SDU bytes from GNB_MAC_LCID_UL and failed-CRC
 inference from GNB_MAC_PUSCH_POWER_CONTROL without a decoded PDU (tools/measure/oai.py, infer_crc)."""
-from isaaclab_net.tools.measure import oai
-from isaaclab_net.tools.measure.calibrate import harq_chains
+from isaac_net.tools.measure import oai
+from isaac_net.tools.measure.calibrate import harq_chains
 
 TRACE = """turning ON GNB_MAC_LCID_UL
 01:00:00.000100000 [1790740000]: GNB_MAC_UL rnti 100 frame 10 slot 3 mcs 5 tbs 200

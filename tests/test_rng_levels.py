@@ -17,8 +17,8 @@ import pytest
 import torch
 
 from engine_api import lookup_params
-from isaaclab_net.core import NRConfig, Requests, make_engine, multicell
-from isaaclab_net.core.proto import rng as R_
+from isaac_net.core import NRConfig, Requests, make_engine, multicell
+from isaac_net.core.proto import rng as R_
 from test_levels import synth_params
 
 SIZES = (4000.0, 30000.0)
@@ -248,7 +248,7 @@ def test_non_default_app_config_runs_and_conserves(level, cfg):
 
 
 def test_defaults_resolve_to_the_prototype_constants():
-    from isaaclab_net.core.proto import netsim
+    from isaac_net.core.proto import netsim
     cfg = NRConfig()
     assert (cfg.frame_buffer, cfg.timeout_steps, cfg.proto_slots_per_step) == (netsim.F, netsim.TIMEOUT,
                                                                                 netsim.UL_PER_STEP)
@@ -272,7 +272,7 @@ def test_timeout_and_step_change_the_levels():
 
 
 def test_fit_records_app_values_and_loading_checks_them(tmp_path):
-    from isaaclab_net.tools import fit_levels as fl
+    from isaac_net.tools import fit_levels as fl
     fit, info = fl.fit_levels("L2-legacy", E=4, R=4, episodes=2, test_episodes=1, T=60, sizes=SIZES, device="cpu",
                               nn_steps=10, qa_envs=4, qa_etas=(1.0,), log=lambda *a: None, frame_buffer=32,
                               timeout_steps=40, control_step_ms=50.0)

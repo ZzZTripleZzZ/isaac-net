@@ -26,7 +26,7 @@ for P in ${PHYS:-newton ovphysx}; do
   for ER in 256x16 1024x16 1024x64 4096x32; do
     E=${ER%x*}; R=${ER#*x}
     for L in off L2-legacy; do
-      run fleet_${P}_${ER}_$L env ISAACLAB_NET_PHYSICS=$P python benchmarks/isaac/bench.py --num_envs $E --num_robots $R \
+      run fleet_${P}_${ER}_$L env ISAAC_NET_PHYSICS=$P python benchmarks/isaac/bench.py --num_envs $E --num_robots $R \
           --level $L --backend triton --steps 100 --warmup 20 --max_time 60 --out $OUT/fleet_scale.jsonl
     done
   done

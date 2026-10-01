@@ -3,7 +3,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
 import torch
-from isaaclab_net.bridges.ns3_offline.offline_ns3 import parse_replies
+from isaac_net.bridges.ns3_offline.offline_ns3 import parse_replies
 
 d, seed = sys.argv[1], int(sys.argv[2])
 rec = torch.load(f"{d}/closed_random_s{seed}.pt", weights_only=False)

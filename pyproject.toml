@@ -3,14 +3,14 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "isaaclab-net"
-# The version lives in isaaclab_net/__init__.py (__version__) and nowhere else; setuptools reads it statically.
+name = "isaac-net"
+# The version lives in isaac_net/__init__.py (__version__) and nowhere else; setuptools reads it statically.
 dynamic = ["version"]
 description = "GPU-batched 5G and Wi-Fi network simulation for massively parallel robot learning in Isaac Lab"
 readme = "README.md"
 license = "BSD-3-Clause"
 # The Sionna BLER tables in core/data are Apache-2.0 and ship with their license file (docs/licensing.md).
-license-files = ["LICENSE", "isaaclab_net/core/data/LICENSE-*"]
+license-files = ["LICENSE", "isaac_net/core/data/LICENSE-*"]
 authors = [{ name = "Zifan Zhang", email = "zhangzifan716@gmail.com" }]
 requires-python = ">=3.10"
 keywords = ["5G", "NR", "network simulation", "reinforcement learning", "Isaac Lab", "robotics", "GPU", "Wi-Fi"]
@@ -35,24 +35,24 @@ dependencies = ["torch>=2.4", "numpy>=1.23"]
 [project.urls]
 # The repository is private until the project is released publicly; these links need repository access.
 Homepage = "https://isaacnet.zifanzhang.com"
-Documentation = "https://github.com/ZzZTripleZzZ/isaaclab-net/tree/main/docs"
-Repository = "https://github.com/ZzZTripleZzZ/isaaclab-net"
-Changelog = "https://github.com/ZzZTripleZzZ/isaaclab-net/blob/main/CHANGELOG.md"
+Repository = "https://github.com/ZzZTripleZzZ/isaac-net"
+Documentation = "https://github.com/ZzZTripleZzZ/isaac-net/tree/main/docs"
+Changelog = "https://github.com/ZzZTripleZzZ/isaac-net/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4", "ruff>=0.5", "build>=1.2"]
 # The docs site (mkdocs.yml): `mkdocs build --strict`. Reads the sources statically; torch is not needed.
 docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.26", "mkdocs-jupyter>=0.25"]
-# MuJoCo Playground / MJX backend (isaaclab_net.mjx, docs/backends-mjx.md). JAX is pinned: Brax 0.14.2 PPO fails on
-# JAX 0.10. Linux with CUDA 12. Install torch (CUDA build) first, then `pip install "isaaclab-net[mjx]"`.
+# MuJoCo Playground / MJX backend (isaac_net.mjx, docs/backends-mjx.md). JAX is pinned: Brax 0.14.2 PPO fails on
+# JAX 0.10. Linux with CUDA 12. Install torch (CUDA build) first, then `pip install "isaac-net[mjx]"`.
 mjx = ["jax[cuda12]==0.9.2", "playground==0.2.0", "brax==0.14.2"]
-# Isaac Lab layer (isaaclab_net.isaac). Install Isaac Sim and Isaac Lab separately, per docs/isaac-lab.md (Windows)
+# Isaac Lab layer (isaac_net.isaac). Install Isaac Sim and Isaac Lab separately, per docs/isaac-lab.md (Windows)
 # or docs/isaac-lab-linux.md (Linux / HPC). This extra only adds our helpers; it installs no NVIDIA software.
 isaac = []
-# ns-3 bridges (isaaclab_net.bridges.ns3_*; docs/bridges.md). ns-3 + 5G-LENA are built locally and never installed
+# ns-3 bridges (isaac_net.bridges.ns3_*; docs/bridges.md). ns-3 + 5G-LENA are built locally and never installed
 # by pip. pybind11 provides the headers for the optional ns3-ai shared-memory module (build_pyshm.sh).
 ns3 = ["pybind11>=2.10"]
-# OAI rfsim bridge (isaaclab_net.bridges.oai; docs/bridges-oai.md) and the measurement tools it logs through.
+# OAI rfsim bridge (isaac_net.bridges.oai; docs/bridges-oai.md) and the measurement tools it logs through.
 # OAI itself runs from its Docker images. pyarrow adds Parquet output next to the CSV tables.
 oai = ["pyarrow>=12"]
 # Scene radio maps and PHY table export (tools/scene, tools/export_sionna_tables; docs/scene-radio-map.md):
@@ -61,28 +61,28 @@ sionna = ["sionna-rt>=1.0", "sionna==2.2.0", "usd-core>=24.0"]
 # The Wi-Fi level (WIFI) needs nothing beyond the core dependencies.
 wifi = []
 # Everything installable with pip on Linux without Isaac Sim / Isaac Lab.
-all = ["isaaclab-net[dev,docs,mjx,ns3,oai,sionna]"]
+all = ["isaac-net[dev,docs,mjx,ns3,oai,sionna]"]
 
 [project.scripts]
-isaaclab-net-bench = "isaaclab_net.bench.cli:main"
-isaaclab-net-bake = "isaaclab_net.tools.scene.bake:main"
-isaaclab-net-measure = "isaaclab_net.tools.measure.cli:main"
+isaac-net-bench = "isaac_net.bench.cli:main"
+isaac-net-bake = "isaac_net.tools.scene.bake:main"
+isaac-net-measure = "isaac_net.tools.measure.cli:main"
 
 [tool.setuptools.dynamic]
-version = { attr = "isaaclab_net.__version__" }
+version = { attr = "isaac_net.__version__" }
 
 [tool.setuptools.packages.find]
-include = ["isaaclab_net*"]
+include = ["isaac_net*"]
 
 [tool.setuptools.package-data]
 # Sionna-derived BLER tables (Apache-2.0) with their license, and the 1.5 kB synthetic radio map
 # (radio_map_path="synthetic"). The 5G-LENA tables (GPL-derived) are never shipped: they are generated locally by
-# `python -m isaaclab_net.tools.extract_lena_tables` (docs/licensing.md).
-"isaaclab_net.core" = ["data/*.npz", "data/LICENSE-*"]
+# `python -m isaac_net.tools.extract_lena_tables` (docs/licensing.md).
+"isaac_net.core" = ["data/*.npz", "data/LICENSE-*"]
 # Our own (BSD-3) C++ ns-3 bridge programs and build scripts; binaries built from them are not shipped.
-"isaaclab_net.bridges" = ["ns3/*/README.md", "ns3/*/*.cc", "ns3/*/*.sh", "ns3/*/pyshm/*.cc"]
+"isaac_net.bridges" = ["ns3/*/README.md", "ns3/*/*.cc", "ns3/*/*.sh", "ns3/*/pyshm/*.cc"]
 # The OAI rfsim deployment (compose file; OAI's own configuration files are generated from an OAI checkout).
-"isaaclab_net.bridges.oai" = ["deploy/*.yaml"]
+"isaac_net.bridges.oai" = ["deploy/*.yaml"]
 
 [tool.setuptools.exclude-package-data]
 # Never ship locally generated GPL-derived tables, even if one lands in the source tree.
@@ -103,7 +103,7 @@ addopts = "-ra"
 line-length = 120
 target-version = "py310"
 # Files that import Isaac Lab / ManiSkill / ns-3 bindings, which CI does not install.
-extend-exclude = ["isaaclab_net/isaac/isaac_env_skeleton.py", "isaaclab_net/isaac/maniskill_adapter_skeleton.py",
+extend-exclude = ["isaac_net/isaac/isaac_env_skeleton.py", "isaac_net/isaac/maniskill_adapter_skeleton.py",
                   "venv*", ".pydeps"]
 
 [tool.ruff.lint]
@@ -117,8 +117,8 @@ ignore = ["E701", "E702", "E731", "E741"]
 "benchmarks/bench.py" = ["E402", "F821", "F841"]   # F821: false positive from `del net` after a closure
 "benchmarks/bench_env.py" = ["E402"]
 "tests/scripts/test_equiv.py" = ["F401"]
-"isaaclab_net/isaac/netmodule.py" = ["F401", "F841"]
+"isaac_net/isaac/netmodule.py" = ["F401", "F841"]
 # Merged components, kept as delivered (dead locals in nrconfig's PHY; lab validation scripts).
-"isaaclab_net/core/phy.py" = ["F841"]
+"isaac_net/core/phy.py" = ["F841"]
 "benchmarks/ns3/*" = ["E402", "F841"]
 "tests/bridges/*" = ["E402", "F841"]

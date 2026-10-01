@@ -6,7 +6,7 @@ per-run metric of compare.py (delay, drop, goodput, first-transmission BLER from
 computed as in the CPU replay. The engine seed is 12345 + N (the CPU replay seeds the global RNG with the same value
 and draws the engine seed from it, so the two replays use different engine streams: compare them as distributions).
 
-The configuration is the preset named by NRF_PRESET (a function of isaaclab_net.core.config, or "NRConfig" for the
+The configuration is the preset named by NRF_PRESET (a function of isaac_net.core.config, or "NRConfig" for the
 bare defaults) with the k=v overrides of the command line.
 
 usage: NRF_PRESET=<preset> python nr_replay_fast.py <data dir> <out dir> <arm> <reps> <N> <backend> [k=v ...]
@@ -22,8 +22,8 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nr_replay import DRAIN_STEPS, parse_overrides  # noqa: E402
 
-from isaaclab_net.core import config as C  # noqa: E402
-from isaaclab_net.core.engine import make_engine  # noqa: E402
+from isaac_net.core import config as C  # noqa: E402
+from isaac_net.core.engine import make_engine  # noqa: E402
 
 
 def main():

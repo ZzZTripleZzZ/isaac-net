@@ -20,17 +20,17 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", ".."))
 
-from isaaclab_net.core import config as C  # noqa: E402
-from isaaclab_net.tools.measure import ingest  # noqa: E402
-from isaaclab_net.tools.measure.preset import load_preset  # noqa: E402
-from isaaclab_net.tools.measure.replay import ks, replay  # noqa: E402
-from isaaclab_net.tools.measure.schema import read_table  # noqa: E402
+from isaac_net.core import config as C  # noqa: E402
+from isaac_net.tools.measure import ingest  # noqa: E402
+from isaac_net.tools.measure.preset import load_preset  # noqa: E402
+from isaac_net.tools.measure.replay import ks, replay  # noqa: E402
+from isaac_net.tools.measure.schema import read_table  # noqa: E402
 
 
 def lena_match_cfg():
     cfg = C.lena_match(fading=False)
     try:
-        from isaaclab_net.core.phy import PHY
+        from isaac_net.core.phy import PHY
         PHY("ul", cfg.mcs_table, "cpu", bler_target=cfg.bler_target, source=cfg.bler_source)
         return cfg, "lena_match"
     except Exception:  # noqa: BLE001 - LENA tables are generated locally, often absent

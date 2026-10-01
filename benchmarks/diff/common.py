@@ -12,9 +12,9 @@ import torch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from isaaclab_net.core.diff import (DiffFluid, discrete_rollout, make_discrete, radio_snr_db,  # noqa: E402
+from isaac_net.core.diff import (DiffFluid, discrete_rollout, make_discrete, radio_snr_db,  # noqa: E402
                                     relaxed_bernoulli, rollout)
-from isaaclab_net.core.proto.netsim import Radio  # noqa: E402
+from isaac_net.core.proto.netsim import Radio  # noqa: E402
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
 

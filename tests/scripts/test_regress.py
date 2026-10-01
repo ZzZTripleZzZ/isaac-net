@@ -19,9 +19,9 @@ _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
 
-from isaaclab_net.core.proto import netsim
+from isaac_net.core.proto import netsim
 import netsim_v0
-from isaaclab_net.core.proto.netsim import F, Requests
+from isaac_net.core.proto.netsim import F, Requests
 from testlib import SIZES, Inject, InjectArrival, Workload, same, synthetic_params
 
 

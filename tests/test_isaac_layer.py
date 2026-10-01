@@ -15,9 +15,9 @@ import math
 import pytest
 import torch
 
-from isaaclab_net import NRConfig, Requests, make_engine
-from isaaclab_net.core.proto.netsim import Radio
-from isaaclab_net.isaac import (IsaacRadio, MessageHistory, NetConfig, NetModule, ParamRanges, TrafficRequest,
+from isaac_net import NRConfig, Requests, make_engine
+from isaac_net.core.proto.netsim import Radio
+from isaac_net.isaac import (IsaacRadio, MessageHistory, NetConfig, NetModule, ParamRanges, TrafficRequest,
                                 segment_sphere_blocked)
 
 R, SIZES = 6, (4000.0, 30000.0)
@@ -116,7 +116,7 @@ def test_module_equals_reference_engine_gpu(level, backend, seeded):
 def test_graph_module_bitwise_with_injected_draws(seeded):
     """graph backend through NetModule == reference engine, bitwise, with the same injected slot draws."""
     from engine_api import InjectNoise
-    from isaaclab_net.core.proto.netsim import S, UL_PER_STEP
+    from isaac_net.core.proto.netsim import S, UL_PER_STEP
     E, T, t_reset, dev = 16, 60, 29, torch.device("cuda")
     cfg = CFG.with_(rng="global")          # InjectNoise feeds the reference through the global-RNG draw sites
     net = NetModule("L2-legacy", E, R, dev, cfg, "graph", pose_chunks=1, seed=5, inject=True)
@@ -223,8 +223,8 @@ def test_message_history_first_capture():
 
 
 def test_mixin_mdp_and_netconfig_need_no_isaac(seeded):
-    from isaaclab_net.isaac.mdp import randomize_network
-    from isaaclab_net.isaac.mixins import NetEnvMixin
+    from isaac_net.isaac.mdp import randomize_network
+    from isaac_net.isaac.mixins import NetEnvMixin
 
     class Env(NetEnvMixin):
         num_envs, device = 3, "cpu"

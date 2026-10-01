@@ -13,7 +13,7 @@
 # %% [markdown]
 # # Tutorial 04: Isaac Lab integration
 #
-# The Isaac Lab layer (`isaaclab_net.isaac`) puts a network into a `DirectRLEnv` with four hook calls. Most of it
+# The Isaac Lab layer (`isaac_net.isaac`) puts a network into a `DirectRLEnv` with four hook calls. Most of it
 # does not import Isaac Lab: `NetModule`, `MessageHistory` and the `NetEnvMixin` hooks are plain PyTorch, so
 # this tutorial runs them on a CPU with a stand-in environment.
 #
@@ -29,8 +29,8 @@
 # %%
 import torch
 
-from isaaclab_net import NRConfig
-from isaaclab_net.isaac import MessageHistory, NetEnvMixin, NetModule, TrafficRequest
+from isaac_net import NRConfig
+from isaac_net.isaac import MessageHistory, NetEnvMixin, NetModule, TrafficRequest
 
 torch.manual_seed(0)
 E, R, dev = 4, 3, "cpu"
@@ -126,13 +126,13 @@ print("clock after resetting env 2:", env.net.clock.tolist())
 # ## The mixin in a real DirectRLEnv
 #
 # > **Not executed: needs Isaac Lab 3.0.** The listing below is the pattern of
-# > `isaaclab_net/examples/isaac_fleet_env.py`, the complete demo env. Run it inside an Isaac Lab installation
+# > `isaac_net/examples/isaac_fleet_env.py`, the complete demo env. Run it inside an Isaac Lab installation
 # > (see `docs/isaac-lab.md`).
 #
 # ```python
 # from isaaclab.envs import DirectRLEnv
-# from isaaclab_net import NRConfig
-# from isaaclab_net.isaac import NetEnvMixin, rigid_positions_local
+# from isaac_net import NRConfig
+# from isaac_net.isaac import NetEnvMixin, rigid_positions_local
 #
 # class MyFleetEnv(NetEnvMixin, DirectRLEnv):
 #     def _setup_scene(self):
@@ -164,14 +164,14 @@ print("clock after resetting env 2:", env.net.clock.tolist())
 #
 # ## Network domain randomization
 #
-# `isaaclab_net.isaac.mdp.randomize_network` is an Isaac Lab event term that redraws per-environment radio
+# `isaac_net.isaac.mdp.randomize_network` is an Isaac Lab event term that redraws per-environment radio
 # parameters (transmit power, noise, path-loss constant and exponent, shadowing, blockage loss). Registered in
 # mode `"reset"`, it runs inside `_reset_idx` before `net_reset`, and `net_reset` never touches the parameters,
 # so the new values hold for the next episode:
 #
 # ```python
 # from isaaclab.managers import EventTermCfg
-# from isaaclab_net.isaac.mdp import randomize_network
+# from isaac_net.isaac.mdp import randomize_network
 #
 # randomize_net = EventTermCfg(func=randomize_network, mode="reset",
 #                              params={"ranges": {"pl_exp": (2.8, 4.0), "shadow_sigma_db": (3.0, 8.0)}})

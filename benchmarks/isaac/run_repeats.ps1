@@ -9,7 +9,7 @@ param([string]$Out = 'benchmarks\isaac\results\scale_repeats.jsonl', [int]$Steps
       [string]$Sizes = '2048x128,4096x128,8192x128', [string]$NrCfg = 'v2l', [string]$LenaTables = '')
 . C:\isaac5g\env.ps1
 $ErrorActionPreference = 'Continue'
-if ($LenaTables) { $env:ISAACLAB_NET_LENA_TABLES = $LenaTables }
+if ($LenaTables) { $env:ISAAC_NET_LENA_TABLES = $LenaTables }
 Set-Location (Resolve-Path "$PSScriptRoot\..\..")
 $smi = 'C:\Windows\System32\nvidia-smi.exe'
 function Wait-Idle {

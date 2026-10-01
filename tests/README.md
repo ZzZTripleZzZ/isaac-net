@@ -10,7 +10,7 @@ ruff check .                           # lint (light config in pyproject.toml)
 ```
 
 Markers: `gpu` tests are skipped automatically when CUDA is unavailable, `isaac` tests when Isaac Lab is not installed; `slow` marks longer runs
-(`-m "not slow"` to skip them). Torch runs single-threaded in tests (`ISAACLAB_NET_TEST_THREADS` overrides).
+(`-m "not slow"` to skip them). Torch runs single-threaded in tests (`ISAAC_NET_TEST_THREADS` overrides).
 The suite also runs in a plain checkout without `pip install -e .` (pyproject.toml puts the repo root on the path).
 
 ## Layout
@@ -58,6 +58,6 @@ the bridge READMEs; they are not collected either.
 
 ## Adding tests
 
-A change to a prototype level goes into `isaaclab_net/core/proto/netsim.py` first; `test_equivalence_cpu.py`
+A change to a prototype level goes into `isaac_net/core/proto/netsim.py` first; `test_equivalence_cpu.py`
 and the GPU `graph` test then show whether `netsim_fast.py` followed. Keep GPU tests small (E ≤ 64); the lab
 GPU is shared.

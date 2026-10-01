@@ -76,7 +76,7 @@ On ColO-RAN (LTE downlink, 114k UE-windows), the achieved bits per PRB-TTI rise 
 
 ## Presets
 
-The fits became presets of `NRConfig` in `isaaclab_net/core/config.py`, which the NR engine (`L2`) uses directly:
+The fits became presets of `NRConfig` in `isaac_net/core/config.py`, which the NR engine (`L2`) uses directly:
 
 | Preset | Settings | Source |
 |:---|:---|:---|

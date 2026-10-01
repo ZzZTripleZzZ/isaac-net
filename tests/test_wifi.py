@@ -8,13 +8,13 @@ import numpy as np
 import pytest
 import torch
 
-from isaaclab_net.core import NRConfig, Requests, make_engine
-from isaaclab_net.core.traffic import TrafficModel
-from isaaclab_net.core.wifi import WifiConfig, WifiNet, mcs_table
-from isaaclab_net.core.wifi import meanfield as mf
-from isaaclab_net.core.wifi.eventsim import Const, Station, run
-from isaaclab_net.core.wifi.phy import AccessTiming, ctrl_us, ppdu_us
-from isaaclab_net.core.wifi.validate import _wifi_station, engine_periodic, event_periodic, meanfield_saturated
+from isaac_net.core import NRConfig, Requests, make_engine
+from isaac_net.core.traffic import TrafficModel
+from isaac_net.core.wifi import WifiConfig, WifiNet, mcs_table
+from isaac_net.core.wifi import meanfield as mf
+from isaac_net.core.wifi.eventsim import Const, Station, run
+from isaac_net.core.wifi.phy import AccessTiming, ctrl_us, ppdu_us
+from isaac_net.core.wifi.validate import _wifi_station, engine_periodic, event_periodic, meanfield_saturated
 
 KEYS = {"delivered", "timed_out", "cap", "cls", "delay", "newest", "det_env", "queue_len", "queue_bytes", "sinr_db",
         "t", "serving_cell", "wifi_mcs", "wifi_rate_mbps", "wifi_access_ms", "wifi_p_fail", "wifi_busy"}
@@ -147,7 +147,7 @@ def test_meanfield_vs_event_saturation(n, B):
 def test_ns3_reference_points():
     """ns-3.48 wifi-bianchi (802.11ax MCS 7, no aggregation, saturated), validation Table F: the mean-field model
     within 3.5 % of ns-3 with collision_time="difs" (the default)."""
-    from isaaclab_net.core.wifi.validate import NS3_WIFI_BIANCHI
+    from isaac_net.core.wifi.validate import NS3_WIFI_BIANCHI
     wc = WifiConfig(msdu_payload_bytes=1500, msdu_overhead_bytes=38, max_ampdu_bytes=0, max_tx=1000)
     rate = mcs_table("ax", 20)[0][7]
     for n, (ref, _) in NS3_WIFI_BIANCHI.items():

@@ -4,8 +4,8 @@ import time
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
 import torch
-from isaaclab_net.examples.fleet_task import FleetEnv, TASK_SIZES
-from isaaclab_net.bridges.ns3_pool.poolnet import PoolNet
+from isaac_net.examples.fleet_task import FleetEnv, TASK_SIZES
+from isaac_net.bridges.ns3_pool.poolnet import PoolNet
 
 E, R, steps = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
 torch.manual_seed(0)

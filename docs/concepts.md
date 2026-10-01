@@ -6,7 +6,7 @@ This page explains the five ideas the engine is built on. It is written for two 
 
 An RL training run in Isaac Lab steps `E` copies of a scene at once, often thousands, and each copy (an *environment*, or *env*) holds `R` robots. At every control step, typically 100 ms of simulated time, the policy picks actions for every robot, the physics advances, and the task computes observations and rewards. If the robots communicate, for example by uploading camera frames to an edge server, what the receiver knows depends on the network: a message may wait in a queue while other robots transmit, it may need several transmissions over a fading channel, and it may arrive too late to matter.
 
-`isaaclab-net` simulates the 5G uplink of all `E` environments in the same GPU process as the physics, one control step at a time. Every call to `step` advances every environment's network by exactly one control step, so network time never drifts from physics time.
+`isaac-net` simulates the 5G uplink of all `E` environments in the same GPU process as the physics, one control step at a time. Every call to `step` advances every environment's network by exactly one control step, so network time never drifts from physics time.
 
 ## Slot-synchronous stepping instead of discrete events
 

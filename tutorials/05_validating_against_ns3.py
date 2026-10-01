@@ -21,7 +21,7 @@
 # > bridge program compiled against it. Neither is part of this package (both are GPL-2.0). The rendered notebook
 # > was not executed. The script checks for the build and exits with a message when it is missing.
 #
-# The bridge programs in `isaaclab_net/bridges/ns3/` are our own C++ code written against the ns-3 APIs. They
+# The bridge programs in `isaac_net/bridges/ns3/` are our own C++ code written against the ns-3 APIs. They
 # run the reference scenario of the 5G-LENA validation (one gNB, 20 MHz with 50 PRBs, TDD `DDDSU` at 30 kHz,
 # 3GPP UMi fading, HARQ with an EESM error model, RLC UM with a 2 s PDCP discard) and add a step interface.
 
@@ -34,13 +34,13 @@
 # ```bash
 # export NS3BRIDGE_ROOT=$HOME/bridge_lockstep     # holds ns-3.48/ (a built copy) and receives bin/
 # export NS3_TOOLCHAIN_ENV=$HOME/ns3ref/env        # conda env whose lib/ the ns-3 build links against
-# cp isaaclab_net/bridges/ns3/lockstep/*.sh isaaclab_net/bridges/ns3/lockstep/netslot-bridge.cc $NS3BRIDGE_ROOT/
+# cp isaac_net/bridges/ns3/lockstep/*.sh isaac_net/bridges/ns3/lockstep/netslot-bridge.cc $NS3BRIDGE_ROOT/
 # cd $NS3BRIDGE_ROOT && bash build_bridge.sh       # -> bin/netslot-bridge
 # ```
 #
-# `isaaclab_net/bridges/ns3/lockstep/README.md` documents the directory layout the build scripts expect, the
+# `isaac_net/bridges/ns3/lockstep/README.md` documents the directory layout the build scripts expect, the
 # optional ns3-ai shared-memory transport, and the wire protocol. The process-pool bridge in
-# `isaaclab_net/bridges/ns3/pool/` builds the same way and reads `BRIDGE_ROOT`.
+# `isaac_net/bridges/ns3/pool/` builds the same way and reads `BRIDGE_ROOT`.
 
 # %%
 import os
@@ -77,9 +77,9 @@ if not HAVE_NS3:
 # `L2-legacy` engine, and compares delivery counts and the median delay.
 
 # %%
-from isaaclab_net import Requests, make_engine  # noqa: E402
-from isaaclab_net.bridges.ns3_lockstep.lockstep_net import Ns3Net  # noqa: E402
-from isaaclab_net.core.proto.netsim import Radio  # noqa: E402
+from isaac_net import Requests, make_engine  # noqa: E402
+from isaac_net.bridges.ns3_lockstep.lockstep_net import Ns3Net  # noqa: E402
+from isaac_net.core.proto.netsim import Radio  # noqa: E402
 
 
 class ParkedRobots:
@@ -137,8 +137,8 @@ for name, (dlv, p50) in results.items():
 # `spawn=False`:
 #
 # ```python
-# from isaaclab_net.bridges.ns3_lockstep.netmodule_ns3 import Ns3NetModule
-# from isaaclab_net.isaac import NetConfig, TrafficRequest
+# from isaac_net.bridges.ns3_lockstep.netmodule_ns3 import Ns3NetModule
+# from isaac_net.isaac import NetConfig, TrafficRequest
 #
 # net = Ns3NetModule(NetConfig(num_envs=E, num_robots=R, device="cpu", msg_sizes=(4000.0, 30000.0)),
 #                    transport="tcp", spawn=False, endpoints=[f"tcp:{57100 + e}" for e in range(E)])
@@ -151,13 +151,13 @@ for name, (dlv, p50) in results.items():
 # ns-3 again. Each run directory of the sweep holds `ues.csv`, `meta.txt`, `summary.json` and `delay_cdf.csv`:
 #
 # ```bash
-# python -m isaaclab_net.bridges.ns3_offline.lena_replay <sweep_dir> replay.csv 4
-# python -m isaaclab_net.bridges.ns3_offline.lena_replay <sweep_dir> replay_sr20.csv 4 sr_grant_delay_slots=20
+# python -m isaac_net.bridges.ns3_offline.lena_replay <sweep_dir> replay.csv 4
+# python -m isaac_net.bridges.ns3_offline.lena_replay <sweep_dir> replay_sr20.csv 4 sr_grant_delay_slots=20
 # ```
 #
 # The third argument is the number of replicas per run, and `key=value` pairs override fields of the
 # `lena_validation()` preset. The replay needs the 5G-LENA BLER tables, generated locally with
-# `python -m isaaclab_net.tools.extract_lena_tables <your nr checkout>`.
+# `python -m isaac_net.tools.extract_lena_tables <your nr checkout>`.
 #
 # ## Caveats
 #

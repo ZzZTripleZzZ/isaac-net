@@ -1,4 +1,4 @@
-"""Parsers of isaaclab_net.tools.measure on small synthetic fixtures (tests/fixtures/measure/ and pcaps built here
+"""Parsers of isaac_net.tools.measure on small synthetic fixtures (tests/fixtures/measure/ and pcaps built here
 byte for byte in the layouts srsRAN and OAI write). No real gNB logs are needed."""
 import math
 import os
@@ -6,9 +6,9 @@ import struct
 
 import pytest
 
-from isaaclab_net.tools.measure import ingest, macnr, oai, owd, probe, srsran
-from isaaclab_net.tools.measure import pcap as P
-from isaaclab_net.tools.measure.schema import TABLES, columns, read_table, unwrap_slots, write_table
+from isaac_net.tools.measure import ingest, macnr, oai, owd, probe, srsran
+from isaac_net.tools.measure import pcap as P
+from isaac_net.tools.measure.schema import TABLES, columns, read_table, unwrap_slots, write_table
 
 FX = os.path.join(os.path.dirname(__file__), "fixtures", "measure")
 fx = lambda name: os.path.join(FX, name)

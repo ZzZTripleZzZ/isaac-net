@@ -2,7 +2,7 @@
 # Network-only NR uplink on triton with the scale configuration of docs/fidelity-vs-lena.md ("Scale configurations"):
 # --cfg ul_v2l, and --cfg ul (NRConfig()) in the same passes for a same-session comparison, at the four shapes of
 # the campaign, 3 passes (3 processes per case), 3 windows each. Expects the marker to be held by the caller.
-# usage: ISAACLAB_NET_LENA_TABLES=<tables> bash benchmarks/uncontended/run_v2l.sh <outdir>
+# usage: ISAAC_NET_LENA_TABLES=<tables> bash benchmarks/uncontended/run_v2l.sh <outdir>
 set -u
 D=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$D/../.." && pwd); OUT=${1:-$D/results_v2l}
 mkdir -p "$OUT"

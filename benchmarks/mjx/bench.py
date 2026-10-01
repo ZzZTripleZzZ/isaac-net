@@ -62,7 +62,7 @@ def main():
     import torch
     from mujoco_playground import wrapper
 
-    from isaaclab_net.examples.mjx_fleet_env import MJXFleetEnv, default_config
+    from isaac_net.examples.mjx_fleet_env import MJXFleetEnv, default_config
 
     E, R = args.num_envs, args.num_robots
     u0, m0 = gpu_query()
@@ -106,7 +106,7 @@ def main():
                gpu_mem_during_max_mib=max(sm.m) if sm.m else float("nan"), mean_reward=float(r.mean()),
                obs_shape=list(s.obs.shape), obs_finite=bool(jax.numpy.isfinite(s.obs).all()))
     if env.net is not None:
-        from isaaclab_net.isaac import TrafficRequest
+        from isaac_net.isaac import TrafficRequest
         net = env.net.net
         dev = net.dev
         p3 = torch.rand(E, R, 3, device=dev) * 150

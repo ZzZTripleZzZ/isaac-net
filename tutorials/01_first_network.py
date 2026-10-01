@@ -24,7 +24,7 @@
 # %%
 import torch
 
-from isaaclab_net import NRConfig, Requests, make_engine
+from isaac_net import NRConfig, Requests, make_engine
 
 torch.manual_seed(0)                      # stepping draws come from the global torch RNG
 E, R, dev = 4, 3, torch.device("cpu")     # 4 envs, 3 robots each

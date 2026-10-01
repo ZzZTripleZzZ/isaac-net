@@ -5,7 +5,7 @@
 set -e
 cd "$(dirname "$0")/../.."
 OUT=${1:-runs}
-FIT=${2:-$HOME/.cache/isaaclab_net/adaptive}
+FIT=${2:-$HOME/.cache/isaac_net/adaptive}
 mkdir -p "$OUT" "$FIT"
 S=benchmarks/adaptive/sweep.py
 T=benchmarks/adaptive/transient.py

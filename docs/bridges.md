@@ -6,9 +6,9 @@ The bridges were built and tested on 2026-09-29 on the lab box (WSL) and moved i
 
 | Variant | Package path | C++ program | What it is for |
 |:---|:---|:---|:---|
-| Lockstep over TCP, Unix socket or ns3-ai shared memory | `isaaclab_net/bridges/ns3_lockstep/` | `bridges/ns3/lockstep/netslot-bridge.cc` | closed-loop co-simulation of a few envs, including the Isaac `NetModule` API and a stdlib-only Windows client |
-| Process pool | `isaaclab_net/bridges/ns3_pool/` | `bridges/ns3/pool/netslot-bridge.cc` | one ns-3 process per env, the CPU co-simulation baseline |
-| Offline trace-driven replay | `isaaclab_net/bridges/ns3_offline/` | the pool program in file mode | run ns-3 after the fact on a recorded rollout; also holds `lena_replay.py`, the NR engine's replay of the 5G-LENA sweep |
+| Lockstep over TCP, Unix socket or ns3-ai shared memory | `isaac_net/bridges/ns3_lockstep/` | `bridges/ns3/lockstep/netslot-bridge.cc` | closed-loop co-simulation of a few envs, including the Isaac `NetModule` API and a stdlib-only Windows client |
+| Process pool | `isaac_net/bridges/ns3_pool/` | `bridges/ns3/pool/netslot-bridge.cc` | one ns-3 process per env, the CPU co-simulation baseline |
+| Offline trace-driven replay | `isaac_net/bridges/ns3_offline/` | the pool program in file mode | run ns-3 after the fact on a recorded rollout; also holds `lena_replay.py`, the NR engine's replay of the 5G-LENA sweep |
 | Real-time mode | pool program with `--io=rt:PORT` | same | wall-clock emulation experiments |
 
 Both C++ programs are the reference scenario `netslot-ref.cc` described in [validation-5g-lena.md](validation-5g-lena.md) plus a step interface. They are our own code written against the ns-3 APIs, with no ns-3 or 5G-LENA source copied. Each compiles against an existing ns-3 build with that build's exact flags in 15 s to 1 min, with no reconfigure.

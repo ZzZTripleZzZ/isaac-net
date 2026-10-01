@@ -15,10 +15,10 @@
 import pytest
 import torch
 
-from isaaclab_net.core import NRConfig, make_engine, multicell, netslot_compat, oai_like
-from isaaclab_net.core.nr_engine import NRNet
-from isaaclab_net.core.proto.netsim_mc import NetSlotMC
-from isaaclab_net.core.radio import RadioMC
+from isaac_net.core import NRConfig, make_engine, multicell, netslot_compat, oai_like
+from isaac_net.core.nr_engine import NRNet
+from isaac_net.core.proto.netsim_mc import NetSlotMC
+from isaac_net.core.radio import RadioMC
 from nr_frozen.nr_engine import NRNet as FrozenNRNet
 
 SIZES = (4000.0, 30000.0)
@@ -368,7 +368,7 @@ def test_m5_cross_check_netslotmc(load):
 def test_m3_isaac_netmodule_runs_multicell_nr():
     """The Isaac layer's NetModule on L2 with three cells (engine radio): the serving cells come through, through a
     partial reset."""
-    from isaaclab_net.isaac import NetModule, TrafficRequest
+    from isaac_net.isaac import NetModule, TrafficRequest
     E, R = 3, 4
     m = NetModule("L2", E, R, "cpu", multicell(3), radio="engine", seed=2)
     with pytest.raises(ValueError):

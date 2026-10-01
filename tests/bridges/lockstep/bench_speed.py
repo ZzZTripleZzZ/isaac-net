@@ -15,8 +15,8 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
-from isaaclab_net.bridges.ns3_lockstep import protocol as P  # noqa: E402
-from isaaclab_net.bridges.ns3_lockstep.core import Ns3Lockstep  # noqa: E402
+from isaac_net.bridges.ns3_lockstep import protocol as P  # noqa: E402
+from isaac_net.bridges.ns3_lockstep.core import Ns3Lockstep  # noqa: E402
 
 
 def bench(E, R, transport, mode, steps, seed=0, epp=None):

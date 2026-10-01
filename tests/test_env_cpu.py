@@ -5,7 +5,7 @@ from engine_api import make_ref
 
 
 def test_fleet_env_runs_on_cpu(seeded):
-    from isaaclab_net.examples.fleet_task import OBS_DIM, TASK_SIZES, FleetEnv
+    from isaac_net.examples.fleet_task import OBS_DIM, TASK_SIZES, FleetEnv
     E, R = 3, 4
     net = make_ref("L2", E, R, "cpu", sizes=TASK_SIZES["T1"])
     env = FleetEnv(E, R, net, torch.device("cpu"))

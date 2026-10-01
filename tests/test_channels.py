@@ -6,13 +6,13 @@ import math
 import pytest
 import torch
 
-from isaaclab_net.core.channels import (RadioMap, blocked_links, install_per_robot_fading, make_synthetic_map,
+from isaac_net.core.channels import (RadioMap, blocked_links, install_per_robot_fading, make_synthetic_map,
                                         rho_per_ms_from_speed, synthetic_gnb_xy)
-from isaaclab_net.core.channels import tr38901 as tr
-from isaaclab_net.core.channels.fields import PlaneWaveField
-from isaaclab_net.core.config import NRConfig, fading_rho_from_speed
-from isaaclab_net.core.engine import make_engine
-from isaaclab_net.core.radio import RadioMC
+from isaac_net.core.channels import tr38901 as tr
+from isaac_net.core.channels.fields import PlaneWaveField
+from isaac_net.core.config import NRConfig, fading_rho_from_speed
+from isaac_net.core.engine import make_engine
+from isaac_net.core.radio import RadioMC
 
 MAP_CFG = dict(channel="radio_map", radio_map_path="synthetic", n_cells=2,
                cell_positions_m=tuple(synthetic_gnb_xy()))
@@ -328,7 +328,7 @@ def test_radio_map_bilinear_sampling():
 
 def test_radio_map_file_roundtrip_and_synthetic(tmp_path):
     m = make_synthetic_map(synthetic_gnb_xy())
-    shipped = RadioMap.load(__import__("isaaclab_net.core.channels", fromlist=["x"]).SYNTHETIC_MAP)
+    shipped = RadioMap.load(__import__("isaac_net.core.channels", fromlist=["x"]).SYNTHETIC_MAP)
     assert torch.equal(m.gain, shipped.gain) and m.bounds == shipped.bounds
     p = str(tmp_path / "m.npz")
     m.save(p)

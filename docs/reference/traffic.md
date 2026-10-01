@@ -3,7 +3,7 @@
 `Requests` is what the policy hands to the network in one control step. Every engine's `submit(t, requests)` takes it, or a bare `send` tensor, which is the same as `Requests(send)`.
 
 ```python
-from isaaclab_net import Requests
+from isaac_net import Requests
 
 send = torch.zeros(E, R, dtype=torch.long)     # 0 = nothing
 send[:, 0] = 1                                 # robot 0 of every env sends a class-1 message
@@ -20,17 +20,17 @@ The optional `det` and `hid` fields carry one application event per environment 
 On level `L2`, `NRConfig(traffic=[...])` adds generators that run inside the engine step, next to the policy's `submit()`: `TrafficModel.periodic` (periods may be shorter than the control step), `.bursty` (Markov on/off), `.video` (I/P frame pattern), `.event` (task triggers through `step(..., triggers=)`) and `.policy()`. Each generated message carries an arrival slot inside the step, and its delay counts from that slot. Every other level refuses traffic models with a `ValueError`. The [configurability guide](../configurability.md#traffic-models) explains the models, the arrival offsets and the limits.
 
 ```python
-from isaaclab_net.core.traffic import TrafficModel as TM
+from isaac_net.core.traffic import TrafficModel as TM
 
 cfg = NRConfig(traffic=[TM.periodic(200, period_ms=10).on(range(4)), TM.event(4000, trigger="alarm")])
 net = make_engine("L2", E, R, "cuda", cfg, seed=0)
 out = net.step(None, poses, triggers={"alarm": alarm_mask})
 ```
 
-::: isaaclab_net.core.traffic.TrafficModel
+::: isaac_net.core.traffic.TrafficModel
     options:
       heading_level: 2
 
-::: isaaclab_net.core.proto.netsim.Requests
+::: isaac_net.core.proto.netsim.Requests
     options:
       heading_level: 2

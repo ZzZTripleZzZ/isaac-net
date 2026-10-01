@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import torch
 
-from isaaclab_net.core.config import NRConfig
-from isaaclab_net.core.phy import PHY
-from isaaclab_net.core.queues import FrameQueue, env_mask, onehot, reset_where
+from isaac_net.core.config import NRConfig
+from isaac_net.core.phy import PHY
+from isaac_net.core.queues import FrameQueue, env_mask, onehot, reset_where
 
 BIG = 2 ** 62
 

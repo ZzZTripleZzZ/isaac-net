@@ -28,10 +28,10 @@ import time
 
 import torch
 
-from isaaclab_net.core import NRConfig, lena_match_v2, make_engine, multicell
-from isaaclab_net.core.config import LENA_MAC_V2
-from isaaclab_net.core.nr_fast import state_dict
-from isaaclab_net.core.traffic import TrafficModel as TM
+from isaac_net.core import NRConfig, lena_match_v2, make_engine, multicell
+from isaac_net.core.config import LENA_MAC_V2
+from isaac_net.core.nr_fast import state_dict
+from isaac_net.core.traffic import TrafficModel as TM
 
 SIZES = (4000.0, 30000.0)
 CFGS = {
@@ -115,7 +115,7 @@ class Workload:
 
 def submit(eng, d):
     """Reset, UL and DL submissions of one control step (eager in every backend)."""
-    from isaaclab_net.core.traffic import Requests
+    from isaac_net.core.traffic import Requests
     if "reset" in d:
         eng.reset(d["reset"])
     eng.submit(None, Requests(d["send"], d["det"], d["hid"]))

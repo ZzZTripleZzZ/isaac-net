@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-from isaaclab_net.core import NRConfig, make_engine
+from isaac_net.core import NRConfig, make_engine
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CFG = NRConfig(msg_sizes=(4000.0, 30000.0), timeout_steps=20, control_step_ms=100.0, frame_buffer=16)

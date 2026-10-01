@@ -16,8 +16,8 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
-from isaaclab_net.bridges.ns3_lockstep import protocol as P  # noqa: E402
-from isaaclab_net.bridges.ns3_lockstep.core import BRIDGE_ROOT, ENVP, Ns3Lockstep  # noqa: E402
+from isaac_net.bridges.ns3_lockstep import protocol as P  # noqa: E402
+from isaac_net.bridges.ns3_lockstep.core import BRIDGE_ROOT, ENVP, Ns3Lockstep  # noqa: E402
 
 REF_BIN = f"{BRIDGE_ROOT}/ns-3.48/build/scratch/netslot-ref/ns3.48-netslot-ref-optimized"
 

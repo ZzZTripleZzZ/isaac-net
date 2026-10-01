@@ -44,7 +44,7 @@ import torch
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..")))
 
-from isaaclab_net.core import NRConfig, lena_validation_v2, make_engine  # noqa: E402
+from isaac_net.core import NRConfig, lena_validation_v2, make_engine  # noqa: E402
 
 ARMS = ("ideal", "L2", "L0", "L0-emp", "L1", "L2-legacy", "ns3")
 SIZES = (4000.0, 30000.0)
@@ -65,7 +65,7 @@ def snr_db(pos, sh):
 
 # ------------------------------------------------------------------------------------------------ task
 class FleetLoop:
-    """Fleet-Alert (isaaclab_net.bench.tasks.fleet_alert) in the 60 m arena, with its scripted controller.
+    """Fleet-Alert (isaac_net.bench.tasks.fleet_alert) in the 60 m arena, with its scripted controller.
 
     Robots drive to random goals at 3 m/s. A hazard appears near a random robot, grows to 15 m radius and lasts 10 s.
     A large frame captured within 50 m of an active hazard detects it, and the fleet learns the hazard only when a
@@ -195,8 +195,8 @@ class Ns3Arm:
     """ns-3 + 5G-LENA through the lockstep bridge; frame id = capture step, completion time = t + frac."""
 
     def __init__(self, E, R, dev, seed):
-        from isaaclab_net.bridges.ns3_lockstep import protocol as P
-        from isaaclab_net.bridges.ns3_lockstep.core import Ns3Lockstep
+        from isaac_net.bridges.ns3_lockstep import protocol as P
+        from isaac_net.bridges.ns3_lockstep.core import Ns3Lockstep
         self.P, self.E, self.R, self.dev = P, E, R, dev
         args = dict(fading=False, ulPowerAlloc="UniformPowerAllocBw", niPerSubbandDbm=NI_DBM, side=ARENA,
                     deadline=TIMEOUT * STEP_S, shadowStd=SHADOW_STD)

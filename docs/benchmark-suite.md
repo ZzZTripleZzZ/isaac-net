@@ -1,18 +1,18 @@
 # Benchmark suite
 
-`isaaclab_net.bench` gives network-aware multi-robot learning a common set of tasks, metrics and baselines. Every task runs E environments of R robots on one GPU, talks to the network only through the same `NetModule` the Isaac Lab layer uses, and reports the same per-episode metrics, so a result on one task can be read next to a result on another, and a new method can be compared with the shipped baselines on equal terms. The suite defines what to run and what to measure. It ships baseline sanity numbers that show the pipeline works, and no tuned results.
+`isaac_net.bench` gives network-aware multi-robot learning a common set of tasks, metrics and baselines. Every task runs E environments of R robots on one GPU, talks to the network only through the same `NetModule` the Isaac Lab layer uses, and reports the same per-episode metrics, so a result on one task can be read next to a result on another, and a new method can be compared with the shipped baselines on equal terms. The suite defines what to run and what to measure. It ships baseline sanity numbers that show the pipeline works, and no tuned results.
 
 ```bash
-python -m isaaclab_net.bench list                                   # tasks, variants, levels, presets, baselines
-python -m isaaclab_net.bench run --task coop_map --level L2-legacy --backend triton \
+python -m isaac_net.bench list                                   # tasks, variants, levels, presets, baselines
+python -m isaac_net.bench run --task coop_map --level L2-legacy --backend triton \
     --baselines random,heuristic,ppo_mlp --seeds 0,1,2 --out results/
-python -m isaaclab_net.bench report results/                        # mean ± 95% CI over seeds, as a Markdown table
-python -m isaaclab_net.bench calibrate --task all --level L2-legacy --backend triton   # load calibration
+python -m isaac_net.bench report results/                        # mean ± 95% CI over seeds, as a Markdown table
+python -m isaac_net.bench calibrate --task all --level L2-legacy --backend triton   # load calibration
 ```
 
 ```python
 import torch
-from isaaclab_net.bench import TaskConfig, make_task
+from isaac_net.bench import TaskConfig, make_task
 
 task = make_task(TaskConfig(task="coop_map", level="L2-legacy", backend="triton", num_envs=64, seed=0), "cuda")
 obs = task.reset()                                   # [E, R, task.obs_spec.dim]
@@ -23,7 +23,7 @@ obs, reward, done, info = task.step(cont, send)      # reward [E, R], done [E]; 
 
 ## Task API
 
-**`NetTask`** (`isaaclab_net/bench/base.py`) is the base of every task. It is pure torch with kinematic 2-D robots in a 150 m arena and one gNB at the arena corner, unless the NRConfig preset says otherwise. All task state is fixed-shape tensors with leading dims `[E, R]`, and `reset(mask)` resets any subset of envs and leaves the others bit for bit unchanged. Episodes have a fixed length and all envs end at the same step. `step` returns the metric rows of the envs that ended and resets them.
+**`NetTask`** (`isaac_net/bench/base.py`) is the base of every task. It is pure torch with kinematic 2-D robots in a 150 m arena and one gNB at the arena corner, unless the NRConfig preset says otherwise. All task state is fixed-shape tensors with leading dims `[E, R]`, and `reset(mask)` resets any subset of envs and leaves the others bit for bit unchanged. Episodes have a fixed length and all envs end at the same step. `step` returns the metric rows of the envs that ended and resets them.
 
 **Configuration.** A `TaskConfig` names everything that decides a run: `task`, `variant`, `level` (any `make_engine` level), `backend` (`reference`, `eager`, `graph`, `compile`, `triton`), `sim` (`torch`, or `isaac` for the Isaac Lab variant), `preset` (the NRConfig preset), `traffic` (the traffic preset), `num_envs`, `num_robots`, `episode_steps`, `seed`, `net_obs` (the network observation features) and `level_params` (a fit file for the fitted levels). The task builds its NRConfig from the preset and then sets the application fields it owns: message sizes, control step, timeout and, for EdgeControl, the edge server. Every result file records the full `TaskConfig` and the task description.
 
@@ -89,7 +89,7 @@ Episodes last 300 task steps (30 s). The application timeout is 2 s in the first
 |:---|:---|
 | `default` | the task as described |
 | `light` | negative control: every message size is multiplied by the task's `LIGHT_SCALE` (0.01 Fleet-Alert, 0.025 CoopMap, 0.1 CoverageNav and EdgeControl), so the heaviest choice at every step offers about a tenth of the default cell's capacity. Everything else is identical. |
-| `background` | background UEs share the cell. Registered only when `NRConfig` has a `background` field (the background-UE feature) and a builder exists: `bench.register_background(lambda task: <the field's value>)`, or a `BackgroundConfig()` default in `isaaclab_net.core.background`. |
+| `background` | background UEs share the cell. Registered only when `NRConfig` has a `background` field (the background-UE feature) and a builder exists: `bench.register_background(lambda task: <the field's value>)`, or a `BackgroundConfig()` default in `isaac_net.core.background`. |
 
 The light variant removes the load the team creates, not the per-robot link. A robot at the cell edge or in a coverage hole still loses messages, which is why CoverageNav keeps a lower delivery ratio in its light variant.
 
@@ -135,7 +135,7 @@ PPO is trained on `--ppo_envs` envs for `--ppo_iters` iterations of `--ppo_horiz
 
 | Field | Content |
 |:---|:---|
-| `schema` | `"isaaclab-net-bench/1"`; `bench report` reads only files of this schema |
+| `schema` | `"isaac-net-bench/1"`; `bench report` reads only files of this schema |
 | `label` | free-form tag (for example `sanity`), part of the report's grouping |
 | `task`, `variant`, `level`, `backend`, `sim`, `preset`, `traffic`, `baseline`, `seed` | the run's identity |
 | `config` | the full `TaskConfig` |
@@ -149,7 +149,7 @@ PPO is trained on `--ppo_envs` envs for `--ppo_iters` iterations of `--ppo_horiz
 
 ## Adding a task
 
-1. Subclass `NetTask` in `isaaclab_net/bench/tasks/<name>.py`. Set `NAME`, `DESCRIPTION`, `MECHANISM`, `MSG_SIZES`, `SEND_CHOICES`, `CONT_NAMES`, `TASK_BLOCKS` (names and widths of the task features), `METRIC` (a `MetricSpec`) and `METRIC_REDUCE`, and, if they differ from the defaults, `EPISODE_STEPS`, `CONTROL_STEP_MS`, `NET_SUBSTEPS`, `TIMEOUT_STEPS`, `EDGE` and `LIGHT_SCALE`.
+1. Subclass `NetTask` in `isaac_net/bench/tasks/<name>.py`. Set `NAME`, `DESCRIPTION`, `MECHANISM`, `MSG_SIZES`, `SEND_CHOICES`, `CONT_NAMES`, `TASK_BLOCKS` (names and widths of the task features), `METRIC` (a `MetricSpec`) and `METRIC_REDUCE`, and, if they differ from the defaults, `EPISODE_STEPS`, `CONTROL_STEP_MS`, `NET_SUBSTEPS`, `TIMEOUT_STEPS`, `EDGE` and `LIGHT_SCALE`.
 2. Implement `_task_reset(mask)` (redraw the state of the masked envs with `self.rand` / `self.randn`), `_task_obs()`, `_step(cont, send)`, which calls `self._net_step(cls, end_positions, ...)` for every network step and returns the reward `[E, R]`, the task metric's per-step value `[E]` and a dict of extras, and `heuristic()`, which returns the scripted continuous action, the preferred send choice and the idle choice.
 3. Register the class in `TASKS` (`tasks/__init__.py`).
 4. Before using the task, check that the network can matter at all. Run `ORACLE` and `NOCOMM`, which must be far apart, then run `bench calibrate` at the default and light variants and pick `LIGHT_SCALE` so that the light variant's heaviest choice offers about a tenth of the capacity. Document the task here with its mechanism and calibration.

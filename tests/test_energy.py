@@ -11,9 +11,9 @@ import math
 import pytest
 import torch
 
-from isaaclab_net.core import NRConfig, Requests, make_engine, multicell
-from isaaclab_net.core.background import BackgroundConfig
-from isaaclab_net.core.energy import EnergyConfig, EnergyLoop, legacy_airtime_slots
+from isaac_net.core import NRConfig, Requests, make_engine, multicell
+from isaac_net.core.background import BackgroundConfig
+from isaac_net.core.energy import EnergyConfig, EnergyLoop, legacy_airtime_slots
 
 E, R = 4, 3
 P23 = 10 ** ((23.0 - 30.0) / 10.0)

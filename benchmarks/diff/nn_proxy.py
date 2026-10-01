@@ -1,4 +1,4 @@
-"""Recipe run (L2D option b): fit the neural proxy (isaaclab_net.core.diff.proxy) to L2-legacy rollouts, report
+"""Recipe run (L2D option b): fit the neural proxy (isaac_net.core.diff.proxy) to L2-legacy rollouts, report
 held-out fit quality, and compare its autograd sensitivities with the finite differences of L2-legacy at the
 sensitivity.py operating points.
 
@@ -17,7 +17,7 @@ import time
 import torch
 
 from common import OUT, Scenario, radio_snr_db
-from isaaclab_net.core.diff import proxy
+from isaac_net.core.diff import proxy
 from sensitivity import B0, LOADS, STEP, base_value, inputs
 
 DECS = ("p", "kB", "tx", "dist")

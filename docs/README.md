@@ -29,7 +29,7 @@ These pages are for collaborators joining the project. The top-level [README](..
 | [differentiable.md](differentiable.md) | The differentiable fluid models `L1D` and `QAD`, the neural-proxy recipe, their checks and limits |
 | [fidelity-load-gap.md](fidelity-load-gap.md) | Why the NR engine is optimistic under load against 5G-LENA, mechanism by mechanism, and the prototype that closes the gap |
 | [bridges-oai.md](bridges-oai.md) | The OAI 5G rfsim bridge: deployment, virtual clock, measured access, HARQ and contention, and the comparison with the engine's presets |
-| [measurement-protocol.md](measurement-protocol.md) | The runbook for measurements on a lab gNB and POWDER, with the parsers, probe and calibration tools (`isaaclab-net-measure`) |
+| [measurement-protocol.md](measurement-protocol.md) | The runbook for measurements on a lab gNB and POWDER, with the parsers, probe and calibration tools (`isaac-net-measure`) |
 
 **A note on every timing in these pages.** All GPU numbers were measured on one RTX 4090 in a shared lab box while other jobs kept it 95–99% busy, and all ns-3 numbers on a 32-core box with load averages between 10 and 68. Absolute times are therefore pessimistic, and only ratios measured in the same run are meaningful. An uncontended re-benchmark is the second item on the open list in [STATUS.md](STATUS.md).
 
