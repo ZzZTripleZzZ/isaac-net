@@ -1,0 +1,4 @@
+class,snr1_db_lo,snr1_db_hi,ues
+edge,-inf,16.286,1207
+mid,16.286,22.514,1203
+centre,22.514,inf,1211

@@ -183,15 +183,15 @@ class MyFleetEnv(NetEnvMixin, DirectRLEnv):
 
 `net_setup` takes any level of `make_engine` (`"off"` for an ideal link), an `NRConfig`, a backend and an `IsaacNetCfg`. The observation features are chosen from the delivered mask and the delay of each message slot, age of information, queue length and bytes, SINR and RSRP, the serving cell, a last-delivery flag, the delays of the last k delivered messages, and a blockage flag, all with one normalization. The domain-randomization ranges cover the radio (transmit power, noise floor, path loss, shadowing sigma, blockage loss), the gNB placement, and the delay and loss of L0 and L0DR, and `dr_support(level)` tells which of them a level honors. `net_decimation` and `net_substeps` run the network slower or faster than the env step. `net_step(pos, send, tag, cur_tag)` also carries a per-message tag, such as the id of the hazard a frame captured, and returns `tag_delivered` per env. The fields, the feature table and the randomization table are in [docs/isaac-lab.md](docs/isaac-lab.md#configuring-the-network). The earlier `NetConfig` is a deprecated alias. [`isaac_fleet_env.py`](isaaclab_net/examples/isaac_fleet_env.py) is the complete example: E envs × R robots in a 150 m arena, with hazards that the whole fleet learns about only when a detection frame is delivered.
 
-**Scale.** These numbers come from the fleet env with random actions, which saturate the uplink from 16 robots per env, measured on an idle RTX 4090 (0% utilization before every run, median of 3 windows; conditions in [docs/performance.md](docs/performance.md#isaac-lab-scale)):
+**Scale.** These numbers come from the fleet env with random actions, which saturate the uplink from 16 robots per env, measured on an idle RTX 4090 (0% utilization before every run; each process reports its median of 3 windows). The NR engine runs `ul_v2l`, the configuration validated against 5G-LENA except for the buffer-report grant pipeline, which the fused kernel lacks (median delay error −3.5% / −5.7% / −0.8% at light / moderate / saturated load). Network off and NR are the mean of 3 processes with the range in parentheses, `L2-legacy` is a single process from the first campaign (conditions in [docs/performance.md](docs/performance.md#isaac-lab-scale)):
 
-| Envs × robots | Robots | Network off (control steps/s) | L2-legacy `triton` | NR `L2` `triton` (uplink) | Network per step, isolated (legacy / NR) |
+| Envs × robots | Robots | Network off (control steps/s) | L2-legacy `triton` (1 process) | NR `L2` `triton`, `ul_v2l` (uplink) | Network per step, isolated (legacy / NR) |
 |---:|---:|---:|---:|---:|---:|
-| 2,048 × 128 | 262,144 | 5.19 | 4.08 | 4.15 | 11 / 37 ms |
-| 4,096 × 128 | 524,288 | 2.58 | 2.39 | 2.44 | 23 / 72 ms |
-| 8,192 × 128 | 1,048,576 | 1.50 | 1.51 | 1.32 | 45 / 146 ms |
+| 2,048 × 128 | 262,144 | 5.38 (5.04–5.61) | 4.08 | 4.11 (3.82–4.34) | 11 / 50 ms |
+| 4,096 × 128 | 524,288 | 2.95 (2.84–3.07) | 2.39 | 2.44 (2.37–2.52) | 23 / 100 ms |
+| 8,192 × 128 | 1,048,576 | 1.50 (1.37–1.57) | 1.51 | 1.24 (1.23–1.24) | 45 / 199 ms |
 
-One control step is 0.1 s of simulated time. At about one million robots the network runs in the loop at 1.59 million (legacy) and 1.38 million (NR) robot-steps per second, in at most 19 GiB of device memory. The Isaac step is bound by host work, so the network's GPU work mostly overlaps with it and costs 0–12% of the step from 524k robots up. Use `graph` for bitwise-reference runs and `triton` for scale. Startup grows by about 1.0 ms per robot (PhysX cloning), which is 18 minutes at one million robots. End-to-end PPO (rsl_rl, 1,024 × 16, L2-legacy `triton`) ran 30 iterations in 241 s on the earlier shared GPU.
+One control step is 0.1 s of simulated time. At about one million robots the network runs in the loop at 1.59 million (legacy) and 1.30 million (NR) robot-steps per second, in at most 20 GiB of device memory. The Isaac step is bound by host work. From 524k robots up the validated NR uplink lengthens the step by 40–86% of its isolated cost (about 30% of its GPU work overlaps with host work on average), and the network-off rate varies by 8–14% between processes, so single-run on / off differences of a few percent are not meaningful. Use `graph` for bitwise-reference runs and `triton` for scale. Startup grows about linearly with the number of robots (PhysX cloning), 17–26 minutes at one million robots. End-to-end PPO (rsl_rl, 1,024 × 16, L2-legacy `triton`) ran 30 iterations in 241 s on the earlier shared GPU.
 
 **A second backend: MuJoCo Playground / MJX.** The same `NetModule` runs inside jitted, vmapped JAX code: [`isaaclab_net.mjx.NetModuleMJX`](isaaclab_net/mjx/net_module.py) hands the MJX poses to the torch engine through `jax.experimental.buffer_callback` with zero-copy DLPack views on XLA's own CUDA stream, and [`mjx_fleet_env.py`](isaaclab_net/examples/mjx_fleet_env.py) is the fleet task as a Playground env that Brax PPO trains. The in-env network is bitwise equal to a direct torch replay of the same poses on `graph`, `triton` and the reference engine; versions, costs and limits are in [docs/backends-mjx.md](docs/backends-mjx.md).
 
@@ -299,10 +299,11 @@ Network step time (`submit` + `step`, dict outputs) in ms on an idle RTX 4090, m
 | `L05`, `L05Q` | 1.5–1.6 | 0.40 | | 5.0–5.1 | 10.9 | |
 | `L1` | 15.1 | 1.9 | 0.36 | 107 | 108 | 11.1 |
 | `L2-legacy` | 94 | 9.7 | 0.46 | 191 | 135 | 17.7 |
-| `L2` (NR, uplink) | 330 | 50 | 1.7 | 2,310 | 2,228 | 67.8 |
-| `L2` (NR, uplink + downlink) | 1,540 | 240 | 5.7 | 11,467 | 11,084 | 295 |
+| `L2` (NR, uplink, `NRConfig()`) | 330 | 50 | 1.7 | 2,310 | 2,228 | 67.8 |
+| `L2` (NR, uplink, v2 minus BSR) | | | 2.0 | | | 94.4 |
+| `L2` (NR, uplink + downlink, `NRConfig()`) | 1,540 | 240 | 5.7 | 11,467 | 11,084 | 295 |
 
-At 4,096 × 100 the fixed-shape graph versions of the delay levels are memory-bound and slower than the eager reference, which only touches the new and finished frames, and the NR `graph` backend costs as much as its reference. `triton` is the scale path. `tests/scripts/test_equiv.py`, `test_reset.py` and `benchmarks/bench.py` reproduce these results, and `pytest -m gpu` runs the equivalence checks as tests.
+`NRConfig()` is the engine's default configuration and is not validated against 5G-LENA: its replay of the 5G-LENA sweep puts the median delay 30–76% low. "v2 minus BSR" is `lena_validation_v2()` without the SR / BSR grant pipeline, the closest validated configuration the fused kernel accepts (median delay error −3.5% / −5.7% / −0.8% at light / moderate / saturated load, [docs/fidelity-vs-lena.md](docs/fidelity-vs-lena.md#scale-configurations)). At 4,096 × 100 the fixed-shape graph versions of the delay levels are memory-bound and slower than the eager reference, which only touches the new and finished frames, and the NR `graph` backend costs as much as its reference. `triton` is the scale path. `tests/scripts/test_equiv.py`, `test_reset.py` and `benchmarks/bench.py` reproduce these results, and `pytest -m gpu` runs the equivalence checks as tests.
 
 ## Validation
 

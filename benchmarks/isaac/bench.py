@@ -32,6 +32,10 @@ parser.add_argument("--out", default="bench.jsonl")
 parser.add_argument("--repeats", type=int, default=1, help="timed windows of --steps steps each (median reported)")
 parser.add_argument("--backend", default="triton", choices=["reference", "eager", "graph", "compile", "triton"],
                     help="engine backend (triton: L1, L2-legacy and the NR engine L2)")
+parser.add_argument("--nr_cfg", default="default", choices=["default", "v2l"],
+                    help="NR engine configuration: default = the task's NRConfig() (net_config); v2l = "
+                         "lena_validation_v2() without the SR / BSR grant pipeline (lumped 40-slot SR-to-grant delay) "
+                         "with the task's frame sizes, 16-frame buffer and 2 s timeout (docs/fidelity-vs-lena.md)")
 add_launcher_args(parser)
 _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root
 if _root not in sys.path:
@@ -81,12 +85,21 @@ def main():
     import torch
     from isaaclab_net.examples.isaac_fleet_env import NetFleetEnv, make_cfg
 
+    from isaaclab_net.core.config import lena_validation_v2
+    from isaaclab_net.examples.isaac_fleet_env import F_DEPTH, SIZES, TIMEOUT
+
     u_before, m_before = gpu_query()
+    nr = None
+    if args.nr_cfg == "v2l":
+        step_ms = 1000.0 / 50 * args.env_decimation * args.net_decimation / args.net_substeps
+        nr = lena_validation_v2(ul_grant_model="lumped", sr_grant_delay_slots=40, msg_sizes=SIZES,
+                                frame_buffer=F_DEPTH, timeout_steps=TIMEOUT, control_step_ms=step_ms)
     cfg = make_cfg(args.num_envs, args.num_robots, args.level, device=getattr(args, "device", None) or "cuda:0",
-                   backend=args.backend, isaac=isaac_cfg_from_args(args))
+                   backend=args.backend, isaac=isaac_cfg_from_args(args), nr=nr)
     cfg.decimation = cfg.sim.render_interval = args.env_decimation
     rec = dict(E=args.num_envs, R=args.num_robots, level=args.level, steps=args.steps,
                backend=args.backend if args.level != "off" else "-", obs=list(cfg.net_isaac.obs_features),
+               nr_cfg=args.nr_cfg if args.level != "off" else "-",
                env_decimation=args.env_decimation, net_decimation=args.net_decimation,
                net_substeps=args.net_substeps, dr=bool(args.dr),
                physics=type(cfg.sim.physics).__name__,

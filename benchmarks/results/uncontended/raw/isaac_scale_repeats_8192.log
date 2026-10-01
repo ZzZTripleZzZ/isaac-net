@@ -1,0 +1,205 @@
+== E=8192 R=128 off graph repeat 1 2026-09-30T20:57:29 idle util max 0%, no python/kit process, after 0 s
+CPU cpu_load_pct 0; top cores over 5 s: MsMpEng=2.16 vmmemWSL=0.07 System=0.03 DeskIn=0.02 WmiPrvSE=0.02
+0 %, 1200 MiB
+2088, C:\Windows\System32\LogonUI.exe, [N/A]
+2112, C:\Windows\System32\dwm.exe, [N/A]
+37620, C:\Windows\System32\dwm.exe, [N/A]
+44900, C:\Program Files\DeskIn\DeskIn.exe, [N/A]
+45400, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe, [N/A]
+45376, C:\Windows\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\StartMenuExperienceHost.exe, [N/A]
+43892, C:\Windows\explorer.exe, [N/A]
+46852, C:\Windows\SystemApps\ShellExperienceHost_cw5n1h2txyewy\ShellExperienceHost.exe, [N/A]
+48408, C:\Program Files\WindowsApps\Microsoft.YourPhone_1.25072.81.0_x64__8wekyb3d8bbwe\PhoneExperienceHost.exe, [N/A]
+48752, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\TextInputHost.exe, [N/A]
+48376, C:\Program Files (x86)\Steam\bin\cef\cef.win64\steamwebhelper.exe, [N/A]
+47592, C:\Program Files\NVIDIA Corporation\NVIDIA GeForce Experience\NVIDIA Share.exe, [N/A]
+50712, C:\Windows\System32\LogonUI.exe, [N/A]
+41116, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+50780, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+48800, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+46880, C:\Program Files\WindowsApps\Microsoft.MicrosoftOfficeHub_19.2609.52011.0_x64__8wekyb3d8bbwe\M365Copilot.exe, [N/A]
+52876, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+40956, C:\Program Files (x86)\Dropbox\Client\Dropbox.exe, [N/A]
+
+	Environment device    : cuda:0
+RESULT {"E": 8192, "R": 128, "level": "off", "steps": 50, "backend": "-", "obs": ["queue_len", "aoi", "sinr"], 
+"nr_cfg": "-", "env_decimation": 5, "net_decimation": 1, "net_substeps": 1, "dr": false, "physics": "PhysxCfg", 
+"gpu_util_before": 0.0, "gpu_mem_before_mib": 1200.0, "startup_s": 1585.3724415302277, "timed_steps": 150, "wall_s": 
+109.97705570000107, "env_steps_per_s": 11227.883782720535, "robot_steps_per_s": 1437169.1241882285, "iter_per_s": 
+1.3705912820703778, "iter_per_s_windows": [1.4077568981777164, 1.3165186136600746, 1.3705912820703778], 
+"torch_peak_alloc_mib": 240.79296875, "torch_reserved_mib": 270.0, "gpu_util_during_mean": 23.820359281437124, 
+"gpu_mem_during_max_mib": 10818.0, "mean_reward": -0.010909090836842855, "obs_shape": [8192, 1536], "obs_finite": 
+true, "robot_z_min_max": [0.5, 0.5]}
+CPU after cpu_load_pct 0; top cores over 5 s: MsMpEng=2.31 Memory Compression=0.12 DeskIn=0.03 WmiPrvSE=0.02 nvsphelper64=0.01
+== E=8192 R=128 L2 triton repeat 1 2026-09-30T21:27:44 idle util max 0%, no python/kit process, after 0 s
+CPU cpu_load_pct 0; top cores over 5 s: MsMpEng=1.9 Memory Compression=0.11 services=0.02 WmiPrvSE=0.02 DeskIn=0.02
+0 %, 1200 MiB
+2088, C:\Windows\System32\LogonUI.exe, [N/A]
+2112, C:\Windows\System32\dwm.exe, [N/A]
+37620, C:\Windows\System32\dwm.exe, [N/A]
+44900, C:\Program Files\DeskIn\DeskIn.exe, [N/A]
+45400, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe, [N/A]
+45376, C:\Windows\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\StartMenuExperienceHost.exe, [N/A]
+43892, C:\Windows\explorer.exe, [N/A]
+46852, C:\Windows\SystemApps\ShellExperienceHost_cw5n1h2txyewy\ShellExperienceHost.exe, [N/A]
+48408, C:\Program Files\WindowsApps\Microsoft.YourPhone_1.25072.81.0_x64__8wekyb3d8bbwe\PhoneExperienceHost.exe, [N/A]
+48752, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\TextInputHost.exe, [N/A]
+48376, C:\Program Files (x86)\Steam\bin\cef\cef.win64\steamwebhelper.exe, [N/A]
+47592, C:\Program Files\NVIDIA Corporation\NVIDIA GeForce Experience\NVIDIA Share.exe, [N/A]
+50712, C:\Windows\System32\LogonUI.exe, [N/A]
+41116, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+50780, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+48800, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+46880, C:\Program Files\WindowsApps\Microsoft.MicrosoftOfficeHub_19.2609.52011.0_x64__8wekyb3d8bbwe\M365Copilot.exe, [N/A]
+52876, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+40956, C:\Program Files (x86)\Dropbox\Client\Dropbox.exe, [N/A]
+	Environment device    : cuda:0
+RESULT {"E": 8192, "R": 128, "level": "L2", "steps": 50, "backend": "triton", "obs": ["queue_len", "aoi", "sinr"], 
+"nr_cfg": "v2l", "env_decimation": 5, "net_decimation": 1, "net_substeps": 1, "dr": false, "physics": "PhysxCfg", 
+"gpu_util_before": 0.0, "gpu_mem_before_mib": 1200.0, "startup_s": 1309.7956764698029, "timed_steps": 150, "wall_s": 
+120.81655230000615, "env_steps_per_s": 10122.52846209735, "robot_steps_per_s": 1295683.643148461, "iter_per_s": 
+1.235660212658368, "iter_per_s_windows": [1.22860060629123, 1.260854507325412, 1.235660212658368], 
+"torch_peak_alloc_mib": 5519.28564453125, "torch_reserved_mib": 9430.0, "gpu_util_during_mean": 37.5130890052356, 
+"gpu_mem_during_max_mib": 20000.0, "mean_reward": -0.010821382204691568, "obs_shape": [8192, 1536], "obs_finite": 
+true, "robot_z_min_max": [0.5, 0.5], "net_only_ms_windows": [199.015320000035, 199.31803500003298, 
+199.48723499983316], "net_only_ms_per_step": 199.31803500003298, "net_last_step": {"delivered_frac": 
+0.006226539611816406, "mean_queue": 12.732253074645996, "mean_aoi_s": 15.85860824584961, "mean_snr_db": 
+13.794380187988281}}
+CPU after cpu_load_pct 1; top cores over 5 s: MsMpEng=0.12 services=0.05 DeskIn=0.02 vmmemWSL=0.02 WmiPrvSE=0.01
+== E=8192 R=128 off graph repeat 2 2026-09-30T21:53:53 idle util max 0%, no python/kit process, after 0 s
+CPU cpu_load_pct 0; top cores over 5 s: MsMpEng=0.15 DeskIn=0.02 vmmemWSL=0.01 NVDisplay.Container=0.01 msedgewebview2=0
+0 %, 1200 MiB
+2088, C:\Windows\System32\LogonUI.exe, [N/A]
+2112, C:\Windows\System32\dwm.exe, [N/A]
+37620, C:\Windows\System32\dwm.exe, [N/A]
+44900, C:\Program Files\DeskIn\DeskIn.exe, [N/A]
+45400, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe, [N/A]
+45376, C:\Windows\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\StartMenuExperienceHost.exe, [N/A]
+43892, C:\Windows\explorer.exe, [N/A]
+46852, C:\Windows\SystemApps\ShellExperienceHost_cw5n1h2txyewy\ShellExperienceHost.exe, [N/A]
+48408, C:\Program Files\WindowsApps\Microsoft.YourPhone_1.25072.81.0_x64__8wekyb3d8bbwe\PhoneExperienceHost.exe, [N/A]
+48752, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\TextInputHost.exe, [N/A]
+48376, C:\Program Files (x86)\Steam\bin\cef\cef.win64\steamwebhelper.exe, [N/A]
+47592, C:\Program Files\NVIDIA Corporation\NVIDIA GeForce Experience\NVIDIA Share.exe, [N/A]
+50712, C:\Windows\System32\LogonUI.exe, [N/A]
+41116, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+50780, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+48800, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+46880, C:\Program Files\WindowsApps\Microsoft.MicrosoftOfficeHub_19.2609.52011.0_x64__8wekyb3d8bbwe\M365Copilot.exe, [N/A]
+52876, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+36796, C:\Program Files (x86)\Dropbox\Client\Dropbox.exe, [N/A]
+	Environment device    : cuda:0
+RESULT {"E": 8192, "R": 128, "level": "off", "steps": 50, "backend": "-", "obs": ["queue_len", "aoi", "sinr"], 
+"nr_cfg": "-", "env_decimation": 5, "net_decimation": 1, "net_substeps": 1, "dr": false, "physics": "PhysxCfg", 
+"gpu_util_before": 0.0, "gpu_mem_before_mib": 1200.0, "startup_s": 1228.8360044956207, "timed_steps": 150, "wall_s": 
+96.74063460000616, "env_steps_per_s": 12884.533451026591, "robot_steps_per_s": 1649220.2817314037, "iter_per_s": 
+1.5728190247835194, "iter_per_s_windows": [1.4990703560159147, 1.5728190247835194, 1.58244990640873], 
+"torch_peak_alloc_mib": 240.79296875, "torch_reserved_mib": 270.0, "gpu_util_during_mean": 27.246666666666666, 
+"gpu_mem_during_max_mib": 10818.0, "mean_reward": -0.010940608978271484, "obs_shape": [8192, 1536], "obs_finite": 
+true, "robot_z_min_max": [0.5, 0.5]}
+CPU after cpu_load_pct 4; top cores over 5 s: WmiPrvSE=0.01 powershell=0.01 System=0.01 DeskIn=0.01 SearchIndexer=0
+== E=8192 R=128 L2 triton repeat 2 2026-09-30T22:17:10 idle util max 0%, no python/kit process, after 0 s
+CPU cpu_load_pct 3; top cores over 5 s: System=0.02 DeskIn=0.02 WmiPrvSE=0.01 vmmemWSL=0.01 MsMpEng=0.01
+0 %, 1200 MiB
+2088, C:\Windows\System32\LogonUI.exe, [N/A]
+2112, C:\Windows\System32\dwm.exe, [N/A]
+37620, C:\Windows\System32\dwm.exe, [N/A]
+44900, C:\Program Files\DeskIn\DeskIn.exe, [N/A]
+45400, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe, [N/A]
+45376, C:\Windows\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\StartMenuExperienceHost.exe, [N/A]
+43892, C:\Windows\explorer.exe, [N/A]
+46852, C:\Windows\SystemApps\ShellExperienceHost_cw5n1h2txyewy\ShellExperienceHost.exe, [N/A]
+48408, C:\Program Files\WindowsApps\Microsoft.YourPhone_1.25072.81.0_x64__8wekyb3d8bbwe\PhoneExperienceHost.exe, [N/A]
+48752, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\TextInputHost.exe, [N/A]
+48376, C:\Program Files (x86)\Steam\bin\cef\cef.win64\steamwebhelper.exe, [N/A]
+47592, C:\Program Files\NVIDIA Corporation\NVIDIA GeForce Experience\NVIDIA Share.exe, [N/A]
+50712, C:\Windows\System32\LogonUI.exe, [N/A]
+41116, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+50780, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+48800, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+46880, C:\Program Files\WindowsApps\Microsoft.MicrosoftOfficeHub_19.2609.52011.0_x64__8wekyb3d8bbwe\M365Copilot.exe, [N/A]
+52876, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+36796, C:\Program Files (x86)\Dropbox\Client\Dropbox.exe, [N/A]
+	Environment device    : cuda:0
+RESULT {"E": 8192, "R": 128, "level": "L2", "steps": 50, "backend": "triton", "obs": ["queue_len", "aoi", "sinr"], 
+"nr_cfg": "v2l", "env_decimation": 5, "net_decimation": 1, "net_substeps": 1, "dr": false, "physics": "PhysxCfg", 
+"gpu_util_before": 0.0, "gpu_mem_before_mib": 1200.0, "startup_s": 1158.4397177696228, "timed_steps": 150, "wall_s": 
+121.8513782999944, "env_steps_per_s": 10158.891688131424, "robot_steps_per_s": 1300338.1360808222, "iter_per_s": 
+1.2400990830238554, "iter_per_s_windows": [1.2400990830238554, 1.252900615272319, 1.201212046017973], 
+"torch_peak_alloc_mib": 5519.28564453125, "torch_reserved_mib": 9430.0, "gpu_util_during_mean": 35.398963730569946, 
+"gpu_mem_during_max_mib": 20000.0, "mean_reward": -0.010817638238271077, "obs_shape": [8192, 1536], "obs_finite": 
+true, "robot_z_min_max": [0.5, 0.5], "net_only_ms_windows": [198.89544499965268, 199.40698000064003, 
+198.95612000036635], "net_only_ms_per_step": 198.95612000036635, "net_last_step": {"delivered_frac": 
+0.006184577941894531, "mean_queue": 12.728935241699219, "mean_aoi_s": 15.858641624450684, "mean_snr_db": 
+13.79598331451416}}
+CPU after cpu_load_pct 1; top cores over 5 s: DeskIn=0.03 WmiPrvSE=0.02 Dropbox=0.01 vmmemWSL=0.01 System=0.01
+== E=8192 R=128 off graph repeat 3 2026-09-30T22:39:51 idle util max 0%, no python/kit process, after 0 s
+CPU cpu_load_pct 0; top cores over 5 s: DeskIn=0.02 vmmemWSL=0.01 WmiPrvSE=0.01 System=0.01 NVDisplay.Container=0.01
+0 %, 1200 MiB
+2088, C:\Windows\System32\LogonUI.exe, [N/A]
+2112, C:\Windows\System32\dwm.exe, [N/A]
+37620, C:\Windows\System32\dwm.exe, [N/A]
+44900, C:\Program Files\DeskIn\DeskIn.exe, [N/A]
+45400, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe, [N/A]
+45376, C:\Windows\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\StartMenuExperienceHost.exe, [N/A]
+43892, C:\Windows\explorer.exe, [N/A]
+46852, C:\Windows\SystemApps\ShellExperienceHost_cw5n1h2txyewy\ShellExperienceHost.exe, [N/A]
+48408, C:\Program Files\WindowsApps\Microsoft.YourPhone_1.25072.81.0_x64__8wekyb3d8bbwe\PhoneExperienceHost.exe, [N/A]
+48752, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\TextInputHost.exe, [N/A]
+48376, C:\Program Files (x86)\Steam\bin\cef\cef.win64\steamwebhelper.exe, [N/A]
+47592, C:\Program Files\NVIDIA Corporation\NVIDIA GeForce Experience\NVIDIA Share.exe, [N/A]
+50712, C:\Windows\System32\LogonUI.exe, [N/A]
+41116, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+50780, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+48800, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+46880, C:\Program Files\WindowsApps\Microsoft.MicrosoftOfficeHub_19.2609.52011.0_x64__8wekyb3d8bbwe\M365Copilot.exe, [N/A]
+52876, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+36796, C:\Program Files (x86)\Dropbox\Client\Dropbox.exe, [N/A]
+	Environment device    : cuda:0
+RESULT {"E": 8192, "R": 128, "level": "off", "steps": 50, "backend": "-", "obs": ["queue_len", "aoi", "sinr"], 
+"nr_cfg": "-", "env_decimation": 5, "net_decimation": 1, "net_substeps": 1, "dr": false, "physics": "PhysxCfg", 
+"gpu_util_before": 0.0, "gpu_mem_before_mib": 1200.0, "startup_s": 1181.0774464607239, "timed_steps": 150, "wall_s": 
+97.48708130001614, "env_steps_per_s": 12622.212507937515, "robot_steps_per_s": 1615643.2010160019, "iter_per_s": 
+1.5407974252853411, "iter_per_s_windows": [1.5035590339929226, 1.5407974252853411, 1.5732214451527582], 
+"torch_peak_alloc_mib": 240.79296875, "torch_reserved_mib": 270.0, "gpu_util_during_mean": 24.814569536423843, 
+"gpu_mem_during_max_mib": 10818.0, "mean_reward": -0.010804979006449382, "obs_shape": [8192, 1536], "obs_finite": 
+true, "robot_z_min_max": [0.5, 0.5]}
+CPU after cpu_load_pct 1; top cores over 5 s: SearchIndexer=0.08 Memory Compression=0.05 System=0.03 DeskIn=0.01 WmiPrvSE=0.01
+== E=8192 R=128 L2 triton repeat 3 2026-09-30T23:02:16 idle util max 0%, no python/kit process, after 0 s
+CPU cpu_load_pct 2; top cores over 5 s: SearchIndexer=0.12 svchost=0.01 vmmemWSL=0.01 ms-teams=0.01 msedgewebview2=0.01
+0 %, 1200 MiB
+2088, C:\Windows\System32\LogonUI.exe, [N/A]
+2112, C:\Windows\System32\dwm.exe, [N/A]
+37620, C:\Windows\System32\dwm.exe, [N/A]
+44900, C:\Program Files\DeskIn\DeskIn.exe, [N/A]
+45400, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe, [N/A]
+45376, C:\Windows\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\StartMenuExperienceHost.exe, [N/A]
+43892, C:\Windows\explorer.exe, [N/A]
+46852, C:\Windows\SystemApps\ShellExperienceHost_cw5n1h2txyewy\ShellExperienceHost.exe, [N/A]
+48408, C:\Program Files\WindowsApps\Microsoft.YourPhone_1.25072.81.0_x64__8wekyb3d8bbwe\PhoneExperienceHost.exe, [N/A]
+48752, C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\TextInputHost.exe, [N/A]
+48376, C:\Program Files (x86)\Steam\bin\cef\cef.win64\steamwebhelper.exe, [N/A]
+47592, C:\Program Files\NVIDIA Corporation\NVIDIA GeForce Experience\NVIDIA Share.exe, [N/A]
+50712, C:\Windows\System32\LogonUI.exe, [N/A]
+41116, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+50780, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+48800, C:\Program Files\WindowsApps\MSTeams_26246.1604.5133.838_x64__8wekyb3d8bbwe\ms-teams.exe, [N/A]
+46880, C:\Program Files\WindowsApps\Microsoft.MicrosoftOfficeHub_19.2609.52011.0_x64__8wekyb3d8bbwe\M365Copilot.exe, [N/A]
+52876, C:\Program Files (x86)\Microsoft\EdgeWebView\Application\154.0.4258.48\msedgewebview2.exe, [N/A]
+36796, C:\Program Files (x86)\Dropbox\Client\Dropbox.exe, [N/A]
+	Environment device    : cuda:0
+RESULT {"E": 8192, "R": 128, "level": "L2", "steps": 50, "backend": "triton", "obs": ["queue_len", "aoi", "sinr"], 
+"nr_cfg": "v2l", "env_decimation": 5, "net_decimation": 1, "net_substeps": 1, "dr": false, "physics": "PhysxCfg", 
+"gpu_util_before": 0.0, "gpu_mem_before_mib": 1200.0, "startup_s": 1202.0726430416107, "timed_steps": 150, "wall_s": 
+121.42958599999838, "env_steps_per_s": 10110.80539254445, "robot_steps_per_s": 1294183.0902456895, "iter_per_s": 
+1.234229173894586, "iter_per_s_windows": [1.2261017654217665, 1.234229173894586, 1.2456768256351876], 
+"torch_peak_alloc_mib": 5519.28564453125, "torch_reserved_mib": 9430.0, "gpu_util_during_mean": 37.738219895287955, 
+"gpu_mem_during_max_mib": 20000.0, "mean_reward": -0.010711981455485025, "obs_shape": [8192, 1536], "obs_finite": 
+true, "robot_z_min_max": [0.5, 0.5], "net_only_ms_windows": [199.00448999978835, 199.10005999990972, 
+199.10759499980486], "net_only_ms_per_step": 199.10005999990972, "net_last_step": {"delivered_frac": 
+0.006184577941894531, "mean_queue": 12.73249340057373, "mean_aoi_s": 15.858935356140137, "mean_snr_db": 
+13.7913179397583}}
+CPU after cpu_load_pct 2; top cores over 5 s: WmiPrvSE=0.02 DeskIn=0.02 vmmemWSL=0.01 svchost=0.01 System=0
+DONE 2026-09-30T23:25:40
+
+

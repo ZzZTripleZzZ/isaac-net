@@ -14,6 +14,7 @@ Over the 153 runs of the primary (no-fading) arm, with the SR-to-grant delay fit
 - **KS distance.** The median KS distance is 0.28 against an engine replica-to-replica floor of 0.007, so the two delay distributions remain statistically distinguishable even where quantiles agree to a few percent (see the KS note under Caveats).
 - **Legacy engine.** The slot-level engine that the scale results use (`L2-legacy`) has a median p95 error of −19% (absolute 36%) and a KS distance of 0.50 on the same runs, and in saturated runs it drops 32 pp fewer frames than 5G-LENA. The NR engine is the better LENA match on every delay metric and on saturation.
 - **v2 (`lena_validation_v2()`).** With 5G-LENA's MAC behavior under load in the engine (per-RBG PF with frozen averages, TDMA UL retransmissions, the SR / BSR grant pipeline with the RLC tail stall, previous-PUSCH AMC; [fidelity-load-gap.md](fidelity-load-gap.md)) and no fitted parameter, the median p50 error is −1.2% in moderate and −0.1% in saturated cells (was −27% and −34%), light load stays at −0.2%, the drop gap in loaded cells shrinks to −1.4 and −1.7 pp, and over the sweep the median KS distance falls from 0.28 to 0.17 and the median absolute p95 error from 8.6% to 3.5%. See [v2](#v2-5g-lena-mac-behavior-under-load).
+- **Scale configurations.** The engine's defaults, `NRConfig()`, which the NR speed rows of config `ul` use, are not validated: median p50 error −30%, −44% and −76% at light, moderate and saturated load, KS 0.61–0.77. The closest configuration the `triton` kernel accepts, v2 without the SR / BSR grant pipeline (lumped 40-slot SR-to-grant delay), has a median p50 error of −3.5%, −5.7% and −0.8% (absolute 4.5%, 6.6%, 5.5%) and a KS distance of 0.24, 0.14 and 0.08, close to v2. See [Scale configurations](#scale-configurations).
 - **Speed.** The NR engine's reference backend is not faster than 5G-LENA for one small cell: 0.47–0.81 s of wall time per simulated second on one CPU thread (E = 1) against 0.015–0.93 s for 5G-LENA, with break-even at N = 64. Batching 16 envs on one thread brings it to 0.03–0.17 s per env-second.
 
 ## Method
@@ -202,6 +203,42 @@ By load regime:
 
 v2 removes the loaded-cell delay bias and most of the drop bias, cuts the light-load PRB error from −13% to −3%, sends as many TBs as 5G-LENA, and lowers the KS distance in loaded cells from 0.32–0.38 to 0.09–0.13. Two things get slightly worse. The first-transmission BLER difference grows from +0.1 to +0.5 pp, and the median absolute light-load p50 error with the engine RNG is 2.5% instead of the prototype's 1.3% (the signed median is −0.2% in both). The drop rate stays 1.4–1.7 pp low in loaded cells; [fidelity-load-gap.md](fidelity-load-gap.md) lists the candidates. On CPU the v2 arm costs 1.11 times the wall time of `primary_eng`. v2 runs on the reference and graph backends; the triton backend does not implement the BSR grant pipeline yet and refuses the v2 presets.
 
+### Scale configurations
+
+The speed runs of [performance.md](performance.md) and [isaac-lab.md](isaac-lab.md) use the `triton` backend, which refuses `ul_grant_model="bsr"` and so cannot run v2. This section replays the same 153 runs with the configurations that ran at scale, on the GPU (`benchmarks/fidelity/scalecfg/`, same inputs, 4 replicas and per-run metrics as above, fast backends through `make_engine`):
+
+- **`NRConfig()`**, exactly the engine's defaults: the configuration of the NR speed rows of config `ul` in [performance.md](performance.md) and of the first Isaac Lab scale runs. Against `lena_validation_v2()` it differs in more than the grant model: SR-to-grant delay 3 slots (`gnb_proc + k2`), Sionna PDSCH BLER curves (`bler_source="pdsch"`), OLLA on, PF updated per slot with decaying averages, OFDMA retransmissions, AMC for the current allocation, UE power split over the grant with the power-headroom cap, 38.214 TBS, RLC AM, no packet or TB overheads, a 16-frame buffer with the 2 s purge, and fading on. `NRConfig(fading=False)` separates the fading channel from the rest.
+- **v2 minus BSR**: `lena_validation_v2(ul_grant_model="lumped", sr_grant_delay_slots=40)`. Every v2 switch except the SR / BSR grant pipeline, which is replaced by the lumped 40-slot SR-to-grant delay of `lena_validation()` (the one fitted value, [above](#which-numbers-are-fitted)). This is the closest configuration to v2 that `triton` accepts. With `frame_buffer=16`, the fleet task's buffer depth, it is the configuration of the speed rows marked v2-minus-BSR.
+
+Two check arms confirm that the GPU replay reproduces the CPU one: `lena_validation()` on `triton` and `lena_validation_v2()` on `graph` agree with the CPU arms `primary_eng` and v2 to within 0.8 percentage points in every sweep-level error median and 0.003 in KS (p50 −6.2% vs −6.2%, KS 0.279 vs 0.279 for v1; p50 −0.2% vs −0.2%, KS 0.171 vs 0.169 for v2). The engine seeds differ between the two replays, so they agree as distributions, not run by run.
+
+Medians over runs by load regime; |p50| is the median absolute error of the per-run median delay:
+
+| Configuration | Backend | Regime | Runs | p50 err | \|p50\| | p95 err | Drop Δ pp | KS | PRB err |
+|:---|:---|:---|---:|---:|---:|---:|---:|---:|---:|
+| v1 (`lena_validation()`) | reference, CPU | light | 79 | -0.2% | 4.2% | -9.2% | +0.00 | 0.256 | -13.4% |
+| v1 (`lena_validation()`) | reference, CPU | moderate | 36 | -26.9% | 26.9% | -15.4% | -4.05 | 0.316 | -5.4% |
+| v1 (`lena_validation()`) | reference, CPU | saturated | 38 | -33.7% | 34.8% | -3.3% | -6.84 | 0.380 | +0.0% |
+| v2 (`lena_validation_v2()`) | reference, CPU | light | 79 | -0.2% | 2.5% | -2.5% | +0.00 | 0.245 | -3.2% |
+| v2 (`lena_validation_v2()`) | reference, CPU | moderate | 36 | -1.2% | 4.8% | -6.1% | -1.42 | 0.128 | -4.9% |
+| v2 (`lena_validation_v2()`) | reference, CPU | saturated | 38 | -0.1% | 4.4% | +0.1% | -1.70 | 0.088 | -3.0% |
+| `NRConfig()` | triton | light | 79 | -30.2% | 30.2% | -47.1% | +0.00 | 0.607 | -37.4% |
+| `NRConfig()` | triton | moderate | 36 | -43.8% | 44.1% | -73.7% | -5.42 | 0.618 | -36.5% |
+| `NRConfig()` | triton | saturated | 38 | -76.3% | 76.9% | -75.8% | -37.92 | 0.768 | -8.1% |
+| `NRConfig(fading=False)` | triton | light | 79 | -38.9% | 38.9% | -54.6% | +0.00 | 0.650 | -46.0% |
+| `NRConfig(fading=False)` | triton | moderate | 36 | -45.1% | 45.1% | -69.0% | -5.42 | 0.520 | -38.2% |
+| `NRConfig(fading=False)` | triton | saturated | 38 | -8.5% | 61.7% | -2.1% | -31.12 | 0.413 | -0.2% |
+| v2 minus BSR | triton | light | 79 | -3.5% | 4.5% | -8.9% | +0.00 | 0.238 | -12.9% |
+| v2 minus BSR | triton | moderate | 36 | -5.7% | 6.6% | -14.5% | -2.44 | 0.137 | -6.3% |
+| v2 minus BSR | triton | saturated | 38 | -0.8% | 5.5% | -0.2% | -2.57 | 0.083 | -3.1% |
+| v2 minus BSR, 16-frame buffer | triton | light | 79 | -3.5% | 4.5% | -8.9% | +0.00 | 0.238 | -12.9% |
+| v2 minus BSR, 16-frame buffer | triton | moderate | 36 | -5.7% | 6.6% | -14.5% | -2.49 | 0.137 | -6.3% |
+| v2 minus BSR, 16-frame buffer | triton | saturated | 38 | -0.8% | 5.5% | -0.0% | -2.94 | 0.083 | -3.1% |
+
+**`NRConfig()` is not a validated configuration.** Its median delay is 30%, 44% and 76% below 5G-LENA's at light, moderate and saturated load, its p95 delay 47–76% below, its KS distance 0.61–0.77, and at saturation it delivers 38 percentage points more frames than 5G-LENA. First-transmission BLER is 9.3 pp higher over the sweep (OLLA on the Sionna curves, against +0.5 pp for v2). Turning fading off does not close the gap at light and moderate load, so most of it comes from the MAC, PHY-table and overhead defaults, not from the channel. Speed numbers measured with `NRConfig()` are the cost of a slot-level NR uplink, not of a configuration that matches 5G-LENA.
+
+**v2 minus BSR stays close to v2.** Over the sweep its median p50 error is −3.3% (absolute 5.2%) against −0.2% (3.4%) for v2, its KS distance 0.163 against 0.169, and its drop difference −0.04 pp against 0.00 pp. By regime the median absolute p50 error is 4.5%, 6.6% and 5.5% (v2: 2.5%, 4.8%, 4.4%). What the grant pipeline adds is mostly in the tail and the light-load PRB use: without it the p95 error is −8.9% and −14.5% at light and moderate load (v2: −2.5%, −6.1%), the light-load PRB error returns to −12.9% (v2: −3.2%, v1: −13.4%), and the loaded-cell drop gap grows from −1.4 / −1.7 pp to −2.4 / −2.6 pp. It keeps the one fitted value of v1, the 40-slot SR-to-grant delay. A 16-frame buffer instead of 128 changes only the saturated drop difference (−2.9 against −2.6 pp). The six GPU arms took 6.3 min of stepping on the RTX 4090, compilation and input loading excluded (`replay_groups.csv`).
+
 ### Legacy engine (`L2-legacy`)
 
 The legacy slot-level engine replays the same 153 runs through `make_engine("L2-legacy", ..., backend="graph")` on the GPU (bitwise equal to its reference backend, [performance.md](performance.md)). It is frozen, so its closest configuration is its only one: 1 HARQ process with head-of-line blocking, OLLA, power split with PHR cap, logistic BLER, AR(1) Rayleigh fading at 0.93 per UL slot that cannot be switched off, −90 dBm noise-plus-interference (irrelevant here, as the SNR is fed directly), a 16-frame FIFO and a 2 s purge. The only adaptation is the frame size on the air (4150 / 31100 bytes, 5G-LENA's 50 bytes per packet), and it has no HARQ or PRB counters.
@@ -284,6 +321,9 @@ python $REPO/benchmarks/fidelity/report.py results                              
 bash $REPO/benchmarks/fidelity/loadfix/run_v2.sh  # v2, v2_global, primary_eng (about 15 min, CPU)
 python $REPO/benchmarks/fidelity/compare.py data replay results
 python $REPO/benchmarks/fidelity/loadfix/report_loadfix.py results results/loadfix_v2       # the v2 tables
+bash $REPO/benchmarks/fidelity/scalecfg/run_scalecfg.sh    # scale configurations on the GPU (about 8 min)
+python $REPO/benchmarks/fidelity/compare.py data replay_scalecfg results/scalecfg
+python $REPO/benchmarks/fidelity/scalecfg/report_scalecfg.py results                      # the scale-configuration table
 ```
 
 `compare.py` copies nothing, so `lena_runs.csv`, `lena_per_ue.csv`, `lena_sr_dci.csv` (and their `_fade` versions) and the 5G-LENA `timing.csv` (as `timing_lena.csv`) are copied into `results/` by hand. The per-frame `.npz` files (about 38 MB for the 5G-LENA side and all replays) stay on the lab box under `/home/zzhang66/experiments/lenafid/`.
@@ -303,3 +343,4 @@ python $REPO/benchmarks/fidelity/loadfix/report_loadfix.py results results/loadf
 | `timing_lena.csv`, `timing_nr.csv` | speed measurements |
 | `replay_groups.txt` | wall time of every replay job, with its overrides |
 | `loadfix_v2/` | the v2 section: `per_run_` and `summary_` of `v2`, `v2_global`, `primary_eng`, their `ablation.csv` rows and `arms_by_regime.csv` |
+| `scalecfg/` | the scale-configuration section: `per_run_` and `summary_` of the six GPU arms (`v1_triton`, `v2_graph`, `nrconfig`, `nrconfig_nofade`, `v2_lumped40`, `v2_lumped40_fb16`), `scalecfg_by_regime.csv` (the table, with the CPU v1 and v2 arms) and `replay_groups.csv` (wall time per N group). The fast backends refuse debug traces, so the per-UE TB counts of these arms are empty |

@@ -4,7 +4,7 @@ This page explains how the fast backends are shown to compute the same thing as 
 
 ## Measurement conditions
 
-Every speed number on this page comes from one campaign on 2026-09-30 (scripts in `benchmarks/uncontended/` and `benchmarks/isaac/run_uncontended.ps1`, results in `benchmarks/results/uncontended/`). It replaces the earlier tables, which were all measured on a GPU that other jobs kept 90–100% busy (see [Contended vs uncontended](#contended-vs-uncontended) at the end of the page).
+Every speed number on this page comes from one campaign on 2026-09-30 (scripts in `benchmarks/uncontended/` and `benchmarks/isaac/run_uncontended.ps1`, results in `benchmarks/results/uncontended/`), plus a follow-up the same evening with the NR engine in its validated configuration `ul_v2l` (network-only rows, and the Isaac Lab rows with 3 processes per cell; `run_v2l.sh`, `run_repeats.ps1`). It replaces the earlier tables, which were all measured on a GPU that other jobs kept 90–100% busy (see [Contended vs uncontended](#contended-vs-uncontended) at the end of the page).
 
 | | |
 |:---|:---|
@@ -189,13 +189,14 @@ Reading the table:
 
 ### NR engine (`L2`)
 
-Config `ul` is `NRConfig()` (μ = 1, 20 MHz, 13 RBGs, 16 HARQ processes, EESM); `ul_dl` adds the downlink; `c3` is `multicell(3)` (three cells with interference and handover) and `c3_dl` is `multicell(3, dl=True)`. The fused kernel is single-cell, so `c3` and `c3_dl` have no `triton` row. Same conditions and format as above.
+Config `ul` is `NRConfig()` (μ = 1, 20 MHz, 13 RBGs, 16 HARQ processes, EESM), the engine's defaults, which are **not** a configuration validated against 5G-LENA ([fidelity-vs-lena.md](fidelity-vs-lena.md#scale-configurations): median delay 30–76% low). `ul_v2l` is the closest validated configuration the fused kernel accepts, `lena_validation_v2()` without the SR / BSR grant pipeline (lumped 40-slot SR-to-grant delay) and with the task's 16-frame buffer (5G-LENA BLER tables, 50 PRB in 5 RBGs, 13 UL symbols, no OLLA, wideband PF with per-RBG updates, TDMA retransmissions); its replay of the 5G-LENA sweep has a median p50 error of −3.5% / −5.7% / −0.8% at light / moderate / saturated load. `ul_dl` adds the downlink; `c3` is `multicell(3)` (three cells with interference and handover) and `c3_dl` is `multicell(3, dl=True)`. The fused kernel is single-cell, so `c3` and `c3_dl` have no `triton` row. Same conditions and format as above.
 
 | Config | Backend | 256 × 16 | 1024 × 32 | 4096 × 16 | 4096 × 100 | Peak MiB, 4096 × 100 |
 |:---|:---|---:|---:|---:|---:|---:|
 | `ul` | reference | 330 | 328 ±153% | 388 ±96% | 2,310 | 3,604 |
 | `ul` | graph | 50.2 | 138 | 264 | 2,228 | 6,111 |
 | `ul` | triton | 1.68 | 5.58 ±11% | 13.3 | 67.8 | 3,726 |
+| `ul_v2l` | triton | 1.97 | 7.41 | 15.6 | 94.4 | 3,527 |
 | `ul_dl` | reference | 1,540 | 1,557 ±153% | 1,865 ±96% | 11,467 | 4,383 |
 | `ul_dl` | graph | 240 | 685 | 1,315 | 11,084 | 8,306 |
 | `ul_dl` | triton | 5.66 | 22.3 | 57.0 | 295 | 5,676 |
@@ -204,9 +205,11 @@ Config `ul` is `NRConfig()` (μ = 1, 20 MHz, 13 RBGs, 16 HARQ processes, EESM); 
 | `c3_dl` | reference | 1,450 | 1,429 ±158% | 1,439 ±23% | 8,318 | 2,699 |
 | `c3_dl` | graph | 206 | 488 | 884 | 7,948 | 4,903 |
 
+The `ul_v2l` row was measured later on 2026-09-30 with the same script and protocol (`benchmarks/uncontended/run_v2l.sh`, 3 processes × 3 windows, `net_v2l_rtx4090.csv`), in passes that also reran `ul` on `triton`: those reruns gave 1.68, 5.60, 13.3 and 67.6 ms, within 1% of the row above. Every process spread is under 6%. The GPU showed 1,187 MiB in use and 0% utilization before each case this time, held by desktop applications of a disconnected console session.
+
 Reading the table:
 
-- **`triton` is the scale path.** At 4096 × 100 the uplink takes 67.8 ms per 100 ms step, 34× faster than the reference and 33× faster than `graph`. With the downlink it takes 295 ms, 39× faster than the reference. At 256 × 16 the uplink takes 1.7 ms and UL + DL 5.7 ms.
+- **`triton` is the scale path.** At 4096 × 100 the uplink takes 67.8 ms per 100 ms step, 34× faster than the reference and 33× faster than `graph`. The validated configuration `ul_v2l` costs 17–39% more than `ul` (1.97 against 1.68 ms at 256 × 16, 94.4 against 67.8 ms at 4096 × 100), perhaps because per-RBG PF updates and the previous-allocation AMC add work to every slot. With the downlink it takes 295 ms, 39× faster than the reference. At 256 × 16 the uplink takes 1.7 ms and UL + DL 5.7 ms.
 - **`graph` removes the launch overhead but not the work.** At 256 × 16 it is 6.6× faster than the reference (50 against 330 ms uplink, 240 against 1,540 ms with the downlink). From about 50,000 robots on, both are bound by memory traffic: the reference step is tens of thousands of small kernels per control step (about 27,000 at 64 × 16 in the profiler count of the NR multi-cell work), each reading and writing whole `[E, R, P]`, `[E, R, F]` or `[E, R, S]` tensors. At 4096 × 100 the two cost the same (2.2–2.3 s uplink, 11.1–11.5 s with the downlink), and `graph` needs 1.7–1.9× the memory of the reference for its pool. Use `graph` for bitwise-reproducible runs at moderate scale and `triton` for training at scale.
 - **The downlink** multiplies the cost by 4.7–5.0× on the reference and 3.4–4.3× on `triton`, from its 160 DL data slots per step against 40 UL slots.
 - **Three cells cost no more than one.** `c3` costs 0.7–1.0× the single-cell `ul` on the reference and on `graph`, likely because each cell's scheduler handles only the robots it serves.
@@ -257,28 +260,48 @@ The env alone costs about 1.7 ms per step at every size, because it is host-boun
 
 ## Isaac Lab scale
 
-The Isaac Lab fleet env (`NetFleetEnv`, Isaac Sim 6.1 PhysX, dt = 1/50 s, decimation 5, so one env step is one 100 ms control step) on the Windows install of [isaac-lab.md](isaac-lab.md), run as one-shot SYSTEM scheduled tasks (`benchmarks/isaac/run_uncontended.ps1`). Random actions send on about two thirds of robot-steps, half of them large frames, so the uplink is saturated. Each configuration ran in its own process: 10 warm-up steps, then 3 windows of 50 steps, and the table gives the median window. Network-only is 3 windows of 20 isolated `submit` + `step` calls on the live module at the end of the run, median window. Before each run the GPU was at 0% utilization with 36 MiB in use and no other compute process (Windows `nvidia-smi`), and no WSL job ran. Results are in `benchmarks/results/uncontended/isaac_scale_rtx4090.csv`.
+The Isaac Lab fleet env (`NetFleetEnv`, Isaac Sim 6.1 PhysX, dt = 1/50 s, decimation 5, so one env step is one 100 ms control step) on the Windows install of [isaac-lab.md](isaac-lab.md), run as one-shot SYSTEM scheduled tasks. Random actions send on about two thirds of robot-steps, half of them large frames, so the uplink is saturated. Each process runs 10 warm-up steps, then 3 windows of 50 steps, and reports its median window. Network-only is 3 windows of 20 isolated `submit` + `step` calls on the live module at the end of the run, median window.
+
+### Validated configuration, three processes per cell
+
+The NR engine runs `ul_v2l`: `lena_validation_v2()` without the SR / BSR grant pipeline (lumped 40-slot SR-to-grant delay), with the task's frame sizes, 16-frame buffer and 2 s timeout. Its replay of the 5G-LENA sweep has a median p50 error of −3.5% / −5.7% / −0.8% at light / moderate / saturated load ([fidelity-vs-lena.md](fidelity-vs-lena.md#scale-configurations)). In the Isaac env the robots' SNR comes from the engine's radio with this configuration's thermal noise (NF 7 dB) and no fading. Network off and NR each ran as **3 separate processes per size**, interleaved (off, NR, off, NR, off, NR), on 2026-09-30 (`benchmarks/isaac/run_repeats.ps1`, raw results and logs in `benchmarks/results/uncontended/raw/isaac_scale_repeats*`, one row per process in `isaac_scale_repeats_rtx4090.csv`, the summary in `isaac_scale_repeats_summary_rtx4090.csv`). Before each process the GPU was at 0% utilization and no other python or Kit process ran. The device showed 1,187 MiB in use, held by desktop applications of a disconnected console session (36 MiB in the first campaign). The marker `/home/zzhang66/experiments/BENCH_RUNNING` paused the other agents' WSL jobs: the WSL load average stayed at 0.00–0.66 with no process above 5% CPU. On the Windows side the CPU load was 0–4%, and Windows Defender (`MsMpEng`) used 0–4.1 cores (median 2.3) in the 5 s samples taken before and after every process, the only other notable CPU user.
+
+Values are the mean over the 3 processes, with the smallest and largest process in parentheses. "Added per step" is (1 / NR rate − 1 / off rate) for each adjacent off / NR pair, given as the mean and the range of the 3 pairs.
+
+| E × R | Robots | Off, control steps/s | NR `ul_v2l`, control steps/s | On / off | NR robot-steps/s | Added per step (ms) | Network only (ms) | Device memory, max (GiB) | Startup (s) |
+|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2,048 × 128 | 262,144 | 5.38 (5.04–5.61) | 4.11 (3.82–4.34) | 0.76 | 1,078,000 | 57 (52–63) | 49.9 (49.8–50.2) | 5.5 / 7.8 | 322–363 |
+| 4,096 × 128 | 524,288 | 2.95 (2.84–3.07) | 2.44 (2.37–2.52) | 0.83 | 1,278,000 | 71 (45–86) | 99.8 (99.6–100.2) | 7.2 / 11.7 | 647–760 |
+| 8,192 × 128 | 1,048,576 | 1.50 (1.37–1.57) | 1.24 (1.23–1.24) | 0.83 | 1,297,000 | 140 (80–171) | 199.1 (199.0–199.3) | 10.6 / 19.5 | 1,158–1,585 |
+
+Device memory is the device-wide maximum during the timed windows (off / NR), the 1.2 GiB of the desktop session included.
+
+- **One million robots with the validated configuration.** 8,192 × 128 = 1,048,576 robots run at 1.24 control steps per second with the NR uplink in `ul_v2l` (1.30 M robot-steps/s), against 1.50 with the network off. The three NR processes agree to within 0.5%.
+- **Process-to-process spread.** The network-off rate varies by 11%, 8% and 14% (range over mean) between its three processes at the three sizes, and the NR rate by 13%, 6% and 0.5%. The windows inside one process agree to within 6% for every NR process and to within 9% for every off process. A single process per cell, as in the earlier table below, can therefore be off by about 5–7% at the network-off rows, which is as large as some of the on / off differences that table reported.
+- **How much of the network overlaps with host work.** The network-only call costs 50, 100 and 199 ms per step. At 262k robots the step grows by 52–63 ms, at least the isolated cost, so nothing overlaps there, possibly because the Isaac side of the network (radio over interpolated poses, observation features, bookkeeping) adds host work of its own. At 524k and 1M robots the step grows by 45–86 and 80–171 ms, 45–86% and 40–86% of the isolated cost. The ranges come mostly from the network-off processes. These runs support only a loose statement: from 524k robots up, part of the network's GPU work, about 30% on average, is hidden behind PhysX and Python host work.
+- **Startup** took 322–363, 647–760 and 1,158–1,585 s at the three sizes, 7–53% longer than in the first campaign below (259–272, 510–548 and 1,038–1,084 s), possibly because of the Defender activity on the host. It does not enter the timed windows.
+
+### Earlier single-process runs (`L2-legacy` and `NRConfig()`)
+
+The first idle-GPU campaign (2026-09-30, `benchmarks/isaac/run_uncontended.ps1`, `isaac_scale_rtx4090.csv`) ran network off, `L2-legacy` on `triton` and the NR engine in its default configuration `NRConfig()` (config `ul`, not validated against 5G-LENA: median delay 30–76% low in the replay), **one process per configuration**. Before each run the GPU was at 0% utilization with 36 MiB in use and no other compute process, and no WSL job ran. The windows of a run agree to within 10%, except the first window of the network-off run at 2,048 × 128 (3.65 against 5.19–5.72 steps/s). "Network share of step" is (step time on − step time off) / step time on, shown as 0% where the network-on run was as fast as the network-off run. The repeats above show that single-process on / off differences of this size are within the process-to-process spread.
 
 | E × R | Robots | Network | Control steps/s | Robot-steps/s | On / off | Network share of step | Network only (ms) | Device memory, max (GiB) | Startup (s) |
 |:---|---:|:---|---:|---:|---:|---:|---:|---:|---:|
 | 2,048 × 128 | 262,144 | off | 5.19 | 1,360,034 |  |  |  | 4.3 | 259 |
 | 2,048 × 128 | 262,144 | `L2-legacy` `triton` | 4.08 | 1,070,764 | 0.79 | 21% | 10.9 | 5.5 | 272 |
-| 2,048 × 128 | 262,144 | `L2` `triton` | 4.15 | 1,087,601 | 0.80 | 20% | 36.8 | 6.8 | 259 |
+| 2,048 × 128 | 262,144 | `L2` `triton`, `NRConfig()` | 4.15 | 1,087,601 | 0.80 | 20% | 36.8 | 6.8 | 259 |
 | 4,096 × 128 | 524,288 | off | 2.58 | 1,351,859 |  |  |  | 6.0 | 538 |
 | 4,096 × 128 | 524,288 | `L2-legacy` `triton` | 2.39 | 1,252,064 | 0.93 | 7% | 22.9 | 8.3 | 510 |
-| 4,096 × 128 | 524,288 | `L2` `triton` | 2.44 | 1,281,282 | 0.95 | 5% | 72.3 | 10.9 | 548 |
+| 4,096 × 128 | 524,288 | `L2` `triton`, `NRConfig()` | 2.44 | 1,281,282 | 0.95 | 5% | 72.3 | 10.9 | 548 |
 | 8,192 × 128 | 1,048,576 | off | 1.50 | 1,574,483 |  |  |  | 9.4 | 1084 |
 | 8,192 × 128 | 1,048,576 | `L2-legacy` `triton` | 1.51 | 1,586,506 | 1.01 | 0% | 45.2 | 13.9 | 1067 |
-| 8,192 × 128 | 1,048,576 | `L2` `triton` | 1.32 | 1,384,203 | 0.88 | 12% | 145.6 | 19.0 | 1038 |
+| 8,192 × 128 | 1,048,576 | `L2` `triton`, `NRConfig()` | 1.32 | 1,384,203 | 0.88 | 12% | 145.6 | 19.0 | 1038 |
 
-The windows of a run agree to within 10%, except the first window of the network-off run at 2,048 × 128 (3.65 against 5.19–5.72 steps/s). "Network share of step" is (step time on − step time off) / step time on, and is shown as 0% where the network-on run was as fast as the network-off run.
+- `L2-legacy` on `triton` costs 11, 23 and 45 ms per step in isolation. The NR engine in `NRConfig()` costs 37, 72 and 146 ms, and in `ul_v2l` 50, 100 and 199 ms (above), about 1.37× more.
+- The network-off rate at 4,096 × 128 was 2.58 steps/s here and 2.84–3.07 in the three later processes, so a run-to-run difference of 10–19% between sessions is also possible. The on / off ratios of this table should be read with that spread in mind.
+- The Isaac step is bound by host work: device-wide GPU utilization during the timed windows was 22–38% in both campaigns, and the network-off step takes 180–200, 330–390 and 640–730 ms at 262k, 524k and 1M robots.
 
-- **One million robots.** 8,192 × 128 = 1,048,576 robots run at 1.51 control steps per second with `L2-legacy` on `triton` (1.59 M robot-steps/s) and at 1.32 with the NR uplink on `triton` (1.38 M robot-steps/s), against 1.50 with the network off. The device held at most 13.9 GiB (`L2-legacy`) and 19.0 GiB (NR) of its 24 GiB, all of it this process.
-- **The Isaac step is bound by host work.** Device-wide GPU utilization during the timed windows was 22–35%, and the network-off step takes 193, 388 and 666 ms at 262k, 524k and 1M robots. The GPU work of the network therefore overlaps with PhysX and Python host work. `L2-legacy` on `triton` costs 11, 23 and 45 ms per step in isolation but adds 7% of the step at 524k robots and nothing measurable at 1M. The NR uplink costs 37, 72 and 146 ms per step in isolation, 3.2× the legacy kernel, and adds 5–20% of the step.
-- At 2,048 × 128 both networks add about 50 ms per step (20–21% of the step), more than their isolated cost of 11–37 ms. The Isaac side of the network (the radio's SNR over 4 interpolated poses, the observation features and the module's bookkeeping) adds host work of its own, and the noisy network-off run at this size possibly also overstates the gap.
-- **Startup** grows by about 1.0 ms per robot (PhysX cloning of R distinct objects): 259–272 s at 262k, 510–548 s at 524k and 1,038–1,084 s at 1M robots.
-
-Taking 2 control steps per second as the bar for interactive use (a 24-step PPO rollout in at most 12 s), every configuration up to 524k robots meets it with either network, and 1M robots runs at 1.3–1.5 steps/s.
+Taking 2 control steps per second as the bar for interactive use (a 24-step PPO rollout in at most 12 s), every configuration up to 524k robots meets it with either network, and 1M robots runs at 1.2–1.5 steps/s.
 
 ## Dedicated L40 (Hazel)
 
@@ -308,12 +331,12 @@ The process pool runs one single-threaded ns-3 process per env. With the UE-to-U
 | Per robot-step at R = 16 | 1.6 CPU-ms (26 ms per env-step of 16 robots, one worker) | 256 × 16 network only: `L2-legacy` `triton` 0.11 µs, NR `triton` 0.41 µs | about 14,000× / 4,000× |
 | 256 × 16, 2.46 M env-steps, fleet task in the loop | pool at W = 12, 129 env-steps/s: about 5.3 h | fleet task + `L2-legacy` `triton` 1.82 ms per step: 17.5 s; + NR `triton` 3.04 ms: 29 s | about 1,090× / 650× |
 | Same budget, network only | same | 0.46 ms per step: 4.4 s; NR 1.68 ms: 16 s | about 4,300× / 1,180× |
-| 4096 × 100 (409,600 robots), network only | 750 CPU-s per control step (4096 × 183 ms); 23.4 s per step on all 32 cores at perfect efficiency | `L2-legacy` `triton` 17.7 ms, NR `triton` 67.8 ms | about 1,320× / 350× |
+| 4096 × 100 (409,600 robots), network only | 750 CPU-s per control step (4096 × 183 ms); 23.4 s per step on all 32 cores at perfect efficiency | `L2-legacy` `triton` 17.7 ms, NR `triton` 67.8 ms (`NRConfig()`) / 94.4 ms (`ul_v2l`) | about 1,320× / 350× / 250× |
 | Cores to keep pace at 4096 × 100 | at efficiency 1: about 42,000 (`L2-legacy`) / 11,000 (NR); at the measured 0.39: about 109,000 / 28,000; for real time (100 ms per step): 7,500 / 19,000 at 0.39; about 190–310 GB of RAM (46–77 MB per worker) | one GPU, 1.7 / 3.6 GiB | |
-| 4096 × 128 (524,288 robots), Isaac Lab in the loop | 1,071 CPU-s per control step (4096 × 261 ms, R extrapolated from 100 to 128); 33.5 s per step on 32 cores at efficiency 1, plus the Isaac step without network (0.39 s) | Isaac Lab + `L2-legacy` `triton` 0.42 s per step; + NR `triton` 0.41 s | about 81× / 83× |
-| 4096 × 128, network only | 33.5 s per step on 32 cores | `L2-legacy` `triton` 22.9 ms, NR `triton` 72.3 ms (measured inside Isaac) | about 1,460× / 460× |
+| 4096 × 128 (524,288 robots), Isaac Lab in the loop | 1,071 CPU-s per control step (4096 × 261 ms, R extrapolated from 100 to 128); 33.5 s per step on 32 cores at efficiency 1, plus the Isaac step without network (0.39 s) | Isaac Lab + `L2-legacy` `triton` 0.42 s per step (one process); + NR `triton` in `ul_v2l` 0.41 s (mean of 3 processes, 0.40–0.42 s) | about 81× / 83× |
+| 4096 × 128, network only | 33.5 s per step on 32 cores | `L2-legacy` `triton` 22.9 ms, NR `triton` 72.3 ms (`NRConfig()`) / 99.8 ms (`ul_v2l`), measured inside Isaac | about 1,460× / 460× / 340× |
 
-The Isaac-in-the-loop ratio (about 80×) is the one that matters for training time on this box: with the network on the GPU, the Isaac step itself dominates, so a faster network no longer shortens training much. The network-only ratio (350–1,460× at 409k–524k robots, depending on the engine) compares the two network simulators alone. Both assume ns-3 at perfect parallel efficiency on all 32 cores, which the pool never reached (0.30–0.39 at 12 workers), and ns-3 CPU times that were measured under load; the ns-3 side could be up to 2–3× faster on a quiet box and is up to 2.6× slower at the measured efficiency.
+The Isaac-in-the-loop ratio (about 80×) is the one that matters for training time on this box: with the network on the GPU, the Isaac step itself dominates, so a faster network no longer shortens training much. The two Isaac-in-the-loop GPU times are within the process-to-process spread of [the Isaac table](#isaac-lab-scale), so they do not rank the two engines. The network-only ratio (250–1,460× at 409k–524k robots, depending on the engine and configuration) compares the two network simulators alone. Both assume ns-3 at perfect parallel efficiency on all 32 cores, which the pool never reached (0.30–0.39 at 12 workers), and ns-3 CPU times that were measured under load; the ns-3 side could be up to 2–3× faster on a quiet box and is up to 2.6× slower at the measured efficiency.
 
 The extrapolated core counts assume scaling linear in envs and ignore the per-episode ns-3 restart. ns-3 is therefore a validation and evaluation tool at small E, not a training backend.
 

@@ -16,7 +16,7 @@ One configuration per process (fresh CUDA context and allocator). The script
 
 Cases (--case): a level of make_engine (L0, L0DR, L05, L05Q, L1, L2-legacy, L2, WIFI, TR, GE, QA, NN), or one of
   L2-legacy+edge / L2-legacy+energy (EdgeLoop / EnergyLoop over L2-legacy; --wrap_graph captures the wrapper's
-  own step in a CUDA graph). --cfg picks the NR engine variant: ul, ul_dl, c3 (multicell(3)), c3_dl.
+  own step in a CUDA graph). --cfg picks the NR engine variant: ul, ul_dl, c3 (multicell(3)), c3_dl, ul_v2l (v2_lumped()).
 Workload: every robot sends w.p. 0.3 per step (a third of them large, 30 kB; the rest 4 kB); with a downlink every
 robot also receives 6 kB w.p. 0.3. L05 / L05Q / TR / GE / QA / NN use synthetic parameters (their cost does not
 depend on the values).
@@ -44,6 +44,7 @@ for p in (_root, os.path.join(_root, "tests", "scripts")):
         sys.path.insert(0, p)
 
 from isaaclab_net.core import NRConfig, Requests, make_engine, multicell  # noqa: E402
+from isaaclab_net.core.config import lena_validation_v2  # noqa: E402
 
 SIZES = (4000.0, 30000.0)
 POOL = 16
@@ -121,9 +122,16 @@ def synth(level):
     return None
 
 
+def v2_lumped(**kw):
+    """lena_validation_v2() without the SR / BSR grant pipeline (the lumped 40-slot SR-to-grant delay instead), with
+    the fleet task's 16-frame buffer: the closest configuration to v2 that the triton kernel accepts
+    (docs/fidelity-vs-lena.md, "Scale configurations")."""
+    return lena_validation_v2(ul_grant_model="lumped", sr_grant_delay_slots=40, frame_buffer=16, **kw)
+
+
 def config(cfg_name):
     return {"ul": lambda: NRConfig(), "ul_dl": lambda: NRConfig(dl=True), "c3": lambda: multicell(3),
-            "c3_dl": lambda: multicell(3, dl=True)}[cfg_name]().with_(msg_sizes=SIZES)
+            "c3_dl": lambda: multicell(3, dl=True), "ul_v2l": v2_lumped}[cfg_name]().with_(msg_sizes=SIZES)
 
 
 def build(case, backend, cfg, E, R, wrap_graph):
