@@ -102,12 +102,12 @@ def test_dl_periodic_rate_sizes_and_counters():
     assert int(o["gen_bytes"][:, 2].sum()) == E * 2 * 500
 
 
-def test_dl_models_need_downlink_and_reference_backend():
+def test_dl_models_need_downlink_and_not_triton():
     dl_model = [TM.periodic(1000, 5).downlink()]
     with pytest.raises(ValueError, match="dl=True"):
         make_engine("L2", E, R, "cpu", NRConfig(traffic=dl_model), seed=0)
-    with pytest.raises(ValueError, match="reference backend"):
-        make_engine("L2", E, R, "cpu", NRConfig(dl=True, traffic=dl_model), backend="graph", seed=0)
+    with pytest.raises(ValueError, match="DL traffic models"):      # graph runs them (tests/test_limits_closed.py)
+        make_engine("L2", E, R, "cpu", NRConfig(dl=True, traffic=dl_model), backend="triton", seed=0)
     with pytest.raises(ValueError, match="ignores NRConfig.traffic"):
         make_engine("L1", E, R, "cpu", NRConfig(traffic=dl_model), seed=0)
     with pytest.raises(ValueError):

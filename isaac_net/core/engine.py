@@ -82,18 +82,6 @@ def _check_traffic(level, cfg: NRConfig):
                          "policy() alone is accepted by every level.")
 
 
-def _check_l2_backend(backend, cfg: NRConfig):
-    """What the fast NR backends do not run: DL traffic models (graph, triton) and FDD (triton)."""
-    if backend in ("graph", "triton") and generates(cfg.traffic, "dl"):
-        raise ValueError(f"DL traffic models (TrafficModel(..., direction='dl')) run on the reference backend of the NR "
-                         f"engine only: their in-step arrival gate is host code that a replayed CUDA graph would skip. "
-                         f"Use backend='reference', or add the DL messages per step with add_dl_frames() "
-                         f"(backend {backend!r})")
-    if backend == "triton" and cfg.duplex == "fdd":
-        raise ValueError("the triton NR kernel assumes one TDD carrier for both directions (its PRB tables and slot "
-                         "schedule); duplex='fdd' runs on backend='reference' or 'graph'")
-
-
 def _level_params(level, cfg: NRConfig, params):
     """Parameters of the prototype delay levels and L1 from the config when the caller passes none."""
     if params is not None:
@@ -212,17 +200,12 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
         seed = cfg.seed
     if level == "L2":
         seed = seed if seed is not None else cfg.seed
-        _check_l2_backend(backend, cfg)
         if backend in ("reference", "eager"):
             return NREngine(E, R, device, cfg, seed=seed)
         if backend == "graph":
             from .nr_fast import NRGraphEngine
             return NRGraphEngine(E, R, device, cfg, seed=seed)
-        if backend == "triton":
-            if cfg.rach or cfg.drx:
-                raise ValueError("NRConfig.rach / drx block scheduling through MacLink.sched_ok, which the fused triton "
-                                 "kernel does not read; use backend='graph' (bitwise equal to the reference) or "
-                                 "'reference'")
+        if backend == "triton":                # what the kernel does not implement: NRTritonEngine.refusals
             from .nr_fast import NRTritonEngine
             return NRTritonEngine(E, R, device, cfg, seed=seed)
         raise NotImplementedError(f"backend {backend!r} is not available for the NR engine: 'reference' (= 'eager'), "
