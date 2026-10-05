@@ -56,7 +56,11 @@ def preamble_us(std, n_ss=1):
     return 36.0 + 8.0 * N_LTF[n_ss]
 
 
-# (bandwidth MHz, VHT-MCS, N_SS) marked "not valid" in IEEE Std 802.11-2016 Tables 21-30 to 21-61
+# (bandwidth MHz, VHT-MCS, N_SS) marked "not valid" in IEEE Std 802.11-2016 Sec. 21.5, Tables 21-30 to 21-61. The
+# standard itself was not fetched (paywalled). Cross-checks: the FreeBSD net80211 masks ieee80211_vht_mcs_allowed_list_*
+# (sys/net80211/ieee80211_phy.c, citing 802.11-2020 Sec. 21.5, whose VHT tables equal 2016) give exactly this set, and
+# so does the Sec. 21.5 rule that N_CBPS / N_ES and N_DBPS / N_ES be integers (N_ES from the per-coder rate limit).
+# 80+80 MHz follows 160 MHz.
 VHT_INVALID = frozenset({(20, 9, n) for n in (1, 2, 4, 5, 7, 8)} | {(80, 6, 3), (80, 6, 7), (80, 9, 6), (160, 9, 3)})
 
 

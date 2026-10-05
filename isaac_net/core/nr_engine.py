@@ -57,9 +57,9 @@ from .nr_rng import FADING, H0, KFAC, KPHI, make_rng
 from .queues import env_mask, onehot, reset_where
 from .radio import CellAssociation, pick
 
-# Rician K-factor of LOS links, (mu_K, sigma_K) in dB: TR 38.901 V17.0.0 Table 7.5-6 (Parts 1-3), checked against
-# the itecspec.com mirror of clause 7.5 on 2026-10-05; K is defined for LOS only (N/A for NLOS and O2I). The four
-# InF sub-scenarios share one column.
+# Rician K-factor of LOS links, (mu_K, sigma_K) in dB: TR 38.901 V17.0.0 Table 7.5-6, checked against ETSI TR 138 901
+# V17.0.0 (2022-04): Part-1 UMi-Street Canyon 9 / 5, UMa 9 / 3.5; Part-2 RMa 7 / 4, Indoor-Office 7 / 4; Part-3 InF
+# 7 / 8. K is defined for LOS only (N/A for NLOS and O2I). The four InF sub-scenarios share one column.
 RICIAN_K_DB = {"UMi": (9.0, 5.0), "UMa": (9.0, 3.5), "RMa": (7.0, 4.0), "InH": (7.0, 4.0),
                "InF-SL": (7.0, 8.0), "InF-DL": (7.0, 8.0), "InF-SH": (7.0, 8.0), "InF-DH": (7.0, 8.0)}
 

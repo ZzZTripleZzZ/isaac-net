@@ -32,9 +32,8 @@ MCS_TABLES = {1: MCS_T1, 2: MCS_T2}
 # TS 38.214 Table 5.2.2.1-2 (CQI table 1) and Table 5.2.2.1-3 (CQI table 2): CQI 1..15 as (Qm, R x 1024); CQI 0 =
 # "out of range". Spectral efficiency = Qm * R / 1024 (the tables list it rounded to 4 decimals: 0.1523, 0.2344,
 # 0.3770, 0.6016, 0.8770, 1.1758, 1.4766, 1.9141, 2.4063, 2.7305, 3.3223, 3.9023, 4.5234, 5.1152, 5.5547 for table 1;
-# table 2 continues after 5.5547 with 6.2266, 6.9141, 7.4063). Every row was checked against 38.214 from
-# memory, not a downloaded copy: the entries equal the LTE TS 36.213 Tables 7.2.3-1 / 7.2.3-2 rows, which 38.214
-# reuses, and every (Qm, R) except CQI 1 (QPSK 78) is also an MCS row of Table 5.1.3.1-1 / -2.
+# table 2 continues after 5.5547 with 6.2266, 6.9141, 7.4063). Every (modulation, R x 1024) row and the listed
+# efficiency was checked against ETSI TS 138 214 V17.1.0 (2022-05), Tables 5.2.2.1-2 and 5.2.2.1-3 (p. 85-86).
 CQI_T1 = [(2, 78), (2, 120), (2, 193), (2, 308), (2, 449), (2, 602), (4, 378), (4, 490), (4, 616), (6, 466), (6, 567),
           (6, 666), (6, 772), (6, 873), (6, 948)]
 CQI_T2 = [(2, 78), (2, 193), (2, 449), (4, 378), (4, 490), (4, 616), (6, 466), (6, 567), (6, 666), (6, 772), (6, 873),
