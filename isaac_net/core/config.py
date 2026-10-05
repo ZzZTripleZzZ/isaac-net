@@ -276,6 +276,7 @@ class EdgeConfig:
                          downlink message of cmd_bytes to the NR engine, level L2 with dl=True, and the command
                          arrives when the real DL scheduler delivers it)
       ret_rate_eta, ret_share, ret_snr_offset_db  "delay" rate = eta * share * bandwidth * log2(1 + SNR_dl),
+                         bandwidth = the DL carrier's dl_nprb PRBs (the paired carrier with duplex="fdd"),
                          SNR_dl = step SINR + offset; share None = 1 / R (the robots split the downlink)
       ret_inflight       commands in flight per robot; a new command replaces the oldest when all are busy
     """
