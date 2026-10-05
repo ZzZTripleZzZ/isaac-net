@@ -20,21 +20,38 @@ jobs:
       - run: ruff check .
 
   cpu-tests:
+    name: cpu-tests (py${{ matrix.python }}, torch ${{ matrix.torch || 'latest' }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # newest torch, full CPU suite
+          - python: "3.11"
+            torch: ""
+            markers: "not gpu"
+          # the floor of pyproject.toml (torch>=2.7: torch._dynamo.config.recompile_limit) on the oldest Python
+          - python: "3.10"
+            torch: "2.7.0"
+            markers: "not gpu and not slow"
+          # newest Python classifier
+          - python: "3.12"
+            torch: ""
+            markers: "not gpu and not slow"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: pyproject.toml
       - name: Install CPU-only torch
-        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+        run: pip install "torch${{ matrix.torch && format('=={0}', matrix.torch) || '' }}" --index-url https://download.pytorch.org/whl/cpu
       - name: Install package with dev extras
         run: pip install -e ".[dev]"
       - name: CPU tests (GPU tests are skipped)
-        run: python -m pytest -m "not gpu" -v --durations=10
+        run: python -m pytest -m "${{ matrix.markers }}" -v --durations=10
 
   docs:
     runs-on: ubuntu-latest

@@ -67,6 +67,10 @@ def test_shipped_phy_tables_and_no_lena_data_in_package():
 
 
 def test_prototype_shims_alias_the_package_modules():
+    # prototype/ ships in the sdist (MANIFEST.in) but not in the wheel; a copied tests/ next to an installed wheel
+    # (RELEASE.md step 7) has no prototype/ to test.
+    if not os.path.isdir(os.path.join(ROOT, "prototype")):
+        pytest.skip("prototype/ shims not present (installed wheel without the source tree)")
     code = ("import sys; sys.path[:0] = ['prototype', 'prototype/fast']; import netsim, netsim_fast, env; "
             "from isaac_net.core.proto import netsim as a, netsim_fast as b; from isaac_net.examples import fleet_task as c; "
             "sys.path.insert(0, 'prototype'); from isaac import netmodule as d; from isaac_net.isaac import netmodule as e; "

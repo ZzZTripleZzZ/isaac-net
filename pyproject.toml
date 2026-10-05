@@ -35,7 +35,8 @@ classifiers = [
 ]
 # Install torch first to pick the build (CUDA, or CPU-only via --index-url https://download.pytorch.org/whl/cpu).
 # Triton ships with the CUDA build of torch on Linux; it is imported lazily, only by the `triton` backends.
-dependencies = ["torch>=2.4", "numpy>=1.23"]
+# torch>=2.7: the compile backend sets torch._dynamo.config.recompile_limit (named cache_size_limit before 2.7).
+dependencies = ["torch>=2.7", "numpy>=1.23"]
 
 [project.urls]
 # The repository is private until the project is released publicly; these links need repository access.
