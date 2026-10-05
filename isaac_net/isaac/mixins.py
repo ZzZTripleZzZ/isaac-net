@@ -16,7 +16,10 @@ steps; the messages of the k env steps are merged into one per robot, keeping th
 net_substeps = m runs m network steps per env control step (network step = env step / m; the messages go into the
 first substep, and the poses are interpolated). net_setup checks the env step against NRConfig.control_step_ms.
 The network steps on env steps 1, k + 1, 2k + 1, ... of the run; in between (k > 1) net_step returns the last
-output with the per-step flags cleared, and the observation keeps its last value. With m > 1 the returned
+output with the per-step flags cleared and aoi_s advanced by one env step per skipped tick, and the observation
+keeps its last value. The merge keeps the largest class; on equal class it takes a tagged message over an
+untagged one, so a detection tag is not lost. net_reset(env_ids) also clears the held output of those envs
+(last_cap 0, aoi_s 0, empty queue), since their next network step is up to k - 1 env steps away. With m > 1 the returned
 delivered, newest_cap and tag_delivered cover all m substeps, the rest (and the observation, except
 delay_history, which collects every substep) is that of the last substep.
 
@@ -33,6 +36,7 @@ from typing import Optional
 
 import torch
 
+from ..core.proto.netsim import env_index
 from .config import IsaacNetCfg
 from .net_module import NetConfig, NetModule, TrafficRequest
 
@@ -125,8 +129,9 @@ class NetEnvMixin:
             tag = torch.full_like(send, -1)
         k, m = c.net_decimation, c.net_substeps
         if k > 1:
-            # merge the messages of the window: one per robot, the largest class and its tag
-            take = send > self._pend_send
+            # merge the messages of the window: one per robot, the largest class and its tag; on equal class a
+            # tagged message replaces an untagged one (a detection must not be dropped by a same-size frame)
+            take = (send > self._pend_send) | ((send == self._pend_send) & (tag >= 0) & (self._pend_tag < 0))
             self._pend_send = torch.where(take, send, self._pend_send)
             self._pend_tag = torch.where(take, tag, self._pend_tag)
             self._net_tick += 1
@@ -137,6 +142,7 @@ class NetEnvMixin:
                         if f in held:
                             held[f] = torch.zeros_like(held[f])
                     held["newest_cap"] = torch.full_like(held["newest_cap"], -1)
+                    held["aoi_s"] = held["aoi_s"] + net.step_dt / k     # one env step = network step / k
                     self.net_out = held
                 return self.net_out
             send, tag = self._pend_send, self._pend_tag
@@ -173,6 +179,19 @@ class NetEnvMixin:
             if self.net.isaac.net_decimation > 1:
                 self._pend_send[env_ids] = 0
                 self._pend_tag[env_ids] = -1
+                if self.net_out is not None:
+                    # the held output of a reset env belongs to its previous episode; until its next network
+                    # step it reports the reset state (as NetModule does: capture 0 known, empty queue)
+                    ids = env_index(env_ids, self.net.E, self.net.dev)
+                    m = torch.ones(self.net.E, dtype=torch.bool, device=self.net.dev)
+                    if ids is not None:
+                        m = torch.zeros_like(m).index_fill_(0, ids, True)
+                    held = dict(self.net_out)
+                    for f in ("last_cap", "aoi_s", "queue_len", "queue_bytes"):
+                        if f in held:
+                            x = held[f]
+                            held[f] = torch.where(m.view(-1, *([1] * (x.dim() - 1))), torch.zeros_like(x), x)
+                    self.net_out = held
 
     def net_obs(self) -> torch.Tensor:
         """[E,R,obs_dim] the IsaacNetCfg.obs_features of the last network step; zeros without a network, before the
