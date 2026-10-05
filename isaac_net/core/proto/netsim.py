@@ -249,7 +249,7 @@ class NetBase:
         for n in self.FIELDS:
             fill_rows(getattr(self, n), ids, self.INIT[n])
         fill_rows(self.clock, ids, 0)
-        # _last_snr / _last_hid may alias the caller's tensors from the last step / submit: never write into them
+        # _last_snr / _last_hid are copies, but sinr_db of the last step dict aliases _last_snr: never write in place
         self._last_snr, self._last_hid = self._last_snr.clone(), self._last_hid.clone()
         fill_rows(self._last_snr, ids, 0.0)
         fill_rows(self._last_hid, ids, 0)
@@ -311,7 +311,8 @@ class NetBase:
         hid = req.hid if req.hid is not None else torch.zeros(self.E, dtype=torch.long, device=self.dev)
         if snr_db is None:
             snr_db = self._last_snr
-        self._last_hid = hid
+        # store copies, as the fast backends do: a caller may reuse its hid / SNR buffer
+        self._last_hid = hid.clone()
         return self._enqueue(t, send, det, hid, snr_db)
 
     def add_frames(self, t, send, det, hid, snr_db):
@@ -372,7 +373,7 @@ class NetBase:
 
     def _advance(self, t, x, cur_hid, full):
         t = self._tvec(t)
-        snr_db = self._snr_from(x)
+        snr_db = self._snr_from(x).clone()   # a copy, as the fast backends keep: the caller may reuse x
         self._last_snr = snr_db
         if cur_hid is None:
             cur_hid = self._last_hid
