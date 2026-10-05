@@ -68,6 +68,9 @@ energy = tx_energy / `pa_efficiency` + `tx_circuit_w` · tx_time + `rx_power_w` 
 | `battery_j` | 3600 | battery capacity |
 | `initial_soc` | 1.0 | state of charge after a reset, or a range (lo, hi) drawn per robot at every reset |
 | `low_battery_frac` | 0.2 | threshold of the `low_battery` flag; None turns it off |
+| `drx_sleep_power_w` | None | power while DRX-dormant or RRC-idle ([access.md](access.md)); None = `idle_power_w` |
+
+**Sleep power with DRX and RRC idle.** With `NRConfig(drx=True)` or `rach=True` on `L2`, the step dict carries `access_sleep_frac`, the share of the step the robot spent DRX-dormant or idle ([access.md](access.md)). With `drx_sleep_power_w` set, the idle term becomes (`idle_power_w` · (1 − f) + `drx_sleep_power_w` · f) · step duration; with the default None the energy is unchanged.
 
 **Transmit energy on `L2` is counted per slot.** A read-only tap on the MAC's per-slot SINR hook (`core/slot_tap.py`) sees, in every UL data slot, which robots send a transport block and on how many PRBs. For each of those transmissions it adds the transmit power of that slot times the PUSCH duration (slot × data symbols / 14). The power is the engine's own: `ue_tx_dbm` split over the allocation (the total stays at `ue_tx_dbm` with `ul_power="allocated"`), the fixed PSD of `ul_power="whole_band"`, and the fractional power-control backoff when it is on. The tap returns the SINR it receives, so the engine's outputs stay bitwise unchanged (tested), and a user hook set with `set_sinr_hook` through the wrapper is chained after it. `tx_slots` equals the number of transport blocks the MAC sent, retransmissions included (tested against the MAC counters). SR and HARQ-ACK transmissions on PUCCH are not counted.
 
