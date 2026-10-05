@@ -102,7 +102,8 @@ class _EagerReplay:
 
 TRITON_NOT_IMPLEMENTED = ("several cells (n_cells > 1: A3 handover, rlf), the SR / BSR grant pipeline "
                           "(ul_grant_model='bsr'), closed-loop UL power control (ul_tpc), the 38.214 CQI table, "
-                          "RACH / DRX (rach, drx), FDD (duplex='fdd'), DL traffic models, SINR hooks")
+                          "RACH / DRX (rach, drx), FDD (duplex='fdd'), DL traffic models, SINR hooks, rank-2 MIMO "
+                          "(n_layers_max=2)")
 
 
 class TritonUnsupported(NotImplementedError, ValueError):
@@ -509,6 +510,8 @@ class NRTritonEngine(NRGraphEngine):
                         "tables and slot schedule)"))
         if generates(cfg.traffic, "dl"):
             out.append(("DL traffic models (TrafficModel(..., direction='dl'))", "the kernel has no DL arrival gate"))
+        if cfg.mimo_dirs:
+            out.append(("rank-2 MIMO (n_layers_max=2)", "the kernel has no per-process rank or per-layer SINR"))
         return out
 
     def __init__(self, E, R, device, cfg: NRConfig, seed=None):

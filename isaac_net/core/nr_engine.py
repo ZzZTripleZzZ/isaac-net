@@ -195,6 +195,8 @@ class NRNet:
         for link in (self.ul, self.dl):
             if link is not None:
                 link.rng = self.rng
+                if link.mimo:          # rank decision input: the serving link's Rician K (mac.MacLink._rank)
+                    link.rank_k = self._rank_k
         self.log_stats = False
         self.log_cap_max = 10 ** 9
         self._sched_cache = {}
@@ -387,6 +389,14 @@ class NRNet:
         self.k_lin = torch.where(fr, k, self.k_lin)
         self.k_from = torch.where(fr, k, self.k_from)
         self.k_fresh = torch.zeros_like(self.k_fresh)
+
+    def _rank_k(self):
+        """Rician K target (linear) of every robot's serving link [E,R] for the rank rule, None without Rician fading
+        (K = 0 there: the Rayleigh channel is rich scattering)."""
+        k = getattr(self, "k_lin", None)
+        if k is None or self.C == 1:
+            return k
+        return pick(k, self.assoc.serv)
 
     def _k_at(self, gv=None):
         """Rician K of every link [E,R,(C)] in slot gv (host int or 0-dim device long; None = the target)."""
@@ -826,6 +836,11 @@ class NRNet:
         if self.dl is not None:
             out["dl_newest"] = self.dl_newest.clone()
             out["dl_queue_len"] = self.dl.q.count()
+        if cfg.n_layers_max > 1:       # rank of each robot's last new TB [E,R] (1 in a direction without rank 2)
+            for key, lk in (("rank", u), ("dl_rank", self.dl)):
+                if lk is not None:
+                    out[key] = lk.last_rank.clone() if lk.mimo else torch.ones(self.E, self.R, dtype=torch.long,
+                                                                                device=self.dev)
         return out
 
     def _log_ul(self, q, delivered, timed, dropped):
