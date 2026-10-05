@@ -136,7 +136,7 @@ The LOS state comes from `RadioMC.los_state()` and `RadioMC.blocked_state()` (bo
 | InH (office) | 7 | 4 |
 | InF (SL, DL, SH, DH) | 7 | 8 |
 
-Source: TR 38.901 V17.0.0, Table 7.5-6 Parts 1–3 (K-factor, LOS only; N/A for NLOS and O2I). The values were checked against the itecspec.com mirror of clause 7.5 on 2026-10-05 and are in `nr_engine.RICIAN_K_DB`. With `sigma_K = 8 dB`, InF links range from almost Rayleigh to almost no fading.
+Source: TR 38.901 V17.0.0, Table 7.5-6 Parts 1–3 (K-factor, LOS only; N/A for NLOS and O2I). The values were checked against the ETSI TR 138 901 V17.0.0 text on 2026-10-05 and are in `nr_engine.RICIAN_K_DB`. With `sigma_K = 8 dB`, InF links range from almost Rayleigh to almost no fading.
 
 **Ramp.** When a link's target K changes, for example on a LOS to NLOS flip, K moves linearly from its current value to the new target over `rician_k_ramp_slots` slots (4 by default, 2 ms at μ = 1), starting at the first slot of the control step that delivered the new LOS state. A flip back in the middle of a ramp starts a new ramp from the current K. `rician_k_ramp_slots=0` switches K at once. The ramp avoids a one-slot SINR cliff on top of the path-loss step. The first LOS state after a reset applies at once, without a ramp. K in slot `g` is a pure function of `g` and the ramp state (`NRNet._k_at`), so the result does not depend on which slots the schedule evaluates.
 
