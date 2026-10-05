@@ -1,6 +1,6 @@
 # Channel models
 
-`NRConfig.channel` selects the large-scale channel that `radio.RadioMC` computes for every robot–cell link. The engines see only its output, the path gain `[E, R, C]` in dB, through the existing interfaces (`NREngine.step(t, poses)`, `step_rx(pathgain, ...)`, `step_cells(t, pathgain)` and `NetSlotMC`). Fast fading is the AR(1) Rayleigh model of the NR engine, optionally with a Rician specular term whose K-factor follows the link's LOS state, and its Doppler can follow each robot's own speed. Every model keeps fixed-shape state, redraws the rows of reset envs without a host sync, and evaluates with fixed-shape tensor ops, so a step can run inside a CUDA graph (`tests/test_channels.py::test_channel_cuda_graph_capture`).
+`NRConfig.channel` selects the large-scale channel that `radio.RadioMC` computes for every robot–cell link. The engines see only its output, the path gain `[E, R, C]` in dB, through the existing interfaces (`NREngine.step(t, poses)`, `step_rx(pathgain, ...)`, `step_cells(t, pathgain)` and `NetSlotMC`). Fast fading is the AR(1) Rayleigh model of the NR engine, optionally with a Rician specular term whose K-factor follows the link's LOS state and with subbands correlated in frequency by a delay spread, and its Doppler can follow each robot's own speed. Every model keeps fixed-shape state, redraws the rows of reset envs without a host sync, and evaluates with fixed-shape tensor ops, so a step can run inside a CUDA graph (`tests/test_channels.py::test_channel_cuda_graph_capture`).
 
 | `channel` | What it computes | Main fields |
 |:---|:---|:---|
@@ -11,6 +11,7 @@
 | add-on LOS state from geometry | LOS / NLOS of every link from a baked `los_prob` map, a 2.5-D ray march over an `obstacle_z` height map, or a `blocked_fn` callback, with optional knife-edge diffraction; TR 38.901 soft LOS for the stochastic state ([obstacles.md](obstacles.md)) | `los_source`, `los_raycast_samples`, `los_diffraction`, `los_soft`, `nlos_extra_loss_db` |
 | add-on per-robot Doppler | AR(1) fading correlation from each robot's speed (NR engine) | `fading_doppler="per_robot"`, `doppler_min_speed_mps` |
 | add-on Rician fading | specular term with a per-link K-factor, fixed or from the LOS state (NR engine) | `fading_rician`, `rician_k_db`, `rician_k_from_los`, `rician_k_ramp_slots` |
+| add-on frequency-selective fading | subband fading correlated by an exponential power-delay profile, one delay spread or a per-link draw by LOS state (NR engine) | `fading_freq_corr`, `fading_delay_spread_ns`, `fading_ds_from_los`, `fading_ds_grid`, `inf_hall_volume_m3`, `inf_hall_surface_m2`, `inf_lg_ds` |
 | add-on gNB antenna | TR 38.901 sector element per cell, added to every link | `gnb_antenna="sector"`, `cell_azimuth_deg`, `cell_tilt_deg`, `gnb_antenna_gain_dbi` |
 
 ```python
@@ -115,7 +116,7 @@ The NR engine's fading is `h <- rho h + sqrt(1 - rho^2) n` per elapsed interval,
 
 `|x|^2 = |sqrt(K / (K + 1)) e^{j phi} + sqrt(1 / (K + 1)) h|^2`,
 
-where `h` is the unchanged AR(1) Rayleigh state (`E|h|^2 = 1`, same draws, same Doppler, per-robot Doppler included), `phi` is a fixed phase per link drawn uniformly at reset, and `K` is the linear K-factor of the link (`[E, R]` with one cell, `[E, R, C]` with several). The mean power stays 1, so the link budget is unchanged and only the fade distribution changes. A LOS link at K = 7 dB has 1% of its subband-slots below −9.8 dB, against −20 dB for Rayleigh, which removes most of the deep fades that cause HARQ retransmissions on good links. K = 0 gives exactly the Rayleigh engine, fade for fade. The specular phase is constant, so it carries no Doppler shift of the LOS path, and subbands still fade independently.
+where `h` is the unchanged AR(1) Rayleigh state (`E|h|^2 = 1`, same draws, same Doppler, per-robot Doppler included), `phi` is a fixed phase per link drawn uniformly at reset, and `K` is the linear K-factor of the link (`[E, R]` with one cell, `[E, R, C]` with several). The mean power stays 1, so the link budget is unchanged and only the fade distribution changes. A LOS link at K = 7 dB has 1% of its subband-slots below −9.8 dB, against −20 dB for Rayleigh, which removes most of the deep fades that cause HARQ retransmissions on good links. K = 0 gives exactly the Rayleigh engine, fade for fade. The specular phase is constant, so it carries no Doppler shift of the LOS path. The specular term is the same phasor on every subband, so it is fully correlated in frequency, and the diffuse part `h` fades independently per subband unless `fading_freq_corr` is on (see [Frequency-selective fading](#frequency-selective-fading)).
 
 **Where K comes from.**
 
@@ -142,6 +143,65 @@ Source: TR 38.901 V17.0.0, Table 7.5-6 Parts 1–3 (K-factor, LOS only; N/A for 
 **Randomness and backends.** Under `rng="engine"` the phase and the K draw are reset draws of the engine's counter RNG (sites `KPHI` and `KFAC` of `nr_rng.py`), keyed by (seed, env, episode). An env's Rician state therefore does not depend on `E` or on other envs' resets. Under `rng="global"` they come from the engine's generator after the initial fading state, so with Rician on they shift the generator draws that follow. The `graph` backend captures the K state as persistent buffers, and `set_los` runs eagerly before the replay, as the per-robot Doppler input does. The fused `triton` kernel takes the K target, ramp start, ramp slot and phasor as inputs (`k_ptr`, `kf_ptr`, `kg_ptr`, `phi_ptr`, constexpr `RICIAN`) and evaluates the same ramp and gain per slot.
 
 **Validation.** `tests/test_rician.py` checks the following. With `fading_rician=False` the engine is bitwise the pre-feature fading code. K = 0 reproduces the Rayleigh engine bitwise. For K ∈ {0, 3, 7, 10} dB the empirical CDF of `|x|^2` over about 400,000 link-slots matches the Rician power CDF (`2 (K + 1) |x|^2` is noncentral χ² with 2 degrees of freedom and noncentrality `2K`) with a Kolmogorov–Smirnov distance below 0.002, against 0.10–0.29 for a Rayleigh CDF, and the mean power is 1 within 0.3%. The ramp, a flip back mid-ramp, the first state after a reset, the K draw statistics (`mu_K`, `sigma_K`), E-independence and partial-reset isolation are also tested. The GPU equivalence lists (`tests/test_nr_fast.py` G1, G2, G7) include the Rician configs of `tests/nr_equiv.py`. 5G-LENA's fading arm cannot serve as a system-level reference here, because stock 5G-LENA's uplink AMC fails under frequency-selective fading ([validation-5g-lena.md](validation-5g-lena.md)). The model is therefore validated at link level against the Rician distribution and the TR 38.901 K table. A system-level check would need OAI rfsim with a Rician TDL channel ([bridges-oai.md](bridges-oai.md)) or a patched 5G-LENA with OLLA.
+
+## Frequency-selective fading
+
+**Why.** Without this add-on the AR(1) innovation of every subband (RBG) is drawn independently, so the coherence bandwidth is implicitly one RBG. Indoor factories have rms delay spreads of tens of ns, which means coherence bandwidths of a few MHz, so neighbouring RBGs of 1.4–1.8 MHz fade together. The subband PF metric (`pf_metric="subband"`) and per-subband CQI gain from frequency diversity only as far as the subbands actually differ, so with independent subbands they overstate that gain.
+
+**Model.** With `fading_freq_corr=True` the innovation `z [E, R, (C), S, 2]` of the AR(1) recursion becomes `L z`, where `L` is the lower-triangular Cholesky factor of an `[S, S]` correlation matrix `Cm`. The same `L` multiplies the real and the imaginary part. The initial state drawn at reset gets the same treatment, so the process is stationary from the first slot. The recursion stays
+
+`h <- rho h + sqrt(1 - rho^2) L z / sqrt(2)`,
+
+so the temporal correlation `rho^k` of every subband, the Doppler (global or per robot) and the Rician term are unchanged.
+
+**Subband covariance.** An exponential power-delay profile `P(t) = exp(-t / tau) / tau` (`t >= 0`, rms delay spread `tau`) gives the complex frequency correlation
+
+`rho(df) = E[H(f + df) H*(f)] = 1 / (1 + j 2 pi df tau)`.
+
+The exact circular model would give the complex innovation the covariance `R_ij = rho(f_i - f_j)`, which couples the real and imaginary parts through `Im R`. The engine instead keeps the two parts independent with one real correlation matrix, and it uses the magnitude-consistent choice
+
+`Cm_ij = |rho(f_i - f_j)| = 1 / sqrt(1 + (2 pi (f_i - f_j) tau)^2)`.
+
+This choice has three properties, and the docstring of `nr_engine.subband_corr` gives the derivation:
+
+- `Cm_ii = 1`, so every subband keeps unit power (`E|h_s|^2 = 1`) and the AR(1) recursion stays stationary.
+- For circular Gaussian subbands the power correlation is `|E[h_i h_j*]|^2`. Here it is `Cm_ij^2 = 1 / (1 + (2 pi df tau)^2)`, the same as in the exact complex model. The Rayleigh gain uses only `|h|^2`, so it has the exact model's statistics up to a phase rotation `arg rho` that no output depends on.
+- `Cm` is positive definite, because `1 / sqrt(1 + (2 pi tau f)^2)` is the Fourier transform of a positive function (a modified Bessel function `K_0`), so Bochner's theorem applies.
+
+With Rician fading the specular-diffuse cross term correlates as `Cm_ij / 2` instead of the exact `Re rho / 2`, so it is slightly more correlated than in the exact model.
+
+The subband frequencies `f_s` are the RBG centres of the carrier: PRBs per RBG × 12 × SCS, with the last RBG possibly narrower (`NRConfig.subband_prbs`). Each subband is one fading value sampled at its centre. At the default 20 MHz, μ = 1 carrier (13 RBGs of 1.44 MHz), adjacent subbands correlate at 0.996, 0.91, 0.74 and 0.35 for `tau` = 10, 50, 100 and 300 ns. At 3 µs they are almost independent (0.037). `corr_sqrt` computes `L` in float64 and adds a small diagonal jitter for nearly singular matrices (`tau` far below 1 / bandwidth, where all subbands are almost identical). It then renormalizes the rows, so `L L^T` keeps an exact unit diagonal.
+
+**Where the delay spread comes from.**
+
+| Fields | Delay spread of a link |
+|:---|:---|
+| `fading_delay_spread_ns=x` | `x` ns for every link: one constant `L` built at construction, one `[S, S]` matmul per slot |
+| `fading_delay_spread_ns=None`, `fading_ds_from_los=True` (default) | a log-normal draw `10^(N(mu_lgDS, sigma_lgDS))` s per link and per LOS state, fixed for the episode and redrawn at reset. The radio's LOS state selects the LOS or the NLOS draw. A blocked LOS link counts as NLOS, and a link without a LOS state (SNR input, or a radio without `los_state()`) uses its NLOS draw |
+
+`fading_freq_corr=True` with `fading_delay_spread_ns=None` and `fading_ds_from_los=False` is refused. The LOS state reaches the engine through `NRNet.set_los`, which `NREngine` calls after every path-gain call when Rician K or the delay spread follow the LOS state. A new state applies from the first slot of the step without a ramp, because the AR(1) state carries the change over the coherence time anyway.
+
+`mu_lgDS` and `sigma_lgDS` (`lgDS = log10(DS / 1 s)`, `fc` in GHz) are those of `tr38901_scenario` at `carrier_ghz`, whatever the channel model:
+
+| Scenario | LOS mu / sigma | NLOS mu / sigma | Median DS at 3.5 GHz, LOS / NLOS |
+|:---|:---|:---|:---|
+| UMi (street canyon) | −0.24 lg(1 + fc) − 7.14 / 0.38 | −0.24 lg(1 + fc) − 6.83 / 0.16 lg(1 + fc) + 0.28 | 50 / 103 ns |
+| UMa | −6.955 − 0.0963 lg(fc) / 0.66 | −6.28 − 0.204 lg(fc) / 0.39 | 93 / 364 ns |
+| RMa | −7.49 / 0.55 | −7.43 / 0.48 | 32 / 37 ns |
+| InH (office) | −0.01 lg(1 + fc) − 7.692 / 0.18 | −0.28 lg(1 + fc) − 7.173 / 0.10 lg(1 + fc) + 0.055 | 20 / 39 ns |
+| InF (SL, DL, SH, DH) | lg(26 (V/S) + 14) − 9.35 / 0.15 | lg(30 (V/S) + 32) − 9.44 / 0.19 | SL, DH: 53 / 55 ns; DL, SH: 59 / 61 ns |
+
+Frequency floors: UMa and InH use `fc = 6` below 6 GHz, UMi uses `fc = 2` below 2 GHz. For InF, `V` is the hall volume and `S` its total surface (walls, floor and ceiling). The default hall is the Table 7.8-7 hall of the scenario as Sionna implements it: 120 × 60 × 10 m for SL and DH (V/S = 4.0) and 300 × 150 × 10 m for DL and SH (V/S = 4.55). `inf_hall_volume_m3` and `inf_hall_surface_m2` set your own hall, and `inf_lg_ds` sets the mean lgDS directly for both states.
+
+Sources: TR 38.901 V17.0.0, Table 7.5-6 Parts 1–3 (DS rows and notes 6–7; note 4 of Part 3 for V and S). The values were checked on 2026-10-05 against Sionna's V16.1 parameter files (`src/sionna/phy/channel/tr38901/models/v16_1/*.json`, whose DS rows are those of V17.0.0) and, for RMa, InH and InF, against the itecspec.com mirror of clause 7.5 (Release 19, rows unchanged). Release 19 updated the UMi and UMa rows for its 7–24 GHz study (note 8): UMi LOS −0.18 lg(1 + fc) − 7.28 / 0.39 and NLOS −0.22 lg(1 + fc) − 6.87 / 0.19 lg(1 + fc) + 0.22, UMa LOS −7.067 − 0.0794 lg(fc) / 0.57 + 0.026 lg(fc) and NLOS −6.47 − 0.134 lg(fc) / 0.39. The engine keeps the V17.0.0 values, like the rest of the package. The InF default hall dimensions were checked against Sionna's `inf_scenario.py`, not against the spec text. The values are in `nr_engine.LG_DS` and `lg_ds_params`.
+
+**Grid approximation.** A per-link Cholesky inside the step would break the fixed-shape, graph-capturable step. The engine therefore precomputes `L` for `G` log-spaced delay spreads (`fading_ds_grid = (3, 3000, 16)`: 3 ns to 3 µs, ratio 1.58 between points), keeps each link's nearest grid index for its LOS and NLOS draw (`fc_idx_los`, `fc_idx_nlos`, computed at reset), and selects the live index `fc_idx [E, R, (C)]` in `set_los`. The step gathers `fc_tab[fc_idx]` and applies a batched `[S, S]` matmul. Draws outside the grid are clamped to its ends, where the subbands are already almost fully correlated (3 ns) or almost independent (3 µs) at FR1 RBG widths. Rounding to the grid widens the lgDS spread by `0.2^2 / 12` in variance (0.058 dex rms), small against `sigma_lgDS` = 0.15–0.66.
+
+**Randomness and backends.** Under `rng="engine"` the two normals per link are reset draws of the engine's counter RNG (site `DSPR` of `nr_rng.py`), keyed by (seed, env, episode), so an env's delay spreads depend neither on `E` nor on other envs' resets. Under `rng="global"` they come from the engine's generator right after the initial fading state, so with the per-link mode on they shift the generator draws that follow (the Rician draws among them). The `graph` backend keeps `fc_L` or `fc_tab`, `fc_idx`, `fc_idx_los` and `fc_idx_nlos` as persistent buffers, and `set_los` runs eagerly before the replay. The fused `triton` kernel takes the `L` table (`fcl_ptr`, `[G, S, S]` row-major) and the per-robot grid index (`fci_ptr`, `[E, R]`) as inputs. Its constexpr `FCORR` is 0 (off: the earlier code path), 1 (one shared `L`) or 2 (per-robot index). It correlates the innovation per robot with an `S × S` register product before the AR(1) update. Its normals equal the torch path to float rounding, and so does the product.
+
+**Validation.** `tests/test_freqfade.py` checks the following. With `fading_freq_corr=False` the engine is bitwise the pre-feature fading code (one and three cells, global RNG, partial reset). For `tau` ∈ {10, 50, 100, 300} ns the empirical cross-subband correlation of `h` over about 40,000 link-slots matches `Cm` within 0.01, and the subband power correlation matches `Cm^2` within 0.02. The initial state has the same correlation. At 1 ns all subbands correlate above 0.99, and at 3 µs the off-diagonal entries stay below 0.05. The per-subband power is 1 within 1%, and the AR(1) correlation over 4 slots equals `rho^2` per subband. The subband PF gain over wideband PF drops monotonically with the correlation: on 8 × 6 saturated robots it is 2.13, 2.06, 1.25 and 1.03 for `tau` = 3 µs, 100 ns, 10 ns and 1 ns. The tests also cover the delay-spread draw statistics, the Table 7.5-6 values, the LOS / NLOS switch, E-independence and partial-reset isolation, and the config gating. The GPU lists of `tests/test_nr_fast.py` (G1, G2, and G7 for `ul_fcorr`) include the `ul_fcorr` and `ul_fcorr_rician` configs of `tests/nr_equiv.py`. The system-level check still to do is the PF subband gain against 5G-LENA with `McsCsiSource=AVG_MCS` and a TDL channel of the same delay spread. Because stock 5G-LENA's uplink AMC fails under frequency-selective fading ([validation-5g-lena.md](validation-5g-lena.md)), that comparison is best done in the downlink or with a patched AMC.
+
+**Limits.** The model reproduces the second-order frequency correlation of an exponential power-delay profile. It has no discrete taps, no angles and no per-tap Doppler, so it is not a TDL or CDL channel. All taps share the AR(1) time correlation. The power-delay profile is exponential only (`fading_pdp`), and the delay spread is fixed per link and episode, with no spatial consistency in the delay spread.
 
 ## Cost
 

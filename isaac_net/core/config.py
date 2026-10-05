@@ -77,6 +77,8 @@ FIELD_GROUPS = {
            "sr_boot_bytes", "bsr_delay_slots", "bsr_hdr_bytes", "bsr_est_hdr_bytes", "rlc_tail_bytes", "rlc_tail_timer_ms",
            "phr_min_db", "fading", "fading_rho_per_ms", "ue_speed_mps", "carrier_ghz", "fading_doppler",
            "doppler_min_speed_mps", "fading_rician", "rician_k_db", "rician_k_from_los", "rician_k_ramp_slots",
+           "fading_freq_corr", "fading_delay_spread_ns", "fading_ds_from_los", "fading_pdp", "fading_ds_grid",
+           "inf_hall_volume_m3", "inf_hall_surface_m2", "inf_lg_ds",
            "dl_snr_offset_db",
            "cqi_table",
            "ul_tpc", "ul_tpc_mode", "ul_tpc_target_db", "ul_tpc_steps_db", "ul_tpc_delay_slots", "ul_tpc_range_db",
@@ -142,6 +144,8 @@ SPHERE_FIELDS = ("blockage_radius_m", "blockage_loss_db")                   # bl
 LOS_SOURCES = ("stochastic", "map", "raycast", "callback")
 FADING_FIELDS = ("fading_rho_per_ms", "ue_speed_mps", "fading_doppler", "doppler_min_speed_mps")   # fading=True
 RICIAN_FIELDS = ("rician_k_db", "rician_k_from_los", "rician_k_ramp_slots")   # fading and fading_rician
+INF_DS_FIELDS = ("inf_hall_volume_m3", "inf_hall_surface_m2", "inf_lg_ds")    # delay spread drawn for an InF scenario
+FCORR_FIELDS = ("fading_delay_spread_ns", "fading_ds_from_los", "fading_pdp", "fading_ds_grid") + INF_DS_FIELDS
 RACH_FIELDS = tuple(f for f in FIELD_GROUPS["access"] if f.startswith("rach_"))     # rach=True
 DRX_FIELDS = tuple(f for f in FIELD_GROUPS["access"] if f.startswith("drx_"))       # drx=True
 # frame fields the multi-cell legacy engine (NetSlotMC) reads: only through ul_slot_ms, which converts the A3
@@ -201,7 +205,7 @@ def _switch_unread(cfg, nr):
         if not cfg.ul_tpc:
             off |= set(UL_TPC_FIELDS)
         if not cfg.fading:
-            off |= set(FADING_FIELDS) | {"fading_rician"} | set(RICIAN_FIELDS)
+            off |= set(FADING_FIELDS) | {"fading_rician"} | set(RICIAN_FIELDS) | {"fading_freq_corr"}
         elif cfg.fading_doppler != "per_robot":
             off.add("doppler_min_speed_mps")
         if cfg.fading and not cfg.fading_rician:
@@ -212,6 +216,19 @@ def _switch_unread(cfg, nr):
             off.add("rician_k_ramp_slots")
         if cfg.rician_mode == "los":                          # mu_K / sigma_K of the scenario, on any channel
             off.discard("tr38901_scenario")
+        fc = cfg.freq_corr_mode
+        if fc is None:                                        # fading off or fading_freq_corr off
+            off |= set(FCORR_FIELDS)
+        elif fc == "fixed":                                   # one delay spread for every link
+            off |= set(FCORR_FIELDS) - {"fading_delay_spread_ns", "fading_pdp"}
+        else:                                                 # per-link draw: Table 7.5-6 lgDS of the scenario
+            off.add("fading_delay_spread_ns")
+            off.discard("tr38901_scenario")
+            from .channels.tr38901 import scenario_name
+            if not scenario_name(cfg.tr38901_scenario).startswith("InF"):
+                off |= set(INF_DS_FIELDS)
+            elif cfg.inf_lg_ds is not None:                   # the direct override wins over the hall geometry
+                off |= {"inf_hall_volume_m3", "inf_hall_surface_m2"}
         if cfg.tbs_mode != "lena":
             off.add("lena_ref_sc_per_rb")
         if not cfg.rach:
@@ -428,6 +445,17 @@ class NRConfig:
     rician_k_from_los: bool = True       # K log-normal per link (TR 38.901 Table 7.5-6, tr38901_scenario) where the
                                          # radio reports LOS and no blockage, else K = 0; False (or no LOS state): K = 0
     rician_k_ramp_slots: int = 4         # K moves linearly to a new target over this many slots (0 = at once)
+    fading_freq_corr: bool = False       # frequency-correlated fading across the subbands (NR engine, docs/channels.md
+                                         # "Frequency-selective fading"): the AR(1) innovation becomes L z with L the
+                                         # Cholesky factor of the subband correlation of a delay spread
+    fading_delay_spread_ns: float | None = None   # fixed rms delay spread (ns) of every link; None = per-link draw
+    fading_ds_from_los: bool = True      # per-link log-normal DS (TR 38.901 Table 7.5-6 lgDS of tr38901_scenario), the
+                                         # LOS or NLOS value by the radio's LOS state (NLOS while there is none)
+    fading_pdp: str = "exponential"      # power-delay profile behind the correlation (exponential only)
+    fading_ds_grid: tuple = (3.0, 3000.0, 16)    # per-link DS: (min ns, max ns, points) log grid of precomputed L
+    inf_hall_volume_m3: float | None = None      # InF lgDS hall volume V and total surface S (walls + floor + ceiling);
+    inf_hall_surface_m2: float | None = None     # None = the Table 7.8-7 hall of the scenario (V/S = 4.0 or 4.55)
+    inf_lg_ds: float | None = None       # InF: direct mean lgDS = log10(DS / 1 s) for LOS and NLOS (overrides V/S)
     dl_snr_offset_db: float = 10.0       # step(): default DL per-PRB SNR = UL input SNR + offset
     # ---- link budget for step_rx() (shared with multicell/: pathgain + interference in, SINR out) ----
     noise_model: str = "fixed"           # "fixed": ni_fixed_dbm over snr_ref_prbs PRBs; "thermal": -174 dBm/Hz + NF
@@ -662,6 +690,17 @@ class NRConfig:
         assert self.shadow_dcorr_m > 0 and self.shadow_white_dcorr_m > 0 and self.shadow_modes >= 1
         assert self.fading_doppler in ("global", "per_robot") and self.doppler_min_speed_mps >= 0
         assert self.rician_k_ramp_slots >= 0, "rician_k_ramp_slots must be >= 0"
+        assert self.fading_pdp == "exponential", "fading_pdp: 'exponential'"
+        assert self.fading_delay_spread_ns is None or self.fading_delay_spread_ns > 0, "fading_delay_spread_ns > 0"
+        self.fading_ds_grid = tuple(self.fading_ds_grid)
+        assert len(self.fading_ds_grid) == 3 and 0 < self.fading_ds_grid[0] < self.fading_ds_grid[1] and \
+            int(self.fading_ds_grid[2]) == self.fading_ds_grid[2] and self.fading_ds_grid[2] >= 2, \
+            "fading_ds_grid: (min ns > 0, max ns > min, points >= 2)"
+        assert (self.inf_hall_volume_m3 is None) == (self.inf_hall_surface_m2 is None), \
+            "inf_hall_volume_m3 and inf_hall_surface_m2 go together"
+        assert self.inf_hall_volume_m3 is None or (self.inf_hall_volume_m3 > 0 and self.inf_hall_surface_m2 > 0)
+        assert not (self.fading and self.fading_freq_corr) or self.fading_delay_spread_ns is not None or \
+            self.fading_ds_from_los, "fading_freq_corr needs fading_delay_spread_ns or fading_ds_from_los=True"
         assert self.tr38901_los in ("stochastic", "los", "nlos") and self.o2i_model in ("low", "high")
         assert 0.0 <= self.o2i_indoor_frac <= 1.0 and self.blockage_radius_m > 0
         assert self.los_source in LOS_SOURCES, f"los_source must be one of {LOS_SOURCES}"
@@ -703,6 +742,14 @@ class NRConfig:
         if self.rician_k_db is not None:
             return "fixed"
         return "los" if self.rician_k_from_los else None
+
+    @property
+    def freq_corr_mode(self):
+        """Delay-spread source of the frequency-correlated fading: None (fading or fading_freq_corr off), "fixed"
+        (fading_delay_spread_ns for every link) or "los" (a per-link Table 7.5-6 draw by LOS state)."""
+        if not (self.fading and self.fading_freq_corr):
+            return None
+        return "fixed" if self.fading_delay_spread_ns is not None else "los"
 
     @property
     def scs_khz(self):
