@@ -184,6 +184,9 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     if sizes is not None:
         cfg = cfg.with_(msg_sizes=tuple(float(s) for s in sizes))
     sizes = tuple(cfg.msg_sizes)
+    if level != "L2" and (cfg.rach or cfg.drx):
+        raise ValueError(f"level {level} ignores NRConfig.rach / drx: the access state machine (core/access.py) "
+                         "gates the NR engine's MAC; use level 'L2'")
     if level in WIFI_LEVELS:
         from .wifi.engine import make_wifi_level
         return make_wifi_level(E, R, device, cfg, backend, seed=seed, inject=inject, strict=strict)
@@ -203,6 +206,10 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
             from .nr_fast import NRGraphEngine
             return NRGraphEngine(E, R, device, cfg, seed=seed)
         if backend == "triton":
+            if cfg.rach or cfg.drx:
+                raise ValueError("NRConfig.rach / drx block scheduling through MacLink.sched_ok, which the fused triton "
+                                 "kernel does not read; use backend='graph' (bitwise equal to the reference) or "
+                                 "'reference'")
             from .nr_fast import NRTritonEngine
             return NRTritonEngine(E, R, device, cfg, seed=seed)
         raise NotImplementedError(f"backend {backend!r} is not available for the NR engine: 'reference' (= 'eager'), "
@@ -276,6 +283,12 @@ class NREngine:
             self.traffic = TrafficGen(cfg.traffic, E, R, self.dev, cfg.control_step_ms, cfg.slots_per_step,
                                       seed=tseed)
             self._enable_extras()
+        # access state machine (NRConfig.rach / drx, core/access.py): hooks on this instance's NRNet; None = off, and
+        # the engine then runs exactly the ops it ran before the feature
+        self.access = None
+        if cfg.rach or cfg.drx:
+            from .access import AccessStage
+            self.access = AccessStage(self)
 
     # ------------------------------------------------------------------ passthroughs
     def __getattr__(self, name):          # ul, dl, stats, counters(), cap, ... of the wrapped NRNet
@@ -300,6 +313,14 @@ class NREngine:
 
     def collect(self):
         return self.net.collect()
+
+    def counters(self):
+        """NRNet.counters() ({"ul": ..., "dl": ...}) plus, with rach / drx, "access": preamble transmissions,
+        collisions, successes, failed procedures and RRC releases since the last full reset."""
+        res = self.net.counters()
+        if self.access is not None:
+            res["access"] = self.access.counters()
+        return res
 
     def clear_stats(self):
         self.net.clear_stats()
@@ -516,6 +537,8 @@ class NREngine:
             self._last_hid = torch.zeros_like(self._last_hid)
             if self.radio is not None:
                 self.radio.reset(None)
+            if self.access is not None:
+                self.access.reset(None)
             return
         if ids.numel() == 0:
             return
@@ -526,6 +549,8 @@ class NREngine:
         self._last_hid = self._last_hid.clone().index_fill_(0, ids, 0)
         if self.radio is not None:
             self.radio.reset(ids)
+        if self.access is not None:
+            self.access.reset(ids)
 
     def submit(self, t, requests, snr_db=None, *, tag=None, priority=None, deadline_ms=None):
         """Enqueue new messages at capture time t (None = engine clock). requests: Requests or send [E,R].

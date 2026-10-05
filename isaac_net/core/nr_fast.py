@@ -47,6 +47,9 @@ def state_owners(eng):
     tap = eng.__dict__.get("_slot_tap")      # core.slot_tap: per-slot counters its SINR hooks add to in place
     if tap is not None:
         own["tap"] = tap
+    acc = eng.__dict__.get("access")         # core.access: RACH / DRX state machine (NRConfig.rach / drx)
+    if acc is not None:
+        own["access"] = acc
     return own
 
 

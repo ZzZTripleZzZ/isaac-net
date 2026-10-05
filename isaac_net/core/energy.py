@@ -11,6 +11,10 @@ EnergyLoop keeps the engine API and adds keys to the step dict, like EdgeLoop. P
     energy = tx_energy / pa_efficiency + tx_circuit_w * tx_time + rx_power_w * rx_time
              + idle_power_w * step_duration + msg_energy_j * messages
 
+  With NRConfig.drx / rach (core/access.py) and EnergyConfig.drx_sleep_power_w set, the idle term becomes
+  (idle_power_w * (1 - f) + drx_sleep_power_w * f) * step_duration, f = the step's access_sleep_frac (share of the
+  step DRX-dormant or RRC-idle).
+
   tx_energy   level "L2" (the NR engine): the sum over the UL data slots in which the robot sent a transport block of
               the transmit power in that slot times the slot duration. The power is the engine's own: the UE power
               ue_tx_dbm split over the allocation (ul_power="allocated" keeps the total at ue_tx_dbm), the fixed PSD of
@@ -71,6 +75,9 @@ class EnergyConfig:
     low_battery_frac   low_battery flag threshold on the state of charge; None = flag always False
     seed               seed of the initial_soc draws; it wins over the engine seed. None = derived from the engine
                        seed (make_engine(seed=...), else NRConfig.seed)
+    drx_sleep_power_w  power while DRX-dormant or RRC-idle (NRConfig.drx / rach, core/access.py), charged for the
+                       share access_sleep_frac of the step instead of idle_power_w; None = idle_power_w (energy then
+                       does not depend on the access state)
     """
     tx_power_dbm: float | None = None
     pa_efficiency: float = 1.0
@@ -82,6 +89,7 @@ class EnergyConfig:
     initial_soc: float | tuple = 1.0
     low_battery_frac: float | None = 0.2
     seed: int | None = None
+    drx_sleep_power_w: float | None = None
 
     def __post_init__(self):
         assert 0 < self.pa_efficiency <= 1.0 and self.battery_j > 0
@@ -89,6 +97,7 @@ class EnergyConfig:
         soc = self.initial_soc if isinstance(self.initial_soc, (tuple, list)) else (self.initial_soc,) * 2
         assert 0.0 <= soc[0] <= soc[1] <= 1.0, "initial_soc in [0, 1], or a range (lo, hi)"
         assert self.low_battery_frac is None or 0.0 <= self.low_battery_frac <= 1.0
+        assert self.drx_sleep_power_w is None or self.drx_sleep_power_w >= 0
 
 
 def find_nr_engine(engine):
@@ -251,7 +260,9 @@ class EnergyLoop:
                 tx_j = tap.ul_tx_j[:, :R]
             else:
                 tx_j = tx_s * self.p_tx_w
-            return self._core(tx_j.clone(), tx_slots.clone(), tap.dl_slots[:, :R].clone(), tx_s.clone())
+            sleep = out.get("access_sleep_frac") if self.cfg.drx_sleep_power_w is not None else None
+            return self._core(tx_j.clone(), tx_slots.clone(), tap.dl_slots[:, :R].clone(), tx_s.clone(),
+                              None if sleep is None else sleep[:, :R])
         ins = (out["delivered"], self._frame_bytes(out),
                out.get("sinr_db", torch.zeros(self.E, R, device=self.dev)).to(torch.float32))
         if not self.graph:
@@ -269,11 +280,15 @@ class EnergyLoop:
         tx_j = tx_slots * (self.p_tx_w * self.slot_s)
         return self._core(tx_j, tx_slots, torch.zeros_like(tx_slots))
 
-    def _core(self, tx_j, tx_slots, rx_slots, tx_s=None):
+    def _core(self, tx_j, tx_slots, rx_slots, tx_s=None, sleep=None):
         c, s = self.cfg, self.state
         tx_time = tx_slots * self.slot_s if tx_s is None else tx_s      # legacy levels: whole slots
         e_tx = tx_j / c.pa_efficiency + c.tx_circuit_w * tx_time
-        e = e_tx + c.rx_power_w * rx_slots * self.slot_s + c.idle_power_w * self.step_s + c.msg_energy_j * s["nmsg"]
+        if sleep is None:
+            idle = c.idle_power_w * self.step_s
+        else:                       # access_sleep_frac of the step DRX-dormant / RRC-idle (core/access.py)
+            idle = (c.idle_power_w * (1.0 - sleep) + c.drx_sleep_power_w * sleep) * self.step_s
+        e = e_tx + c.rx_power_w * rx_slots * self.slot_s + idle + c.msg_energy_j * s["nmsg"]
         s["nmsg"].zero_()
         s["cum"].add_(e)
         s["battery"].copy_((s["battery"] - e).clamp(min=0.0))
