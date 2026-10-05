@@ -38,6 +38,7 @@ python -m isaac_net.tools.scene.bake --usd warehouse.usd --tx -5 -8 7 --tx 5 10 
 | `--los-map`, `--los-sub K` | off, 3 | also write `los_prob` from K x K points per cell |
 | `--scene-xml FILE` | | bake an exported (or hand-made) Mitsuba scene instead of `--usd` |
 | `--scene-dir DIR`, `--export-only` | | keep the exported scene, or export and stop (needs no Sionna) |
+| `--gnb-antenna sector`, `--cell-azimuth DEG ...`, `--cell-tilt DEG ...`, `--gnb-antenna-gain DBI` | isotropic; 30, 150, 270 cycled; 0; 8 | add the TR 38.901 sector pattern at bake time (see [Sector antennas at bake time](#sector-antennas-at-bake-time)) |
 
 Then use the map:
 
@@ -65,6 +66,12 @@ self.net_setup("L2-legacy", R, nr, "reference", isaac=isaac)      # in _setup_sc
 With `scene_map` set, `net_setup` calls `isaac.scene_map.resolve_scene_map` before it builds the network. It exports the subtree `root` of the current stage, hashes the exported geometry and materials together with every bake parameter, and loads `<cache>/<key>.pt` if that file exists. Otherwise it bakes, in the same process when `sionna.rt` imports, or else in the interpreter named by `SceneRadioMapCfg.python` or `$ISAAC_NET_SIONNA_PYTHON` (which must have `sionna-rt` and torch). It then returns an `NRConfig` with `channel="radio_map"` and one cell per gNB at the gNB positions, and an `IsaacNetCfg` with `radio="engine"`, so the engine's radio samples the map. The cache is `$ISAAC_NET_RADIO_MAPS`, or `~/.cache/isaac_net/radio_maps`, and the exported scene is kept next to the map (`scene_<hash>/scene.xml`, `manifest.json`).
 
 `SceneRadioMapCfg` fields that are `None` come from the other configs: the transmitters are `IsaacNetCfg.gnb_positions(nr)` (x, y and mast height), the carrier is `NRConfig.carrier_ghz`, the antenna height is `NRConfig.ue_height_m`, and the offset is `IsaacNetCfg.pose_offset_m`. The default `exclude=("*/robot*",)` keeps the robots out of the static map. All envs share env_0's map, so the envs must be clones of one layout.
+
+### Sector antennas at bake time
+
+Sionna RT traces the gNBs with isotropic antennas. `--gnb-antenna sector` adds the TR 38.901 Table 7.3-1 element pattern of each cell (`core/channels/antenna.py`, boresight `--cell-azimuth`, one per `--tx`, downtilt `--cell-tilt`, maximum gain `--gnb-antenna-gain`) to the baked path gain, as `tools/scene/sector.py` computes it: for every grid point, the gain toward the direction from the gNB antenna (`--tx` height) to the robot antenna (`--ue-height`) at that point. These are the angles and the gain the engine computes at run time for `NRConfig(gnb_antenna="sector")`, evaluated once per grid point (tested equal at the grid points). The pattern scales a cell's whole path gain, which is exact when the power arrives along the direct path (line of sight, or through a wall on that path) and an approximation where reflections that leave the gNB in other directions dominate. Weighting each ray by its departure direction would need Sionna RT's own antenna pattern on the transmitters, which is not used here.
+
+The map's metadata then records `gnb_antenna = "sector"`, `cell_azimuth_deg`, `cell_tilt_deg` and `gnb_antenna_gain_dbi`, and the bake key includes them. Run the engine with the default `gnb_antenna="isotropic"`: with `gnb_antenna="sector"` and such a map, `RadioMC` raises a `ValueError` instead of applying the pattern a second time. A raise rather than a warning, because a doubled pattern silently moves every link by up to 16 dB. The synthetic map tool takes the same options (`python -m isaac_net.tools.make_synthetic_radio_map sector.npz --gnb-antenna sector --cell-azimuth 0 180`), which is how the CPU tests check this path without Sionna.
 
 ## Coordinate convention
 
@@ -169,6 +176,7 @@ Bake and start-up for this run: the first start exported the stage in 2.9 s and 
 
 - **Static scene.** The map is baked once for the geometry at env creation. Moving robots, forklifts and people are not in it. Robot bodies are handled by the blockage add-on (spheres on the robot–gNB segment, a fixed loss per blocked link). Moving scene objects other than robots are not modelled, and a scene that changes needs a new bake.
 - **One map for all envs.** Every env uses env_0's map. Envs with different layouts would need one map per env, which `RadioMap` does not support.
+- **Sector pattern along the direct path.** `--gnb-antenna sector` applies the pattern in the direction of each grid point, not per traced ray (see [Sector antennas at bake time](#sector-antennas-at-bake-time)).
 - **2-D map at one height.** The map is a horizontal plane at `ue_height_m`. The z of the robot poses is ignored, as in the other channel models.
 - **Cell averages and Monte-Carlo noise.** The solver averages the path gain over each cell, so cells next to a gNB read below the free-space gain at the cell centre, and cells far from a gNB or behind strong obstacles receive few rays. More samples or larger cells reduce the noise. Cells that no ray of a gNB reached (inside solid obstacles, or beyond `max_depth` interactions) are filled from their neighbours for that gNB. The `valid` field marks the cells some ray reached.
 - **Materials by name.** The keyword table is a heuristic for warehouse assets. Check `manifest.json` (the rule behind each prim) and add user rules where it guesses wrong. Plastic and cardboard use the wood parameters. Every face is a slab of one thickness, and a closed solid is crossed twice.
