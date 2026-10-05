@@ -31,6 +31,15 @@ Randomness (cfg.rng): "engine" draws the fading innovations, the TB decodes and 
 counter-based streams (nr_rng.NRRng, keyed by seed, env, episode, step and slot); "global" draws the step noise from
 the global torch RNG and the reset fading from `generator` (the behavior before the engine RNG).
 
+Rician fading (cfg.fading_rician, docs/channels.md): the gain of every subband is |sqrt(K/(K+1)) e^{j phi} +
+sqrt(1/(K+1)) h|^2 with h the AR(1) Rayleigh state above (unchanged), phi a fixed per-link phase and K per link
+[E,R,(C)]: rician_k_db for every link, or (rician_k_from_los) a log-normal draw per link with the mu_K / sigma_K of
+TR 38.901 Table 7.5-6 where the radio reports LOS and no blockage and 0 elsewhere. A new LOS state enters through
+set_los() (NREngine calls it after the radio's path gain), and step() / step_cells() turn a changed target into a
+linear ramp over rician_k_ramp_slots slots that starts at the first slot of that control step; the K of slot g is a
+pure function of g and the ramp state (_k_at), which the fused Triton kernel evaluates the same way. With
+fading_rician off none of this code runs.
+
 Capture (nr_fast.py): with self._tdev set to a 0-dim long device tensor holding t, every time-dependent value of the
 step is computed on the device from it, and host decisions depend only on t through the TDD / SR / CQI schedule key
 and the fading step of the first slot, so one captured graph per (key, first fading step) serves every control step.
@@ -44,9 +53,21 @@ import torch
 from .config import NRConfig
 from .mac_dl import DlMac
 from .mac_ul import UlMac
-from .nr_rng import FADING, H0, make_rng
+from .nr_rng import FADING, H0, KFAC, KPHI, make_rng
 from .queues import env_mask, onehot, reset_where
 from .radio import CellAssociation, pick
+
+# Rician K-factor of LOS links, (mu_K, sigma_K) in dB: TR 38.901 V17.0.0 Table 7.5-6 (Parts 1-3), checked against
+# the itecspec.com mirror of clause 7.5 on 2026-10-05; K is defined for LOS only (N/A for NLOS and O2I). The four
+# InF sub-scenarios share one column.
+RICIAN_K_DB = {"UMi": (9.0, 5.0), "UMa": (9.0, 3.5), "RMa": (7.0, 4.0), "InH": (7.0, 4.0),
+               "InF-SL": (7.0, 8.0), "InF-DL": (7.0, 8.0), "InF-SH": (7.0, 8.0), "InF-DH": (7.0, 8.0)}
+
+
+def rician_k_params(scenario):
+    """(mu_K, sigma_K) dB of a TR 38.901 scenario name (aliases as config.tr38901_scenario accepts)."""
+    from .channels.tr38901 import scenario_name
+    return RICIAN_K_DB[scenario_name(scenario)]
 
 class NRNet:
     """Drop-in replacement for netsim.NetSlot (same add_frames / step / queued / stats API) with an
@@ -63,6 +84,8 @@ class NRNet:
         self.fading_rho_ms = None  # optional per-robot AR(1) fading correlation per ms [E,R] (per-robot Doppler,
                                    # channels.doppler); None = the global cfg.fading_rho_per_ms
         self.E, self.R, self.dev = E, R, device
+        self.rician = self.cfg.rician_mode                # None | "fixed" | "los" (config.NRConfig.rician_mode)
+        self.k_ramp = self.cfg.rician_k_ramp_slots if self.rician == "los" else 0
         self.sizes = torch.tensor(sizes, device=device, dtype=torch.float32)
         self.S = self.cfg.n_subbands
         meta = [("cls", torch.long), ("det", torch.bool), ("hid", torch.long), ("f_nact", torch.long),
@@ -138,10 +161,88 @@ class NRNet:
             m = env_mask(E, env_ids, d)
             self.h = reset_where(self.h, m, h0)
             self.dl_newest = reset_where(self.dl_newest, m, -1)
+        if self.rician:
+            self._reset_rician(env_ids, cdim)
         if self.C > 1:
             self._reset_cells(env_ids)
         if not hasattr(self, "stats"):
             self.clear_stats()
+
+    def _reset_rician(self, env_ids, cdim):
+        """Per-link Rician state of the reset envs: unit phasor e^{j phi} of the specular term [E,R,(C),2] with
+        phi ~ U(0, 2 pi), the LOS K draw k_los (rician_k_db, or 10^(N(mu_K, sigma_K) / 10)), and the ramp state
+        k_in (input), k_lin (target), k_from (ramp start) and k_g0 (slot of the ramp start). Engine RNG: reset draws
+        keyed by (seed, env, episode) (sites KPHI, KFAC); rng="global": the engine's generator."""
+        cfg, E, R, d = self.cfg, self.E, self.R, self.dev
+        n = R * math.prod(cdim)
+        if self.rng is None:
+            u = torch.rand(E, n, device=d, generator=self.gen)
+            z = torch.randn(E, n, device=d, generator=self.gen)
+        else:
+            u = self.rng.reset_uniform_all(KPHI, n)
+            z = self.rng.reset_normal_all(KFAC, n)
+        phi = (2 * math.pi) * u.view(E, R, *cdim)
+        spec = torch.stack((torch.cos(phi), torch.sin(phi)), -1)
+        if self.rician == "fixed":
+            k_los = torch.full((E, R, *cdim), 10 ** (cfg.rician_k_db / 10), device=d)
+            k0 = k_los.clone()
+        else:
+            mu, sigma = rician_k_params(cfg.tr38901_scenario)
+            k_los = 10 ** ((mu + sigma * z.view(E, R, *cdim)) / 10)
+            k0 = torch.zeros_like(k_los)              # no LOS state yet: K = 0 until set_los()
+        g0 = torch.zeros((E, R, *cdim), dtype=torch.long, device=d)
+        fresh = torch.ones(E, dtype=torch.bool, device=d)
+        if env_ids is None:
+            # distinct tensors: the graph backend makes each state attribute's tensor its persistent buffer
+            self.spec, self.k_los, self.k_g0 = spec, k_los, g0
+            self.k_in, self.k_lin, self.k_from = k0.clone(), k0.clone(), k0.clone()
+            if self.rician == "los":
+                self.k_fresh = fresh
+            return
+        m = env_mask(E, env_ids, d)
+        self.spec = reset_where(self.spec, m, spec)
+        self.k_los = reset_where(self.k_los, m, k_los)
+        for name in ("k_in", "k_lin", "k_from"):
+            setattr(self, name, reset_where(getattr(self, name), m, k0))
+        self.k_g0 = reset_where(self.k_g0, m, g0)
+        if self.rician == "los":
+            self.k_fresh = self.k_fresh | m
+
+    def set_los(self, los, blocked=None):
+        """LOS state of every link (bool [E,R,C], or [E,R] with one cell) and optionally its blockage: the Rician K
+        target becomes the link's LOS draw k_los where LOS and not blocked, else 0. Eager (before the step); the
+        next step() / step_cells() ramps K to it. Right after a reset an env's first LOS state applies at once.
+        No-op unless rician_mode == "los"."""
+        if self.rician != "los":
+            return
+        on = los if blocked is None else los & ~blocked
+        if self.C == 1 and on.dim() == 3:
+            on = on[..., 0]
+        k = torch.where(on, self.k_los, torch.zeros_like(self.k_los))
+        fr = self.k_fresh.view(-1, *([1] * (k.dim() - 1)))
+        self.k_in = k
+        self.k_lin = torch.where(fr, k, self.k_lin)
+        self.k_from = torch.where(fr, k, self.k_from)
+        self.k_fresh = torch.zeros_like(self.k_fresh)
+
+    def _k_at(self, gv=None):
+        """Rician K of every link [E,R,(C)] in slot gv (host int or 0-dim device long; None = the target)."""
+        if self.k_ramp == 0 or gv is None:
+            return self.k_lin
+        n = gv - self.k_g0 + 1
+        return torch.where(n >= self.k_ramp, self.k_lin,
+                           self.k_from + (self.k_lin - self.k_from) * (n * (1.0 / self.k_ramp)))
+
+    def _rician_update(self, g0v):
+        """Start of a control step (first slot g0v): links whose input K differs from the target start a ramp from
+        their K of the previous slot."""
+        if self.k_ramp == 0:
+            self.k_lin = self.k_in
+            return
+        ch = self.k_in != self.k_lin
+        self.k_from = torch.where(ch, self._k_at(g0v - 1), self.k_from)
+        self.k_g0 = torch.where(ch, g0v, self.k_g0)
+        self.k_lin = self.k_in
 
     # per-env multi-cell state (besides h and the association) and its reset value
     CELL_INIT = {"ni_ul": "ul", "ni_dl": "dl"}
@@ -271,10 +372,16 @@ class NRNet:
         """Completion time of slot rel of the step, in control steps (float64 on the device when captured)."""
         return tf + (rel + 1) / N
 
-    def _gain(self):
+    def _gain(self, gv=None):
+        """Fading gain (dB) per subband [E,R,(C),S] in slot gv (gv: Rician ramp only; None = its target)."""
         if not self.cfg.fading:
             return torch.zeros(self.h.shape[:-1], device=self.dev)
-        return 10 * torch.log10((self.h ** 2).sum(-1).clamp(min=1e-6))
+        if not self.rician:
+            return 10 * torch.log10((self.h ** 2).sum(-1).clamp(min=1e-6))
+        k = self._k_at(gv)[..., None, None]
+        inv = 1 / (k + 1)
+        x = torch.sqrt(k * inv) * self.spec[..., None, :] + torch.sqrt(inv) * self.h
+        return 10 * torch.log10((x ** 2).sum(-1).clamp(min=1e-6))
 
     def step_rx(self, t, pathgain_db, cur_hid=None, ul_interf_dbm_prb=None, dl_interf_dbm_prb=None,
                 dl_pathgain_db=None, full=False):
@@ -316,10 +423,12 @@ class NRNet:
         if self.dl is not None:
             dref = dl_snr_db if dl_snr_db is not None else snr_db + cfg.dl_snr_offset_db
             dl_ref = dref if dref.dim() == 3 else dref[..., None].expand(-1, -1, self.S)
+        if self.rician:
+            self._rician_update(g0v)
         for rel, dls, uls, sr, cqi, ack in self._schedule(g0):
             g, gv = g0 + rel, g0v + rel
             self._evolve(g, rel)
-            gain = self._gain()
+            gain = self._gain(gv) if self.rician else self._gain()
             frac = self._frac(tf, rel, N)
             if cqi:
                 self.dl.cqi_report(dl_ref, gain)
@@ -371,13 +480,15 @@ class NRNet:
         g_ho = g0v + k_ho
         fired = torch.zeros(self.E, self.R, dtype=torch.bool, device=self.dev)
         links = [x for x in (self.ul, self.dl) if x is not None]
+        if self.rician:
+            self._rician_update(g0v)
         for rel, dls, uls, sr, cqi, ack in self._schedule(g0):
             g, gv = g0 + rel, g0v + rel
             ho = (k_ho >= 0) & (k_ho <= rel) & ~fired          # A3 triggers up to this slot switch now
             self._handover(ho, tgt, g_ho)
             fired = fired | ho
             self._evolve(g, rel)
-            gain_c = self._gain()                             # [E,R,C,S]
+            gain_c = self._gain(gv) if self.rician else self._gain()      # [E,R,C,S]
             self._gain_c = gain_c
             serv = asc.serv
             gain = pick(gain_c, serv)

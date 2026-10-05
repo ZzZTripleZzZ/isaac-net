@@ -75,7 +75,8 @@ FIELD_GROUPS = {
            "pf_update", "pf_avg_idle", "ul_retx_sched", "ul_amc_alloc", "ul_grant_model", "sr_boot_slots",
            "sr_boot_bytes", "bsr_delay_slots", "bsr_hdr_bytes", "bsr_est_hdr_bytes", "rlc_tail_bytes", "rlc_tail_timer_ms",
            "phr_min_db", "fading", "fading_rho_per_ms", "ue_speed_mps", "carrier_ghz", "fading_doppler",
-           "doppler_min_speed_mps", "dl_snr_offset_db",
+           "doppler_min_speed_mps", "fading_rician", "rician_k_db", "rician_k_from_los", "rician_k_ramp_slots",
+           "dl_snr_offset_db",
            "gnb_tx_dbm", "ue_nf_db", "tb_overhead_bytes", "pkt_payload_bytes", "pkt_overhead_bytes", "ul", "dl"),
     "link": ("snr_ref_prbs", "noise_model", "ni_fixed_dbm", "gnb_nf_db", "ue_tx_dbm"),
     "radio": ("pl_const_db", "pathloss_exp", "shadow_sigma_db", "shadow_modes", "shadow_dcorr_m", "shadow_white_frac",
@@ -116,6 +117,7 @@ TR38901_FIELDS = ("tr38901_scenario", "tr38901_los", "o2i_indoor_frac", "o2i_mod
                   "inf_clutter_size_m", "inf_clutter_height_m")             # channel="tr38901"
 BLOCKAGE_FIELDS = ("blockage_radius_m", "blockage_loss_db")                 # blockage=True
 FADING_FIELDS = ("fading_rho_per_ms", "ue_speed_mps", "fading_doppler", "doppler_min_speed_mps")   # fading=True
+RICIAN_FIELDS = ("rician_k_db", "rician_k_from_los", "rician_k_ramp_slots")   # fading and fading_rician
 # frame fields the multi-cell legacy engine (NetSlotMC) reads: only through ul_slot_ms, which converts the A3
 # time-to-trigger and the handover interruption to UL slots (ttt_slots, ho_int_slots), so only with n_cells > 1
 NETSLOTMC_FRAME_FIELDS = ("mu", "tdd_pattern", "special_split", "special_ul_data", "ul_data_symbols")
@@ -144,9 +146,17 @@ def _switch_unread(cfg, nr):
         off |= set(BLOCKAGE_FIELDS)
     if nr:
         if not cfg.fading:
-            off |= set(FADING_FIELDS)
+            off |= set(FADING_FIELDS) | {"fading_rician"} | set(RICIAN_FIELDS)
         elif cfg.fading_doppler != "per_robot":
             off.add("doppler_min_speed_mps")
+        if cfg.fading and not cfg.fading_rician:
+            off |= set(RICIAN_FIELDS)
+        elif cfg.fading and cfg.rician_k_db is not None:      # fixed K: no LOS state, no ramp
+            off |= {"rician_k_from_los", "rician_k_ramp_slots"}
+        elif cfg.fading and not cfg.rician_k_from_los:        # K = 0 (Rayleigh)
+            off.add("rician_k_ramp_slots")
+        if cfg.rician_mode == "los":                          # mu_K / sigma_K of the scenario, on any channel
+            off.discard("tr38901_scenario")
         if cfg.tbs_mode != "lena":
             off.add("lena_ref_sc_per_rb")
     return off
@@ -341,6 +351,12 @@ class NRConfig:
     fading_doppler: str = "global"       # "global": one rho for all robots; "per_robot": rho from each robot's own
                                          # speed (velocity input or consecutive poses), NR engine with pose input
     doppler_min_speed_mps: float = 0.0   # per_robot: speed floor (0 = a still robot's fading is frozen)
+    fading_rician: bool = False          # Rician fast fading (NR engine, docs/channels.md): per subband
+                                         # |sqrt(K/(K+1)) e^{j phi} + sqrt(1/(K+1)) h|^2, h the AR(1) Rayleigh state
+    rician_k_db: float | None = None     # fading_rician: fixed K (dB) for every link; None = K from the LOS state
+    rician_k_from_los: bool = True       # K log-normal per link (TR 38.901 Table 7.5-6, tr38901_scenario) where the
+                                         # radio reports LOS and no blockage, else K = 0; False (or no LOS state): K = 0
+    rician_k_ramp_slots: int = 4         # K moves linearly to a new target over this many slots (0 = at once)
     dl_snr_offset_db: float = 10.0       # step(): default DL per-PRB SNR = UL input SNR + offset
     # ---- link budget for step_rx() (shared with multicell/: pathgain + interference in, SINR out) ----
     noise_model: str = "fixed"           # "fixed": ni_fixed_dbm over snr_ref_prbs PRBs; "thermal": -174 dBm/Hz + NF
@@ -483,6 +499,7 @@ class NRConfig:
         assert self.shadow_acf in ("sos", "exp") and 0.0 <= self.shadow_white_frac <= 1.0
         assert self.shadow_dcorr_m > 0 and self.shadow_white_dcorr_m > 0 and self.shadow_modes >= 1
         assert self.fading_doppler in ("global", "per_robot") and self.doppler_min_speed_mps >= 0
+        assert self.rician_k_ramp_slots >= 0, "rician_k_ramp_slots must be >= 0"
         assert self.tr38901_los in ("stochastic", "los", "nlos") and self.o2i_model in ("low", "high")
         assert 0.0 <= self.o2i_indoor_frac <= 1.0 and self.blockage_radius_m > 0
         if self.channel == "tr38901":
@@ -492,6 +509,16 @@ class NRConfig:
                 allowed = SCENARIOS[self.tr38901_scenario].o2i
                 assert self.o2i_model in allowed, (
                     f"O2I model {self.o2i_model!r} is not defined for {self.tr38901_scenario} (allowed: {allowed})")
+
+    @property
+    def rician_mode(self):
+        """Rician K source of the NR engine: None (Rayleigh: fading off, fading_rician off, or K = 0 because
+        rician_k_from_los is off and no rician_k_db is set), "fixed" (rician_k_db) or "los" (from the LOS state)."""
+        if not (self.fading and self.fading_rician):
+            return None
+        if self.rician_k_db is not None:
+            return "fixed"
+        return "los" if self.rician_k_from_los else None
 
     @property
     def scs_khz(self):
