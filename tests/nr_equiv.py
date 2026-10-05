@@ -60,7 +60,16 @@ CFGS = {
     "ul_lena_sched": lambda: lena_match_v2(bler_source="pdsch", ul_grant_model="lumped"),
     "ul_dl_pf": lambda: NRConfig(dl=True, pf_update="rbg", pf_avg_idle="freeze", ul_retx_sched="tdma",
                                  ul_amc_alloc="previous"),
+    # Rician fading (docs/channels.md): fixed K; K from the radio's LOS state with the 4-slot ramp (K = 0 while the
+    # radio has no los_state()); three cells; the 5G-LENA MAC switches with the BSR pipeline (graph only)
+    "ul_rician": lambda: NRConfig(fading_rician=True, rician_k_db=7.0, dl=True),
+    "ul_rician_los": lambda: NRConfig(fading_rician=True, channel="tr38901_inf_sh", rician_k_ramp_slots=4),
+    "cells3_rician": lambda: multicell(3, dl=True, fading_rician=True, rician_k_ramp_slots=4),
+    "ul_dl_pf_rician": lambda: NRConfig(dl=True, pf_update="rbg", pf_avg_idle="freeze", ul_grant_model="bsr",
+                                        fading_rician=True, rician_k_db=5.0),
 }
+RICIAN_CFGS = ("ul_rician", "ul_rician_los", "cells3_rician", "ul_dl_pf_rician")
+RICIAN_TRITON_CFGS = ("ul_rician", "ul_rician_los")          # one cell, lumped grants
 
 
 class Workload:
