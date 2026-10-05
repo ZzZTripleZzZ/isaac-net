@@ -4,7 +4,8 @@
    tags and RNG stream, bitwise, through a mid-run partial reset: every level the mixin offers (L0, L0DR, L1,
    L2-legacy on the fast eager backend; the NR engine L2 on reference), on CPU and on the GPU. The freshness
    outputs (last_cap, AoI) and tag_delivered are checked against values rebuilt from the reference outputs.
-2. graph (bitwise, injected draws) and triton (invariants) through NetModule on the GPU, with partial resets.
+2. graph (bitwise, injected draws) and triton (invariants) through NetModule on the GPU, with partial resets; triton
+   free running with and without a mid-run partial reset agrees bitwise on the untouched envs afterwards.
 3. The radio: the engine radio's SNR for the same shadowing field; pose-chunk interpolation; blockage; DR
    parameters that survive a reset.
 4. MessageHistory delivers the first capture of an episode; the mixin, mdp terms and the deprecated NetConfig
@@ -173,6 +174,50 @@ def test_fast_backend_partial_reset(level, backend, seeded):
             assert float((o["aoi_s"][ids] - 0.1).abs().max()) < 1e-6
         delivered += o["delivered"].float().mean().item()
     assert delivered > 0
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("level", ["L2-legacy", "L1"])
+def test_triton_partial_reset_free_running_isolation(level, seeded):
+    """triton, free running: a run with a mid-run partial reset and a run without it agree bitwise on the untouched
+    envs at every later step (outputs) and at the end (state), so a reset does not leak into other envs through the
+    fused kernel, its RNG offsets or the radio. Both runs use the same kernel on the same per-env inputs, and the
+    kernel has no cross-env reduction, so bitwise equality is expected (not only equality to rounding)."""
+    if not _has_triton():
+        pytest.skip("triton not installed")
+    E, T, t_reset, dev = 16, 60, 23, torch.device("cuda")
+    g = torch.Generator(device=dev).manual_seed(4)
+    pos = torch.rand(E, R, 3, device=dev, generator=g) * 150
+    inputs = []
+    for t in range(T):
+        pos = (pos + 2.0 * (2 * torch.rand(E, R, 3, device=dev, generator=g) - 1)).clamp(0, 150)
+        inputs.append((*_workload(E, t, g, dev), pos.clone()))
+    ids, other = torch.tensor([1, 6, 7, 12], device=dev), torch.tensor([0, 2, 3, 4, 5, 8, 9, 10, 11, 13, 14, 15],
+                                                                         device=dev)
+    names = ["cap", "rem"] + (["bsr", "sr_t", "avg", "olla", "wait", "hcnt", "h"] if level == "L2-legacy" else [])
+
+    def run(reset):
+        m = NetModule(level, E, R, dev, CFG, "triton", pose_chunks=2, seed=8)
+        outs = []
+        for t, (send, tag, cur, p) in enumerate(inputs):
+            if reset and t == t_reset:
+                m.reset(ids)
+            m.submit(None, TrafficRequest(send=send, tag=tag))
+            o = m.step(None, p, cur_tag=cur)
+            outs.append({k: v[other].clone() for k, v in o.items()
+                         if torch.is_tensor(v) and v.dim() >= 1 and v.shape[0] == E})
+        return outs, {n: getattr(m.eng, n)[other].clone() for n in names}
+
+    (oa, sa), (ob, sb) = run(False), run(True)
+    assert sum(int(o["delivered"].sum()) for o in oa) > 50
+    for t in range(T):
+        for k in oa[t]:
+            x, y = oa[t][k], ob[t][k]
+            if x.is_floating_point():
+                x, y = x.nan_to_num(-7.0), y.nan_to_num(-7.0)
+            assert torch.equal(x, y), (t, k)
+    for n in names:
+        assert torch.equal(sa[n], sb[n]), n
 
 
 def test_radio_matches_engine_radio(seeded):

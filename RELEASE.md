@@ -35,7 +35,7 @@ The version has one source of truth: `__version__` in `isaac_net/__init__.py`. `
    python -m zipfile -l dist/isaac_net-X.Y.Z-py3-none-any.whl
    ```
 
-   Check the wheel contents: the package, `core/data/` (Sionna tables, their Apache-2.0 license, the synthetic radio map), the ns-3 bridge sources and the OAI compose file. There must be no `*lena_eesm_tables*`, no `.so`, `.pt` or `.ckpt` file, no datasets and no results. The wheel is below 1 MB.
+   Check the sdist contents (`tar tzf dist/isaac_net-X.Y.Z.tar.gz`): `tests/`, including `tests/nr_frozen/base/`, and `prototype/`. Check the wheel contents: the package, `core/data/` (Sionna tables, their Apache-2.0 license, the synthetic radio map), the ns-3 bridge sources and the OAI compose file. There must be no `*lena_eesm_tables*`, no `.so`, `.pt` or `.ckpt` file, no datasets and no results. The wheel is below 1 MB.
 7. **Install from the wheel.** In a fresh venv on Linux, with the CPU build of torch, install the wheel and run the suite from outside the source tree, so the tests import the installed package:
 
    ```bash
@@ -47,7 +47,7 @@ The version has one source of truth: `__version__` in `isaac_net/__init__.py`. `
    isaac-net-bench --help && isaac-net-bake --help && isaac-net-measure --help
    ```
 
-   `tests/test_package.py::test_prototype_shims_alias_the_package_modules` needs the source tree (`prototype/` is not packaged) and is expected to fail there.
+   `tests/test_package.py::test_prototype_shims_alias_the_package_modules` needs the source tree (`prototype/` ships in the sdist, not in the wheel) and skips itself there.
 8. **Tag.** Merge the release branch, then tag the merge commit and push the tag (only when the maintainer says so):
 
    ```bash

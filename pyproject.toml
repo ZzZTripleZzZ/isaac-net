@@ -35,7 +35,8 @@ classifiers = [
 ]
 # Install torch first to pick the build (CUDA, or CPU-only via --index-url https://download.pytorch.org/whl/cpu).
 # Triton ships with the CUDA build of torch on Linux; it is imported lazily, only by the `triton` backends.
-dependencies = ["torch>=2.4", "numpy>=1.23"]
+# torch>=2.7: the compile backend sets torch._dynamo.config.recompile_limit (named cache_size_limit before 2.7).
+dependencies = ["torch>=2.7", "numpy>=1.23"]
 
 [project.urls]
 # The repository is private until the project is released publicly; these links need repository access.
@@ -126,5 +127,6 @@ ignore = ["E701", "E702", "E731", "E741"]
 "isaac_net/isaac/netmodule.py" = ["F401", "F841"]
 # Merged components, kept as delivered (dead locals in nrconfig's PHY; lab validation scripts).
 "isaac_net/core/phy.py" = ["F841"]
+"tests/nr_frozen/base/phy.py" = ["F841"]   # frozen copy of core/phy.py (tests/scripts/refreeze_nr.py)
 "benchmarks/ns3/*" = ["E402", "F841"]
 "tests/bridges/*" = ["E402", "F841"]

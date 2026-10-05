@@ -8,6 +8,8 @@ both draw the same counter-based noise) and driven in lockstep by one synthetic 
     per-subband SNR [E,R,S] with an explicit DL SNR, poses through the engine radio, SNR [E,R] with a DL SNR);
     several cells: robots random-walking in the 150 m arena (poses), so handovers happen;
   * random partial resets: with probability p_reset per step a random subset of the envs (index tensor or bool mask).
+  * phase_offset shifts the traffic cycle: step t uses the phase of t + phase_offset. A short run starting at step 0
+    stays inside the idle phase (p = 0.03, a handful of frames), so the short pytest runs start at the medium phase.
 Checked every step: every output of step() and every state tensor of the engine (nr_fast.state_dict: MAC, HARQ,
 queues, fading, association, interference estimates, counters, RNG counters, episode clocks). At the end: collect()
 statistics (log_stats on) and counters().
@@ -64,10 +66,10 @@ CFGS = {
 class Workload:
     """Per-step inputs of the lockstep drive (on the engine device), from its own CPU generator."""
 
-    def __init__(self, cfg, E, R, steps, seed=0, p_reset=0.1, device="cuda"):
+    def __init__(self, cfg, E, R, steps, seed=0, p_reset=0.1, device="cuda", phase_offset=0):
         self.cfg, self.E, self.R, self.dev = cfg, E, R, torch.device(device)
         self.g = torch.Generator().manual_seed(seed)
-        self.steps, self.p_reset = steps, p_reset
+        self.steps, self.p_reset, self.phase_offset = steps, p_reset, phase_offset
         self.snr = -10 + 50 * torch.rand(E, R, generator=self.g)
         self.pos = torch.rand(E, R, 2, generator=self.g) * 150
 
@@ -82,8 +84,9 @@ class Workload:
             if t > 0 and float(torch.rand((), generator=g)) < self.p_reset:
                 ids = torch.randperm(E, generator=g)[: max(1, E // 20)]
                 d["reset"] = ids if t % 2 else torch.zeros(E, dtype=torch.bool).index_fill_(0, ids, True)
-            p = self.phase_p(t)
-            big = t % 100 >= 50 and t % 100 < 75
+            tp = t + self.phase_offset
+            p = self.phase_p(tp)
+            big = tp % 100 >= 50 and tp % 100 < 75
             send = (torch.rand(E, R, generator=g) < p).long() * (
                 torch.full((E, R), 2) if big else torch.randint(1, 3, (E, R), generator=g))
             d["send"] = send
@@ -167,16 +170,18 @@ def active_mismatch(oa, ob):
 
 
 def run(backend="graph", cfg_name="ul", E=64, R=16, steps=300, seed=7, mode="free", device="cuda", p_reset=0.1,
-        log_stats=True, verbose=False):
+        log_stats=True, verbose=False, phase_offset=0):
     cfg = CFGS[cfg_name]().with_(msg_sizes=SIZES)
     ref = make_engine("L2", E, R, device, cfg, "reference", seed=seed)
     fast = make_engine("L2", E, R, device, cfg, backend, seed=seed)
     ref.log_stats = fast.log_stats = log_stats
     res = {"backend": backend, "cfg": cfg_name, "E": E, "R": R, "steps": steps, "mode": mode, "seed": seed,
+           "phase_offset": phase_offset,
            "out_mismatch_steps": 0, "state_mismatch_steps": 0, "first_mismatch": None, "resets": 0,
            "robot_steps_active": 0, "robot_steps_mismatch": 0, "mismatch_keys": {}}
     t0 = time.time()
-    for t, d in Workload(cfg, E, R, steps, seed=seed + 1, p_reset=p_reset, device=device):
+    for t, d in Workload(cfg, E, R, steps, seed=seed + 1, p_reset=p_reset, device=device,
+                                phase_offset=phase_offset):
         res["resets"] += "reset" in d
         submit(ref, d)
         submit(fast, d)
@@ -230,9 +235,10 @@ if __name__ == "__main__":
     ap.add_argument("--steps", type=int, default=300)
     ap.add_argument("--mode", default="free")
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--phase-offset", type=int, default=0)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    r = run(a.backend, a.cfg, a.E, a.R, a.steps, a.seed, a.mode, verbose=True)
+    r = run(a.backend, a.cfg, a.E, a.R, a.steps, a.seed, a.mode, verbose=True, phase_offset=a.phase_offset)
     print(json.dumps(r, indent=1))
     if a.out:
         with open(a.out, "w") as f:

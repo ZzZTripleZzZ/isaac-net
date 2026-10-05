@@ -1,5 +1,7 @@
 """FROZEN copy of the load-gap prototype (isaac_net/core/nr_loadfix.py at main 2400ed9), kept as the bitwise
 reference of the engine's 5G-LENA MAC switches (tests/test_nr_loadfix.py L0). Do not edit.
+Its bases (UlMac, NRNet, mac.BIG, queues) come from the frozen copy in tests/nr_frozen/base/ (commit in
+base.FROZEN_COMMIT, re-frozen by tests/scripts/refreeze_nr.py), not from the live package; only config is live.
 
 Prototype 5G-LENA uplink-pipeline models for the NR engine under load (see docs/fidelity-load-gap.md).
 
@@ -45,10 +47,10 @@ from dataclasses import dataclass
 import torch
 
 from isaac_net.core.config import NRConfig
-from isaac_net.core.mac import BIG
-from isaac_net.core.mac_ul import UlMac
-from isaac_net.core.nr_engine import NRNet
-from isaac_net.core.queues import env_mask, onehot, reset_where
+from .base.mac import BIG
+from .base.mac_ul import UlMac
+from .base.nr_engine import NRNet
+from .base.queues import env_mask, onehot, reset_where
 
 # 3GPP TS 38.321 Table 6.1.3.1-1 upper bounds (5G-LENA nr-common.cc BufferSizeLevelBsrTable, 64 levels)
 BSR_LEVELS = (0, 10, 12, 14, 17, 19, 22, 26, 31, 36, 42, 49, 57, 67, 78, 91, 107, 125, 146, 171, 200, 234, 274,

@@ -1,5 +1,7 @@
-# Source distribution: the package, its data, the full test suite and the top-level documents.
+# Source distribution: the package, its data, the full test suite, the prototype shims and the top-level documents.
 # Benchmarks, results, the docs site sources and the Windows / HPC scripts stay in the repository only.
 include LICENSE README.md CHANGELOG.md ARCHITECTURE.md CONTRIBUTING.md RELEASE.md
 recursive-include tests *.py *.md *.log *.txt *.csv *.jsonl *.sh
+# The prototype compatibility shims (40 kB), so tests/test_package.py's shim test runs from an sdist too.
+recursive-include prototype *.py
 recursive-exclude * __pycache__ *.py[cod] *.so *.pt *.ckpt *lena_eesm_tables*

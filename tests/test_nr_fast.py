@@ -7,6 +7,9 @@ CPU
   R3 the NR draws equal an independent scalar reimplementation of the key scheme (nr_rng.py on proto/rng.py)
   R4 the fast backends refuse rng="global" and a CPU device
 GPU (marker gpu; tests/nr_equiv.py is the harness, its CLI runs the 300-step versions)
+  The short runs start the workload's 100-step traffic cycle at the medium phase (phase_offset), so they cover the
+  medium and the all-large burst phases instead of the idle phase (p = 0.03, under 15 frames in 12 steps).
+  Expected duration on the lab 4090: G1 + G2 + G7 about 3-5 min (G1 is about 3x its former 12-step cost).
   G1 graph == reference bitwise: every output and every state tensor at every step, UL, UL+DL, three cells, per-robot
      Doppler, round robin / max C/I, traffic models with sub-step arrivals (one and three cells), with random partial
      resets; statistics and counters at the end
@@ -124,16 +127,20 @@ def test_r4_fast_backends_need_engine_rng_and_cuda():
 @pytest.mark.parametrize("cfg", ["ul", "ul_dl", "cells3", "ul_doppler", "ul_maxci_pc", "ul_lena", "traffic",
                                  "traffic_c3"])
 def test_g1_graph_bitwise(cfg):
-    r = nr_equiv.run("graph", cfg, E=8, R=4, steps=12, seed=3, p_reset=0.3)
+    # steps 25..64 of the cycle: 25 medium steps (p = 0.4), then 15 all-large burst steps (p = 0.9). The reference
+    # delivers 228 (ul_maxci_pc) to 12399 (traffic_c3) frames here, against 3 to 3800 for the old 12 idle steps.
+    r = nr_equiv.run("graph", cfg, E=8, R=4, steps=40, seed=3, p_reset=0.3, phase_offset=25)
     assert r["resets"] > 0
+    assert r["frames_delivered"][0] > 150, r
     assert r["bitwise"], r["first_mismatch"]
 
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("cfg", ["ul", "ul_dl", "ul_lena", "ul_compat", "traffic", "ul_lena_sched", "ul_dl_pf"])
 def test_g2_triton_teacher_forced(cfg):
-    r = nr_equiv.run("triton", cfg, E=16, R=8, steps=12, seed=3, mode="teacher", p_reset=0.3)
-    assert r["robot_steps_active"] > 50
+    # steps 40..59 of the cycle: 10 medium, then 10 burst steps (about 2000 active robot-steps instead of about 100)
+    r = nr_equiv.run("triton", cfg, E=16, R=8, steps=20, seed=3, mode="teacher", p_reset=0.3, phase_offset=40)
+    assert r["robot_steps_active"] > 1000
     assert r["robot_steps_mismatch"] <= max(1, r["robot_steps_active"] // 1000), r
 
 
@@ -141,8 +148,8 @@ def test_g2_triton_teacher_forced(cfg):
 @pytest.mark.parametrize("cfg", ["ul_lena_v2", "ul_dl_pf_rbg", "cells3_v2", "ul_lena_sched", "ul_dl_pf"])
 def test_g7_graph_bitwise_lena_mac_switches(cfg):
     """graph == reference bitwise with the 5G-LENA MAC switches on (BSR pipeline state, per-RBG PF, TDMA retx)."""
-    r = nr_equiv.run("graph", cfg, E=8, R=6, steps=40, seed=3, p_reset=0.2)
-    assert r["resets"] > 0 and r["frames_delivered"][0] > 20
+    r = nr_equiv.run("graph", cfg, E=8, R=6, steps=40, seed=3, p_reset=0.2, phase_offset=25)
+    assert r["resets"] > 0 and r["frames_delivered"][0] > 150
     assert r["bitwise"], r["first_mismatch"]
 
 

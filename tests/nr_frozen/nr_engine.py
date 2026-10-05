@@ -19,7 +19,7 @@ import torch
 from isaac_net.core.config import NRConfig
 from .mac_dl import DlMac
 from .mac_ul import UlMac
-from isaac_net.core.queues import env_mask, reset_where
+from .base.queues import env_mask, reset_where
 
 class NRNet:
     """Drop-in replacement for netsim.NetSlot (same add_frames / step / queued / stats API) with an
