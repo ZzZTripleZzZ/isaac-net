@@ -70,8 +70,9 @@ stage keeps its own counter RNG seeded from the engine seed.
 
 Graph safety: fixed shapes, state updated by reassignment of [E, R] tensors (the graph backend re-binds them as it
 does the MAC's state; core/nr_fast.state_owners registers this stage), no host sync, time as a device tensor when
-captured. The fused Triton kernel of the triton backend has no schedulable-mask input, so rach / drx are refused
-there (use "graph", bitwise equal to "reference").
+captured. The triton backend runs pre() and post() as torch code around its fused kernel, and the kernel evaluates
+the per-slot mask of _gated (connected, DRX Active Time) itself, from st / conn_at / last_act, and updates last_act
+and sleep_cnt in place (nr_triton.nr_step_kernel, constexpr ACCESS).
 """
 from __future__ import annotations
 
@@ -93,11 +94,11 @@ def _ms_to_slots(ms, slot_ms):
 
 
 class AccessStage:
-    """The access state machine of one NREngine (any backend but triton). Built by NREngine when cfg.rach or
-    cfg.drx is set; see the module docstring."""
+    """The access state machine of one NREngine (any backend; on triton the fused kernel replaces _gated). Built by
+    NREngine when cfg.rach or cfg.drx is set; see the module docstring."""
 
     def __init__(self, eng):
-        cfg = eng.config          # the triton backend refuses rach / drx in NRTritonEngine.__init__ (refusals)
+        cfg = eng.config
         self.eng = eng
         self.net = net = eng.net
         self.cfg = cfg

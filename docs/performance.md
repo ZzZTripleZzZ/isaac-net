@@ -87,9 +87,11 @@ The NR engine has three backends, all behind `make_engine("L2", ..., backend=...
     - in-order delivery
     - DL CQI, from the MCS thresholds or the 38.214 CQI table
     - closed-loop UL power control (`ul_tpc`)
-    - the traffic arrival gate
+    - the UL and DL traffic arrival gates
     - per-robot Doppler
-  - With a downlink the step runs as two kernels, DL then UL. Both replay the same fading trajectory from the same start state and keyed draws, so each carries only one link's state.
+    - the RACH / DRX access gate (the per-slot schedulable mask; the RO draws, collisions and backoff run in torch before the kernel)
+    - FDD, with a DL carrier of its own width
+  - With a downlink the step runs as two kernels, DL then UL. Both replay the same fading trajectory from the same start state and keyed draws, so each carries only one link's state. With RACH / DRX the step runs as one kernel with both links, because the DRX inactivity timer, `drx_ul_wake` and the release timer couple them inside the step.
   - Prologue and epilogue (input SINR, power control, deadlines, compaction, outputs) are the reference's torch code, and the whole step is captured in CUDA graphs.
   - Single cell for now.
 
