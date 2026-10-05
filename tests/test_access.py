@@ -332,7 +332,7 @@ def test_unused_fields_and_level_checks():
     for level in ("L1", "L0", "L2-legacy"):
         with pytest.raises(ValueError, match="rach / drx"):
             make_engine(level, 1, 2, "cpu", NRConfig(rach=True))
-    with pytest.raises(ValueError, match="triton"):
+    with pytest.raises(ValueError, match="CUDA"):          # triton runs rach / drx: past the refusals, the device
         make_engine("L2", 1, 2, "cpu", NRConfig(drx=True), backend="triton")
     with pytest.raises(ValueError, match="multiple of the TDD period"):
         make_engine("L2", 1, 2, "cpu", NRConfig(rach=True, rach_occasion_slots=12))

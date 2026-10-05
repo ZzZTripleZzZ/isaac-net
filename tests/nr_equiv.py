@@ -83,7 +83,24 @@ CFGS = {
                                 dl=True, frame_buffer=64,
                                 traffic=[TM.periodic(600, 10, jitter_ms=2, priority=2),
                                          TM.bursty(1400, 30, 2, (0.3, 0.3), priority=1), TM.policy()]),
+    # access state machine (docs/access.md): every robot powers on idle and contends for the ROs, DRX with a short
+    # cycle and RRC release, UL + DL, sparse UL and DL traffic models (the UL arrival gate hook sits inside the access
+    # gate, the DL one outside it) and the policy's messages
+    "ul_access": lambda: NRConfig(rach=True, rach_initial="idle", rach_release_after_ms=150.0, drx=True,
+                                  drx_inactivity_ms=20.0, drx_cycle_ms=80.0, drx_on_ms=10.0, drx_short_cycle_ms=40.0,
+                                  dl=True, frame_buffer=64,
+                                  traffic=[TM.periodic(600, 50, jitter_ms=2), TM.policy(), TM.periodic(800, 50).downlink()]),
+    # FDD (docs/configurability.md "Duplexing"): UL only (every slot a U slot); UL + a 40 MHz paired DL carrier
+    # (106 PRBs on the 13 RBGs of the 51-PRB UL carrier, DL SINR shifted by -10 log10(106 / 51))
+    "ul_fdd": lambda: NRConfig(duplex="fdd"),
+    "ul_dl_fdd": lambda: NRConfig(duplex="fdd", dl=True, dl_bandwidth_mhz=40, proactive_grant="every_ul_slot"),
+    # UL and DL traffic models with sub-step arrival slots (both stream gates), next to the policy's messages
+    "ul_dl_traffic": lambda: NRConfig(dl=True, frame_buffer=64,
+                                      traffic=[TM.periodic(600, 10, jitter_ms=2), TM.policy(),
+                                               TM.periodic(1200, 5, jitter_ms=2).downlink(),
+                                               TM.bursty(900, 30, 2, (0.4, 0.4)).downlink()]),
 }
+ACCESS_FDD_DL_CFGS = ("ul_access", "ul_fdd", "ul_dl_fdd", "ul_dl_traffic")    # graph and triton
 RICIAN_CFGS = ("ul_rician", "ul_rician_los", "cells3_rician", "ul_dl_pf_rician")
 FCORR_CFGS = ("ul_fcorr", "ul_fcorr_rician")                 # both run on graph and triton
 RICIAN_TRITON_CFGS = ("ul_rician", "ul_rician_los")          # one cell, lumped grants

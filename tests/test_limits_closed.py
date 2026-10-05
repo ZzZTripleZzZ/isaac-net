@@ -8,7 +8,7 @@
     region with the capture's host inputs, host state and gate tensors, so the static gate buffers are exercised) is
     bitwise equal to the reference, with UL models, one and three cells, RACH, and partial resets; gpu: CUDA graphs
 (c) triton refusals: every feature the fused kernel does not implement is refused in NRTritonEngine.__init__ with one
-    message, and docs/configurability.md lists the same features
+    message, and docs/configurability.md lists the same features; RACH / DRX, FDD and DL traffic models are accepted
 (d) EdgeLoop "delay" return path under FDD: the command rate uses the DL carrier's dl_nprb
 (e) RLF re-establishment through RACH: the robot enters RACH toward the selected cell, the outage lasts until
     contention resolution, collisions retry; graph code path equal to the reference
@@ -159,10 +159,13 @@ TRITON_CASES = {
     "bsr": (NRConfig(ul_grant_model="bsr"), "grant pipeline"),
     "ul_tpc": (NRConfig(ul_pc=True, ul_tpc=True), "ul_tpc"),
     "cqi": (NRConfig(dl=True, cqi_table="38214"), "38.214 CQI"),
-    "rach": (NRConfig(rach=True), "RACH / DRX"),
-    "drx": (NRConfig(drx=True), "RACH / DRX"),
-    "fdd": (NRConfig(duplex="fdd"), "FDD"),
-    "dl_traffic": (NRConfig(dl=True, traffic=[TM.periodic(1000, 5).downlink()]), "DL traffic models"),
+}
+# implemented by the kernel since feat/tritonB (tests/test_triton_access_fdd_dl.py): accepted, not refused
+TRITON_ACCEPTS = {
+    "rach": NRConfig(rach=True),
+    "drx": NRConfig(drx=True),
+    "fdd": NRConfig(duplex="fdd", dl=True, dl_bandwidth_mhz=40),
+    "dl_traffic": NRConfig(dl=True, traffic=[TM.periodic(1000, 5).downlink()]),
 }
 
 
@@ -176,9 +179,18 @@ def test_triton_refuses_in_one_place(name):
     assert "backend='graph'" in str(ei.value) and TRITON_NOT_IMPLEMENTED in str(ei.value)
 
 
+@pytest.mark.parametrize("name", list(TRITON_ACCEPTS))
+def test_triton_accepts_access_fdd_and_dl_traffic(name):
+    cfg = TRITON_ACCEPTS[name]
+    assert NRTritonEngine.refusals(cfg) == []
+    with pytest.raises(ValueError, match="CUDA"):           # past the former refusal: the device check
+        make_engine("L2", 2, 2, "cpu", cfg, "triton", seed=0)
+
+
 def test_triton_refusals_list_several_features_and_pass_defaults():
     assert NRTritonEngine.refusals(NRConfig()) == [] and NRTritonEngine.refusals(NRConfig(dl=True)) == []
-    assert len(NRTritonEngine.refusals(NRConfig(duplex="fdd", rach=True, dl=True, cqi_table="38214"))) == 3
+    cfg = multicell(3, rach=True, drx=True, dl=True, ul_grant_model="bsr", traffic=[TM.periodic(1000, 5).downlink()])
+    assert len(NRTritonEngine.refusals(cfg)) == 2           # several cells, the BSR pipeline
 
 
 def test_docs_backend_table_lists_the_triton_refusals():
@@ -187,9 +199,11 @@ def test_docs_backend_table_lists_the_triton_refusals():
     sec = doc[doc.index("## NR engine backends"):]
     sec = sec[:sec.index("\n## ", 3)]
     rows = [ln for ln in sec.splitlines() if ln.startswith("| ") and "refused" in ln]
-    for key in ("n_cells", "rlf", "ul_grant_model", "ul_tpc", "cqi_table", "rach", "drx", "duplex", "direction=\"dl\"",
-                "SINR hook"):
+    for key in ("n_cells", "rlf", "ul_grant_model", "ul_tpc", "cqi_table", "SINR hook"):
         assert any(key in r for r in rows), key
+    runs = [ln for ln in sec.splitlines() if ln.startswith("| ") and ln.rstrip().endswith("| yes |")]
+    for key in ("rach", "drx", "duplex", "direction=\"dl\""):                # run on triton since feat/tritonB
+        assert not any(key in r for r in rows) and any(key in r for r in runs), key
 
 
 # ---------------------------------------------------------------------------------------------- (d) EdgeLoop under FDD
