@@ -41,6 +41,7 @@ the loop has a fixed trip count, and there are no host syncs inside submit / ste
 from __future__ import annotations
 
 import copy
+import math
 
 import torch
 
@@ -50,24 +51,47 @@ from ..proto import netsim as _ns
 from ..proto.rng import STEP
 from . import meanfield as mf
 from .config import AC_NAMES, EDCA, WifiConfig
-from .phy import AccessTiming, mcs_table
+from .phy import AccessTiming, mcs_numbers, mcs_table
 
 
 def poisson_icdf(lam, u, n_max):
-    """Poisson(lam) by inverse CDF from uniforms u, capped at n_max (vectorized over the n_max terms)."""
+    """Poisson(lam) by inverse CDF from uniforms u, capped at n_max (vectorized over the n_max terms). The cap
+    should sit well above lam (WifiNet uses poisson_cap), or the draw is biased low."""
     k = torch.arange(int(n_max), device=lam.device, dtype=lam.dtype)
     logpmf = k * torch.log(lam.clamp(min=1e-30))[..., None] - lam[..., None] - torch.lgamma(k + 1.0)
     cdf = torch.exp(logpmf).cumsum(-1)
     return (u[..., None] > cdf).sum(-1).to(lam.dtype)
 
 
+def poisson_cap(lam_max):
+    """Static support of the Poisson draw: lam_max + 6 sqrt(lam_max) + 1, rounded up (lam_max floored at 1).
+    P(N > cap) is below 2e-6 for every lam <= lam_max (below 1e-7 once lam_max >= 5), so the cap does not bind in
+    practice and the draw keeps a fixed shape computed from the config."""
+    lam_max = max(float(lam_max), 1.0)
+    return int(math.ceil(lam_max + 6.0 * math.sqrt(lam_max) + 1.0))
+
+
+_PL_CONST_DEFAULT = NRConfig.__dataclass_fields__["pl_const_db"].default
+
+
+def free_space_1m_db(carrier_ghz):
+    """Free-space path loss at 1 m, 20 log10(4 pi f / c), in dB."""
+    return 20 * math.log10(4 * math.pi * carrier_ghz * 1e9 / 299_792_458.0)
+
+
 def radio_config(cfg: NRConfig, wc: WifiConfig):
     """The NRConfig that RadioMC reads for the APs: same channel model, AP positions as cells, the Wi-Fi carrier and
-    the robot transmit power. Copied without __post_init__ so that more than 7 APs are allowed."""
+    the robot transmit power. Copied without __post_init__ so that more than 7 APs are allowed.
+
+    log_distance: NRConfig.pl_const_db left at its default (40 dB, calibrated for the 3.5 GHz NR carrier) becomes
+    the free-space loss at 1 m at the Wi-Fi carrier (46.8 dB at 5.2 GHz), the same 1 m loss as the robot-robot
+    model of WifiConfig.sta_pl_1m; a pl_const_db set away from the default is kept as given."""
     c = copy.copy(cfg)
     xy = wc.ap_xy(cfg)
     c.n_cells, c.cell_layout, c.cell_positions_m = len(xy), "custom", tuple(tuple(p) for p in xy)
     c.carrier_ghz, c.ue_tx_dbm = wc.carrier_ghz, wc.sta_tx_dbm
+    if cfg.channel == "log_distance" and cfg.pl_const_db == _PL_CONST_DEFAULT:
+        c.pl_const_db = free_space_1m_db(wc.carrier_ghz)
     if wc.ap_height_m is not None:
         c.gnb_height_m = wc.ap_height_m
     return c
@@ -101,7 +125,13 @@ class WifiNet(LevelNet):
         rates, thr = mcs_table(wc.standard, wc.bandwidth_mhz, wc.n_ss, wc.gi_us)
         self.rates = torch.tensor(rates, dtype=f, device=d)
         self.thr = torch.tensor(thr, dtype=f, device=d) + wc.ra_margin_db
+        ids = mcs_numbers(wc.standard, wc.bandwidth_mhz, wc.n_ss)          # table entry -> MCS number
+        self.mcs_ids = torch.tensor(ids, dtype=torch.long, device=d)
         self.timing = AccessTiming(wc)
+        # upper bound of a robot's successful accesses per sub-step: one access needs at least the channel time Ts
+        # of a 1-byte frame at the top MCS after the shortest AIFS, so lam = mu dt <= dt / Ts_min
+        ts_min = float(self.timing.times(1.0, max(rates), float(min(v[2] for v in EDCA.values())))[0])
+        self.n_acc_max = poisson_cap(wc.substep_ms * 1000.0 / ts_min)
         tab = torch.tensor([EDCA[a] for a in AC_NAMES], dtype=f, device=d)                          # [5, 4]
         self.ac_W0, self.ac_Wmax = tab[:, 0] + 1, tab[:, 1] + 1
         self.ac_aifsn, self.ac_txop = tab[:, 2], tab[:, 3]
@@ -116,7 +146,7 @@ class WifiNet(LevelNet):
         self.per_class_ac = len(set(per_cls[1:])) > 1    # robots' AC changes with the head-of-line message
         # saturated background stations, one entry per AP with weight bg_stations
         bg_ac = AC_NAMES.index(wc.bg_ac)
-        bg_rate = self.rates[min(wc.bg_mcs, len(rates) - 1)]
+        bg_rate = self.rates[max(i for i, m in enumerate(ids) if m <= wc.bg_mcs)]      # highest valid MCS <= bg_mcs
         self.bg_w = torch.full((E, A), float(wc.bg_stations), device=d)
         self.bg_rate = bg_rate.expand(E, A).clone()
         self.bg_B = torch.full((E, A), float(wc.bg_frame_bytes), device=d)
@@ -312,7 +342,7 @@ class WifiNet(LevelNet):
             p = res["p"][:, :R]
             lam = mu * dt_us
             if wc.access_noise == "poisson":
-                n_acc = poisson_icdf(lam, u_acc[:, k], 8)
+                n_acc = poisson_icdf(lam, u_acc[:, k], self.n_acc_max)
             else:
                 c1 = credit + lam * act
                 n_acc = torch.floor(c1)
@@ -356,7 +386,7 @@ class WifiNet(LevelNet):
         self._o_access.copy_(torch.where(acc_n > 0, acc_sum / acc_n.clamp(min=1) / 1000.0, nan))
         self._o_pfail.copy_(torch.where(acc_n > 0, p_sum / acc_n.clamp(min=1), nan))
         self._o_busy.copy_(busy_sum / K)
-        self._o_mcs.copy_(torch.where(link, mcs, torch.full_like(mcs, -1)))
+        self._o_mcs.copy_(torch.where(link, self.mcs_ids[mcs], torch.full_like(mcs, -1)))
         self._o_rate.copy_(torch.where(link, rate, torch.zeros_like(rate)))
         return fin_t
 
