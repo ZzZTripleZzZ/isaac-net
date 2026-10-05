@@ -40,6 +40,8 @@ Graph safety: every tensor has a fixed shape [E, R], state is updated in place a
 EnergyLoop(..., graph=True) captures the whole energy step (airtime approximation included) in a CUDA graph; it
 needs a CUDA device and a level without the slot tap (the NR engine has only its reference backend).
 Partial reset(env_ids) restores those envs' batteries and zeroes their counters only.
+The legacy step form step(t, x, cur_hid) -> (newest, det_env) is refused (NotImplementedError): it carries none of
+the step outputs the accounting needs.
 """
 from __future__ import annotations
 
@@ -66,7 +68,8 @@ class EnergyConfig:
     battery_j          battery capacity
     initial_soc        state of charge after a reset, a fraction or a range (lo, hi) drawn per robot at every reset
     low_battery_frac   low_battery flag threshold on the state of charge; None = flag always False
-    seed               seed of the initial_soc draws; None = derived from the engine seed
+    seed               seed of the initial_soc draws; it wins over the engine seed. None = derived from the engine
+                       seed (make_engine(seed=...), else NRConfig.seed)
     """
     tx_power_dbm: float | None = None
     pa_efficiency: float = 1.0
@@ -135,8 +138,10 @@ class EnergyLoop:
             raise ValueError("EnergyLoop(graph=True) needs a CUDA device and a level other than 'L2'")
         p = cfg.tx_power_dbm if cfg.tx_power_dbm is not None else ncfg.ue_tx_dbm
         self.p_tx_w = 10 ** ((p - 30.0) / 10.0)
-        if seed is None:
-            seed = cfg.seed if cfg.seed is not None else (ncfg.seed if ncfg.seed is not None else 0)
+        if cfg.seed is not None:            # EnergyConfig.seed wins; None = the engine seed (argument, then config)
+            seed = cfg.seed
+        elif seed is None:
+            seed = ncfg.seed if ncfg.seed is not None else 0
         self.rng = CounterRNG(mix32(int(seed) & 0xFFFFFFFF) ^ 0x2545F491, E, d)
         z = lambda dt: torch.zeros(E, R, dtype=dt, device=d)       # noqa: E731
         self.state = {"battery": z(torch.float32), "cum": z(torch.float32), "nmsg": z(torch.float32)}
@@ -214,12 +219,14 @@ class EnergyLoop:
         self.submit(t, Requests(send, det, hid), snr_db)
 
     def step(self, t, x=None, cur_hid=None, **kw):
+        if cur_hid is not None:
+            raise NotImplementedError(
+                "EnergyLoop needs the dict form step(t, x): the legacy form step(t, x, cur_hid) returns only "
+                "(newest, det_env), which carries no delivered bytes or traffic counts for the energy accounting. "
+                "The dict form reports det_env for the hazard id of the last submit")
         if self.tap is not None:
             self.tap.begin()
-        out = self.engine.step(t, x, cur_hid, **kw) if kw else self.engine.step(t, x, cur_hid)
-        if cur_hid is not None:
-            self.state["nmsg"].zero_()
-            return out
+        out = self.engine.step(t, x, **kw)
         out.update(self.process(out))
         return out
 

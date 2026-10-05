@@ -355,19 +355,36 @@ class BackgroundLoop:
             return self._step_ghost(t, x, cur_hid, **kw)
         return self._step_load(t, x, cur_hid, **kw)
 
-    def _step_load(self, t, x, cur_hid, **kw):
-        net = self.engine
-        out = net.step(t, x, cur_hid, **kw) if kw else net.step(t, x, cur_hid)
-        if cur_hid is not None:
-            return out
-        gone = out["delivered"] | out["timed_out"]
-        if "dropped" in out:
-            gone = gone | out["dropped"]
+    def _compact_kappa(self, keep):
+        """Follow the engine's FIFO compaction: the factors of the kept message slots move to the front, in order."""
         F = self.kappa_f.shape[-1]
-        keep = (out["cap"] >= 0) & ~gone
         order = ((~keep).long() * F + torch.arange(F, device=self.dev)).argsort(-1)
         kf = self.kappa_f.gather(-1, order)
         self.kappa_f = torch.where(keep.gather(-1, order), kf, torch.ones_like(kf))
+
+    def _step_load(self, t, x, cur_hid, **kw):
+        net = self.engine
+        if cur_hid is not None:
+            # legacy form: the tuple has no per-slot outputs, so the kept slots come from the FIFO before and after
+            # the step. A message keeps its slot order, and messages with the same capture step of one robot were
+            # enqueued at the same step with the same factor, so matching by count is exact.
+            pre = net.cap.clone()
+            res = net.step(t, x, cur_hid, **kw) if kw else net.step(t, x, cur_hid)
+            post = net.cap
+            F = pre.shape[-1]
+            valid = pre >= 0
+            same = pre[..., :, None] == pre[..., None, :]                                   # [E,R,F,F]
+            earlier = torch.ones(F, F, dtype=torch.bool, device=self.dev).tril(-1)
+            rank = (same & earlier).sum(-1)                                                 # equal caps before i
+            left = (pre[..., :, None] == post[..., None, :]).sum(-1)                        # equal caps after step
+            self._compact_kappa(valid & (rank < left))
+            self._update_load()
+            return res
+        out = net.step(t, x, **kw)
+        gone = out["delivered"] | out["timed_out"]
+        if "dropped" in out:
+            gone = gone | out["dropped"]
+        self._compact_kappa((out["cap"] >= 0) & ~gone)
         out["queue_bytes"] = (net.rem / self.kappa_f).sum(-1)
         self._update_load()
         cell = self._bg_cell

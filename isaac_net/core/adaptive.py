@@ -181,12 +181,24 @@ class FidelityConfig:
 def make_adaptive(E, R, device="cpu", config: NRConfig | None = None, fidelity: FidelityConfig | None = None, *,
                   seed=None):
     """AdaptiveEngine over make_engine(fidelity.cheap) and make_engine(fidelity.expensive). The fidelity config
-    comes from the argument or config.fidelity. config.edge wraps the adaptive engine (not the levels) in EdgeLoop."""
+    comes from the argument or config.fidelity. The wrappers of the config go around the adaptive engine, not
+    around the levels (whose step the adaptive engine bypasses): config.edge wraps it in EdgeLoop and config.energy
+    in EnergyLoop (outermost, as make_engine does). Background users (config.background with n_background > 0)
+    are refused: their offered load scales the queue of one level in place, which the handoff between the levels
+    does not carry."""
     cfg = config if config is not None else NRConfig()
+    bg, en = getattr(cfg, "background", None), getattr(cfg, "energy", None)
+    if bg is not None and getattr(bg, "n_background", 0) > 0:
+        raise ValueError("make_adaptive does not support background users (NRConfig.background): the offered-load "
+                         "wrapper scales one level's queue in place and the handoff does not carry it; use "
+                         "make_engine with a single level")
     net = AdaptiveEngine(E, R, device, cfg, fidelity, seed=seed)
     if getattr(cfg, "edge", None) is not None:
         from .edge import EdgeLoop
-        return EdgeLoop(net, cfg.edge)
+        net = EdgeLoop(net, cfg.edge)
+    if en is not None:
+        from .energy import EnergyLoop
+        net = EnergyLoop(net, en, seed=net.seed, config=cfg)
     return net
 
 
@@ -248,6 +260,11 @@ class _Level:
         """Delay-level parameters as the fast backend's arrival_body expects them."""
         e = self.eng
         if self.level == "L0":
+            lvl = getattr(e, "_lvl", None) or {}
+            if "q" in lvl:                       # empirical marginal (fast backends)
+                return {"q": lvl["q"], "p": float(lvl["p"])}
+            if "q" in e.params:                  # empirical marginal (reference backend)
+                return {"q": e.q0, "p": float(e.params["p"])}
             return {k: float(e.params[k]) for k in ("mu", "sig", "p")}
         if self.level == "L0DR":
             return {"mu": e.mu[:, None, None], "sig": e.sig[:, None, None], "p": e.p[:, None, None]}
@@ -265,7 +282,15 @@ class _Level:
         w = (nowf - cap.double()).clamp(min=0.0).float()
         lv = self.lvl()
         top = 1.0 - 2.0 ** -24
-        if self.level in ("L0", "L0DR"):
+        if self.level == "L0" and "q" in lv:
+            # empirical marginal: delay = q[floor(u K)] over the sorted table q [K]; conditioned on delay > w the
+            # index is uniform over the entries above w, which starts at F(w) = #(q <= w) / K
+            q0, p = lv["q"], lv["p"]
+            K = q0.numel()
+            Fw = torch.searchsorted(q0, w.contiguous(), right=True).float() / K
+            uu = Fw + u * (1 - Fw)
+            d = q0[(uu * K).long().clamp(0, K - 1)]
+        elif self.level in ("L0", "L0DR"):
             mu, sig, p = lv["mu"], lv["sig"], lv["p"]
             lw = torch.log(w.clamp(min=1e-30))
             Fw = torch.where(w > 0, 0.5 * (1 + torch.erf((lw - mu) / (sig * math.sqrt(2)))), torch.zeros_like(w))
@@ -475,7 +500,9 @@ class AdaptiveEngine:
         from .engine import FAST_BACKENDS, make_engine
         cfg = config if config is not None else NRConfig()
         fid = fidelity if fidelity is not None else (getattr(cfg, "fidelity", None) or FidelityConfig())
-        base = cfg.with_(fidelity=None, edge=None) if hasattr(cfg, "fidelity") else cfg.with_(edge=None)
+        # the wrappers (edge, energy, background) apply to the adaptive engine as a whole (make_adaptive), never to
+        # the levels: _Level.advance calls the level's own step, which would bypass a wrapper's accounting
+        base = cfg.with_(fidelity=None, edge=None, background=None, energy=None)
         if base.rng != "engine":
             raise ValueError("AdaptiveEngine needs NRConfig.rng='engine' (the default): the handoff keys both levels' "
                              "draws by env, episode and call count")
