@@ -67,8 +67,15 @@ CFGS = {
     "cells3_rician": lambda: multicell(3, dl=True, fading_rician=True, rician_k_ramp_slots=4),
     "ul_dl_pf_rician": lambda: NRConfig(dl=True, pf_update="rbg", pf_avg_idle="freeze", ul_grant_model="bsr",
                                         fading_rician=True, rician_k_db=5.0),
+    # frequency-correlated fading (docs/channels.md): one delay spread with UL + DL and the per-RBG PF switches the
+    # kernel implements; per-link delay spread and Rician K both from the radio's LOS state (one cell, lumped grants)
+    "ul_fcorr": lambda: NRConfig(fading_freq_corr=True, fading_delay_spread_ns=100.0, dl=True, pf_update="rbg",
+                                 pf_avg_idle="freeze"),
+    "ul_fcorr_rician": lambda: NRConfig(fading_freq_corr=True, fading_rician=True, channel="tr38901_inf_sh",
+                                        rician_k_ramp_slots=4),
 }
 RICIAN_CFGS = ("ul_rician", "ul_rician_los", "cells3_rician", "ul_dl_pf_rician")
+FCORR_CFGS = ("ul_fcorr", "ul_fcorr_rician")                 # both run on graph and triton
 RICIAN_TRITON_CFGS = ("ul_rician", "ul_rician_los")          # one cell, lumped grants
 
 

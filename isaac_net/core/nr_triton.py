@@ -608,6 +608,9 @@ def nr_step_kernel(
         itab_ptr, ftab_ptr, K, rho_ptr,
         # Rician fading (RICIAN): K target, ramp start K and slot [E,R], unit phasor of the specular term [E,R,2]
         k_ptr, kf_ptr, kg_ptr, phi_ptr,
+        # frequency-correlated fading (FCORR): subband correlation square roots L [G,S,S] (row-major), per-robot grid
+        # index [E,R] (FCORR=2; FCORR=1: one shared L, G = 1, index never read)
+        fcl_ptr, fci_ptr,
         # tables per direction (UL, DL)
         u_tab, u_thr, u_se, u_beta, u_rate, u_eq, u_tbs, u_cbs, u_ncb, u_bg, u_ci0, u_cwi,
         d_tab, d_thr, d_se, d_beta, d_rate, d_eq, d_tbs, d_cbs, d_ncb, d_bg, d_ci0, d_cwi,
@@ -617,7 +620,7 @@ def nr_step_kernel(
         C: tl.constexpr, G: tl.constexpr, NL: tl.constexpr, EQW: tl.constexpr, NPRB: tl.constexpr,
         UL: tl.constexpr, DL: tl.constexpr, FADING: tl.constexpr, GATE: tl.constexpr, MMB: tl.constexpr,
         RHO_R: tl.constexpr, STORE_H: tl.constexpr,
-        RICIAN: tl.constexpr, K_RAMP: tl.constexpr, K_RAMP_INV: tl.constexpr,
+        RICIAN: tl.constexpr, K_RAMP: tl.constexpr, K_RAMP_INV: tl.constexpr, FCORR: tl.constexpr,
         MODE: tl.constexpr, COMB: tl.constexpr, SCHED: tl.constexpr, WIDEBAND: tl.constexpr,
         HARQ_DROP: tl.constexpr, OLLA: tl.constexpr, PHR_CAP: tl.constexpr, WHOLE_BAND: tl.constexpr,
         PC: tl.constexpr, STEP: tl.constexpr, RETX_PRIO: tl.constexpr,
@@ -663,6 +666,10 @@ def nr_step_kernel(
         k_g = tl.load(kg_ptr + er, mask=rm, other=0)
         sp_r = tl.load(phi_ptr + er * 2, mask=rm, other=1.0)[:, None]
         sp_i = tl.load(phi_ptr + er * 2 + 1, mask=rm, other=0.0)[:, None]
+    if FCORR == 2:
+        fc_b = tl.load(fci_ptr + er, mask=rm, other=0).to(tl.int64) * (S_ * S_)
+    elif FCORR == 1:
+        fc_b = tl.zeros([RB], tl.int64)
     zero_rs = tl.zeros([RB, SB], tl.float32)
     if UL:
         (u_s_sent, u_s_floor, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_enq, u_s_csi, u_s_hst, u_s_hlo,
@@ -725,6 +732,15 @@ def nr_step_kernel(
             base = mix32(base0 ^ salt(u32((1 << 16) | rel)))
             zr = rng_normal(base, jn)
             zi = rng_normal(base, jn + 1)
+            if FCORR != 0:     # z <- L z across the subbands, per robot (register matmul), as NRNet._fcorr
+                zr_c = tl.zeros([RB, SB], tl.float32)
+                zi_c = tl.zeros([RB, SB], tl.float32)
+                for j in tl.static_range(S_):
+                    lj = tl.load(fcl_ptr + fc_b[:, None] + sidx[None, :] * S_ + j, mask=m_rs, other=0.0)
+                    zr_c += lj * _col(zr, sidx, j)[:, None]
+                    zi_c += lj * _col(zi, sidx, j)[:, None]
+                zr = zr_c
+                zi = zi_c
             if RHO_R:      # per-robot Doppler: rho_r ** (dt * slot_ms), as NRNet._evolve with fading_rho_ms
                 rr = libdevice.pow(rho_ms, tl.load(ftab_ptr + k * 7 + 6).to(tl.float32))[:, None]
                 cr = libdevice.sqrt(1.0 - rr * rr)
@@ -865,6 +881,11 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
     if rc:
         for x in (net.k_lin, net.k_from, net.k_g0, net.spec):
             assert x.is_contiguous()
+    fc = {None: 0, "fixed": 1, "los": 2}[net.fc_mode]     # frequency-correlated fading: L table and grid index
+    fc_args = (net.h, net.h) if fc == 0 else (net.fc_L, net.h) if fc == 1 else (net.fc_tab, net.fc_idx)
+    if fc:
+        for x in fc_args:
+            assert x.is_contiguous()
     for ul_p, dl_p in passes:
         const = dict(eng._const, UL=ul_p and UL_on, DL=dl_p and DL_on, STORE_H=ul_p or not UL_on)
         eng._kernel = nr_step_kernel[(E,)](
@@ -874,6 +895,7 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
             *(gate if gate is not None else (dummy, dummy, dummy)), gate[0].shape[-1] if gate is not None else 1,
             eng._acc, itab, ftab, K, net.fading_rho_ms if net.fading_rho_ms is not None else net.h,
             *((net.k_lin, net.k_from, net.k_g0, net.spec) if rc else (net.h,) * 4),
+            *fc_args,
             tu["tab"], tu["thr"], tu["se"], tu["beta"], tu["rate"], tu["eq"], tu["tbs"], tu["cbs"], tu["ncb"], tu["bg"],
             tu["ci0"], tu["cwi"],
             td["tab"], td["thr"], td["se"], td["beta"], td["rate"], td["eq"], td["tbs"], td["cbs"], td["ncb"], td["bg"],
@@ -881,4 +903,5 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
             tb["lift"], tb["cax"], tb["w"], tb["S0"], tb["DS"], tb["C0"], tb["DC"], R, cfg.slots_per_step,
             GATE=gate is not None, RHO_R=net.fading_rho_ms is not None, MMB=triton.next_power_of_2(gate[0].shape[-1]) if gate is not None else 1,
             RICIAN=rc, K_RAMP=net.k_ramp if rc else 0, K_RAMP_INV=1.0 / net.k_ramp if rc and net.k_ramp else 0.0,
+            FCORR=fc,
             **const, num_warps=eng._num_warps)
