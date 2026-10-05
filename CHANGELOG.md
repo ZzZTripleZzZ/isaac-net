@@ -20,18 +20,29 @@ Every new field below defaults to off (or to the earlier behaviour), and at the 
 
 - Rician fast fading on the NR engine ([docs/channels.md](docs/channels.md#rician-fading)): `fading_rician=False`, `rician_k_db=None` (a fixed K for every link), `rician_k_from_los=True` (K log-normal per link from TR 38.901 Table 7.5-6 for the scenario, K = 0 when NLOS or blocked) and `rician_k_ramp_slots=4` (linear ramp on LOS changes), with a fixed per-link specular phase from the engine RNG. Runs on the reference, `graph` and `triton` backends. At K = 7 dB the 1% fade is about −9.8 dB, against −20 dB for Rayleigh.
 - `nr_rng` has two new reset sites, KFAC (5) and KPHI (6). The `triton` kernel takes the new inputs `k_ptr`, `kf_ptr`, `kg_ptr`, `phi_ptr` and the `RICIAN` constexpr.
+- Frequency-correlated fast fading across the RBGs on `L2` ([docs/channels.md](docs/channels.md#frequency-selective-fading)): `fading_freq_corr=False`. An exponential power-delay profile (`fading_pdp="exponential"`) gives the subband correlation 1/sqrt(1 + (2π Δf τ)²), applied through the Cholesky factor of the [S, S] correlation matrix to the AR(1) innovation and the initial state, so each subband keeps unit power. It needs `fading=True`. A set `fading_delay_spread_ns` (default `None`) gives every link one delay spread; otherwise each link draws a TR 38.901 Table 7.5-6 log-normal delay spread by its LOS state (`fading_ds_from_los=True`) on the log grid `fading_ds_grid=(3.0, 3000.0, 16)` of 3 ns to 3 µs, with the InF hall set by `inf_hall_volume_m3` / `inf_hall_surface_m2` or `inf_lg_ds`. Runs on the reference, `graph` and `triton` backends.
+- At 20 MHz (13 subbands of 1.44 MHz) τ = 10 ns gives an adjacent-subband correlation of 0.996, and near-independence needs microseconds (0.037 at 3 µs). The UMi and UMa delay-spread rows use the V17.0.0 values (Release 19 changed them).
+- `nr_rng` has a new reset site, DSPR (7), for the per-link delay spread. The `triton` kernel takes the new inputs `fcl_ptr`, `fci_ptr` and the `FCORR` constexpr (0, 1 or 2).
+
+#### QoS scheduling
+
+- `scheduler="qos"` ([docs/configurability.md](docs/configurability.md#qos-scheduling)), modelled on 5G-LENA `NrMacSchedulerOfdmaQos` and checked against `nr-mac-scheduler-ue-info-qos.h`. Each message gets a class from its `priority` (clamped to 0..Q−1), a class weighs (100 − P) · D with the 5G-LENA delay-budget factor D = PDB / (PDB − HOL) below the budget and PDB / 0.1 past it, and the metric per RBG is qw · r^γ / max(avg, `AVG_MIN`). D applies to classes with a finite `qos_pdb_ms`, in the uplink as well as the downlink.
+- New fields, read only with `scheduler="qos"`: `qos_classes=2`, `qos_priority=(10, 70)` (5QI 5 vs 5QI 7), `qos_pdb_ms=(inf, inf)` and `qos_gamma=1.0`. `pf_update="rbg"` is allowed with it. Runs on the reference, `graph` and `triton` backends (per-robot weights `qw` in the kernel, `SCHED=3`, `QOS_G`).
+- Bytes go out in class order through a stable per-step reorder of the messages whose bytes are all unsent (`FrameQueue.reorder`). The robot keeps one queue, so a new class-0 message waits behind at most one partly sent message. With `discard="pdcp_arrival"` the discard checks the head of the byte stream, which after a reorder is the most important class.
 
 #### Multi-cell
 
 - Radio link failure and re-establishment in the multi-cell NR engine ([docs/multicell.md](docs/multicell.md#radio-link-failure)): `rlf=False`, `rlf_qout_db=-8.0`, `rlf_qin_db=-6.0`, `n310=1`, `n311=1`, `t310_ms=1000`, `t311_ms=3000`, `reest_delay_ms=40` and `rlf_rlc=None` (follow `ho_rlc`). The serving-link SINR is compared with Qout and Qin once per control step, a robot in RLF cannot be scheduled, it re-establishes at the strongest suitable cell and goes idle when T311 expires. With `rlf=True` the step dict gains `rlf` and `counters()` gains `"rlf"`. `n_cells > 1`, reference and `graph` backends.
 - The monitored quantity is the uplink `sinr_db`, so the −8 / −6 dB defaults are tuning knobs rather than the 3GPP PDCCH BLER points, and the N310, N311, T310 and T311 defaults are network-configured values.
 - A3 target admission `a3_min_target_rsrp_dbm=None` (5G-LENA `MinTargetRsrpDbm`) in the NR engine and `NetSlotMC`; it is also the RSRP floor of the RLF cell search.
+- With `rach=True` and `rlf=True`, RLF re-establishment goes through the contention-based RACH model instead of the fixed `reest_delay_ms` ([docs/multicell.md](docs/multicell.md#radio-link-failure)). Requests are taken once per control step; contention-free RACH and T301 are not modelled.
 
 #### Power control, CQI and antennas
 
 - Closed-loop uplink power control `ul_tpc=False` (TS 38.213 §7.1.1) on top of `ul_pc`, with `ul_tpc_mode="accumulate"` (or `"absolute"`), `ul_tpc_target_db=None` (the 10% BLER SINR of MCS 14 of `mcs_table`), `ul_tpc_steps_db=None` (38.213 Table 7.1.1-1), `ul_tpc_delay_slots=None` (k2) and `ul_tpc_range_db=20`. The offset enters `UlMac._pc()` wherever `pc_backoff` did (scheduler estimate, power split, inter-cell interference, energy tap), and a handover resets it. `L2` reference and `graph` ([docs/configurability.md](docs/configurability.md#closed-loop-power-control-cqi-table-and-sector-antennas)).
 - `cqi_table="38214"` (default `"mcs"`) reports the DL CQI on TS 38.214 Tables 5.2.2.1-2 / -3 with a CQI-to-MCS mapping (`phy.CQI_T1`, `CQI_T2`, `cqi_tables`); it needs `dl=True`.
 - `gnb_antenna="sector"` (default `"isotropic"`) applies the TR 38.901 Table 7.3-1 gNB element per cell in `RadioMC.rx_dbm`, with `cell_azimuth_deg=None` (30, 150 and 270 degrees cycled over the cells), `cell_tilt_deg=0.0` and `gnb_antenna_gain_dbi=8.0`. It changes only the path gain, so every backend runs it ([docs/channels.md](docs/channels.md#antenna-patterns)).
+- `isaac_net/tools/scene/bake.py --gnb-antenna sector --cell-azimuth ... --cell-tilt ... --gnb-antenna-gain` applies the TR 38.901 sector pattern at bake time, per grid point along the direct direction rather than per ray, and records it in the map metadata ([docs/scene-radio-map.md](docs/scene-radio-map.md#sector-antennas-at-bake-time)). `RadioMapChannel` raises if `gnb_antenna="sector"` is used with a sector-baked map, since the doubled pattern would shift links by up to 16 dB.
 
 #### Access: RACH and DRX
 
@@ -42,7 +53,7 @@ Every new field below defaults to off (or to the earlier behaviour), and at the 
 
 #### Downlink, duplexing and tools
 
-- Downlink traffic models on `L2` with `dl=True`: `TrafficModel(..., direction="dl")` or `.downlink()` ([docs/configurability.md](docs/configurability.md#downlink-models)). They draw from their own generator with a separate seed, so the uplink draws are unchanged. The step adds per DL frame `dl_delivered`, `dl_lost`, `dl_delay`, `dl_tag`, `dl_bytes`, `dl_generated` and `dl_deadline_miss`, and per robot `gen_dl_accepted` and `gen_dl_bytes`. Generated DL frames carry `cls < 0`, which keeps them apart from `EdgeLoop` `nr_dl` commands. Reference backend only.
+- Downlink traffic models on `L2` with `dl=True`: `TrafficModel(..., direction="dl")` or `.downlink()` ([docs/configurability.md](docs/configurability.md#downlink-models)). They draw from their own generator with a separate seed, so the uplink draws are unchanged. The step adds per DL frame `dl_delivered`, `dl_lost`, `dl_delay`, `dl_tag`, `dl_bytes`, `dl_generated` and `dl_deadline_miss`, and per robot `gen_dl_accepted` and `gen_dl_bytes`. Generated DL frames carry `cls < 0`, which keeps them apart from `EdgeLoop` `nr_dl` commands. Reference and `graph` backends: on `graph` the DL arrival gate reads static buffers refilled before each replay, and the outputs are bitwise equal to the reference.
 - Downlink background on `L2`: `BackgroundConfig.dl_traffic=()` (DL traffic models of the background UEs) and `dl_load_frac=0.0` (a fixed share of every DL RBG) ([docs/background-energy-sharding.md](docs/background-energy-sharding.md#downlink-background)).
 - FDD: `NRConfig.duplex="fdd"` (default `"tdd"`) with `dl_n_prb=None` / `dl_bandwidth_mhz=None` (default: the UL carrier) gives an all-`U` UL carrier and an all-`D` DL carrier that share the subband grid and the fading state. The per-PRB DL SINR shifts by −10 log10(dl_nprb / nprb) ([docs/configurability.md](docs/configurability.md#duplexing-tdd-and-fdd)).
 - Radio environment map export, `isaac_net.tools.rem` and the console script `isaac-net-rem`: per-cell path gain and RSRP, best-cell SINR, serving cell and LOS state as `.npz`, with an optional PNG ([docs/rem.md](docs/rem.md)).
@@ -50,15 +61,15 @@ Every new field below defaults to off (or to the earlier behaviour), and at the 
 
 ### Documentation
 
+- Blockage models A and B, soft LOS, the Table 7.5-6 K-factors, the TS 38.214 CQI tables and the 802.11 VHT exclusions now cite ETSI TR 138 901 V17.0.0 / TS 138 214 V17.1.0, and every `[verify]` marker in the code is resolved ([docs/obstacles.md](docs/obstacles.md)).
 - The paper is on arXiv as [arXiv:2610.02370](https://arxiv.org/abs/2610.02370); the README citation, `CITATION.cff`, the project URLs and the status page link to it.
 
 ### Changed
 
 - The minimum torch version is 2.7: the `compile` backend sets `torch._dynamo.config.recompile_limit`, which first appears in 2.7 (it was `cache_size_limit` before).
 - The sdist now includes `prototype/`. The version on main is `0.1.1.dev0`.
-- The `triton` NR backend refuses `ul_tpc` and `cqi_table="38214"` with a `NotImplementedError` that points to `graph`.
-- The `triton` NR backend refuses `duplex="fdd"`, and `proactive_grant="per_period"` is refused with FDD (`ValueError`).
-- DL traffic models are refused on the `graph` and `triton` NR backends, RACH and DRX on `triton`, and every level other than `L2` refuses `rach` / `drx` (`ValueError`).
+- The `triton` NR backend refuses every feature it does not implement in one place, `NRTritonEngine.__init__`, with `TritonUnsupported` (both a `NotImplementedError` and a `ValueError`) and a message that points to `graph`: several cells, the BSR grant pipeline, `ul_tpc`, `cqi_table="38214"`, RACH, DRX, `duplex="fdd"` and DL traffic models. `NRTritonEngine.refusals(cfg)` lists them, and a test checks the backend table of docs/configurability.md against the code.
+- `proactive_grant="per_period"` is refused with FDD, and every level other than `L2` refuses `rach` / `drx` (`ValueError`).
 - With `radio="engine"`, the `blocked` output of `NetModule` reports the engine's blockage. The Isaac `blocked_fn` drives the engine radio only with `los_source="callback"` and is otherwise ignored with a warning.
 
 ### Fixed
@@ -85,12 +96,14 @@ Every new field below defaults to off (or to the earlier behaviour), and at the 
 - `fading_rho_from_speed` (and the tensor version `channels.doppler.rho_per_ms_from_speed`) is monotone: rho = 0 from the first zero of J0 (about 13.1 m/s at 3.5 GHz).
 - `make_adaptive` applies `NRConfig.energy` (and `edge`) around the adaptive engine, so batteries drain. Background users are refused under `make_adaptive`.
 - `EnergyConfig.seed` takes precedence over the engine seed. `EnergyLoop` raises on the legacy `step(t, x, cur_hid)` form, and the offered-load `BackgroundLoop` accounts the legacy form like the dict form.
+- `EdgeConfig(return_path="delay")` sizes the command rate on the DL carrier (`dl_nprb`) with `duplex="fdd"`; TDD is unchanged.
 - `EdgeConfig(return_path="nr_dl")` is refused on the `graph` and `triton` NR backends. `act_age` is NaN before a robot's first action, and the edge example treats it as stale.
 - An adaptive cheap `L0` with an empirical `{"q", "p"}` marginal accepts handed-back frames.
 - `srsran_like` / `oai_like` compute their slot counts from the given `mu` / `tdd_pattern`, `with_(fading_rho_per_ms=...)` keeps the explicit value, and `isaac_net.LEVELS` includes `"WIFI"`.
 
 #### Channels and Wi-Fi
 
+- TR 38.901 blockage model A (`blockage_model="stochastic"`) applies the eq. 7.6-22 loss only inside |φ_AOA − φ_k| < x_k and |θ_ZOA − θ_k| < y_k, as §7.6.4.1 states. Before, it applied the loss at every angle; the indoor average loss drops by about 0.15 dB, and the defaults are unchanged.
 - TR 38.901 UMa/UMi with `ue_height_m` <= 1 m gave a non-positive breakpoint and 13–23 dB optimistic path loss. Heights outside Table 7.4.1-1 (UMa/UMi 1.5–22.5 m, RMa 1–10 m) and InF-SH/DH without h_UT < h_c < h_BS now raise `ValueError` when the channel is built.
 - The Wi-Fi Poisson draw capped successful accesses at 8 per robot per sub-step, cutting goodput by 18% (80 MHz / 2 ms) to 66% (160 MHz / 5 ms). The cap now comes from the config with a 6-sigma margin (`poisson_cap`).
 - The Wi-Fi event simulator charged frames lost to FER the collision time instead of Ts, unlike the mean-field model. Validation table B adds FER = 0.2 rows.
@@ -125,16 +138,16 @@ Every new field below defaults to off (or to the earlier behaviour), and at the 
 - The frozen NR golden references build on a frozen copy of the shared modules (`tests/nr_frozen/base/`; re-freeze with `tests/scripts/refreeze_nr.py`), and the RNG hash is pinned to fixed values.
 - New GPU tests cover the `compile` backend and partial-reset isolation of the free-running `triton` kernel.
 - On CPU the shard test compares `L1` / `L2-legacy` float outputs to float32 rounding; on CUDA it stays bitwise.
+- `tests/test_qos.py` and `tests/test_freqfade.py` cover the new scheduler and the frequency correlation, and the configs `qos`, `qos_rbg`, `ul_fcorr` and `ul_fcorr_rician` of `tests/nr_equiv.py` join the GPU equivalence lists.
+- `tests/test_limits_closed.py` and `tests/limits_off_scenarios.py` check the closed limits, with ten switch-off configurations against `tests/fixtures/limits_off_golden.json` (digests valid on the platform that wrote them).
 - GPU and Isaac tests are skipped by marker, not by keyword. CI tests torch 2.7 on Python 3.10 and adds Python 3.12.
 
 ### Known limits
 
-- DL traffic models run on the reference backend only; the `graph` backend does not support them yet.
-- The `EdgeLoop` `return_path="delay"` uses the UL carrier's `nprb` under FDD.
-- RLF re-establishment is one fixed delay and does not go through the RACH model.
-- The `triton` kernel has no mirror of closed-loop TPC, the 38.214 CQI table, RACH or DRX.
-- The Sionna RT bake does not apply the sector antenna pattern.
-- The model B sign rule, the model A Table 7.6.4.1-2 values, the correlation distances and the soft-LOS scale are marked `[verify]` in the code.
+- The `triton` kernel has no mirror of closed-loop TPC, the 38.214 CQI table, RACH, DRX, FDD or DL traffic.
+- The Sionna RT bake applies the sector pattern per grid point along the direct direction, not per traced ray.
+- The 802.11 VHT exclusions are confirmed through FreeBSD net80211 and the N_CBPS / N_ES rule, because the standard itself is paywalled.
+- Soft LOS mixes path loss and shadowing linearly in dB, while TR 38.901 eq. 7.6-19 mixes the channel matrices with power weights.
 
 ## [0.1.0] - 2026-09-30
 

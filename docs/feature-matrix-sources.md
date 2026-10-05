@@ -70,7 +70,7 @@ Abbreviations in the table: `LENA/x.rst` is `https://gitlab.com/cttc-lena/nr/-/b
 
 ## Rows added after the 2026-09-29 check
 
-The feature branches merged on 2026-10-05 added six rows to the matrix. Their 5G-LENA, Sionna SYS and Simu5G cells were written with the features and have not been checked against the pinned documentation yet, so every cell below is *unverified* or *not assessed* until someone does that check. The 5G-LENA obstacles cell was checked against the ns-3-dev source on 2026-10-05.
+The feature branches merged on 2026-10-05 added six rows to the matrix. Their 5G-LENA, Sionna SYS and Simu5G cells were written with the features and have not been checked against the pinned documentation yet, so every cell below is *unverified* or *not assessed* until someone does that check. The 5G-LENA obstacles cell was checked against the ns-3-dev source on 2026-10-05. A second set of branches, merged on `integrate3` the same day, added the frequency-selectivity row and turned the isaac-net side of the QoS row into a QoS scheduler; their tool cells are listed below too, and the [last table](#sources-of-the-isaac-net-models-in-the-new-rows) gives the sources the isaac-net models follow.
 
 | Tool | Feature | Status | What the matrix states | Basis | Section to check |
 |:---|:---|:---|:---|:---|:---|
@@ -85,3 +85,14 @@ The feature branches merged on 2026-10-05 added six rows to the matrix. Their 5G
 | Sionna SYS, Simu5G | Obstacles / LOS blockage, Radio link failure, RACH / connection setup, DRX | not assessed | not assessed | none | — |
 | Simu5G | Rician fading / K-factor | not assessed | not assessed | none | — |
 | Simu5G | Antenna patterns | *unverified* | isotropic or directional per node | the matrix cell only | S5G NED files of the PHY |
+| 5G-LENA | Fast fading: frequency selectivity | *unverified* | cluster delays and angles of the TR 38.901 model; TDL-A / TDL-D in the PHY manual | [channels.md](channels.md#frequency-selective-fading) | LENA/phy-layer.rst; ns-3 `ThreeGppChannelModel` |
+| Sionna SYS | Fast fading: frequency selectivity | *unverified* | TR 38.901 CDL / TDL models of Sionna PHY | the matrix cell only | Sionna PHY channel models |
+| Simu5G | Fast fading: frequency selectivity | not assessed | not assessed | none | — |
+
+### Sources of the isaac-net models in the new rows
+
+| Row | isaac-net model | Source | How it was checked |
+|:---|:---|:---|:---|
+| QoS / slicing | `scheduler="qos"`: class weight (100 − P) · D, delay-budget factor D, metric qw · r^γ / avg, class-ordered byte assignment ([configurability.md](configurability.md#qos-scheduling)) | 5G-LENA `v5.1` source: `NrMacSchedulerOfdmaQos`, the weights of `NrMacSchedulerUeInfoQos` (`CalculateDlWeight`, `CompareUeWeightsUl`, `CalculateDelayBudgetFactor`) and the logical-channel order of `NrMacSchedulerLcQos` | against the source file `nr-mac-scheduler-ue-info-qos.h` (source only, not the manual) |
+| Fast fading: frequency selectivity | per-link log-normal delay spread by LOS state, InF hall V / S, exponential power-delay profile ([channels.md](channels.md#frequency-selective-fading)) | TR 38.901 V17.0.0, Table 7.5-6 Parts 1–3 (DS rows, notes 6–7, note 4 of Part 3) | against Sionna's V16.1 parameter files and, for RMa, InH and InF, the itecspec.com mirror of clause 7.5 on 2026-10-05; UMi and UMa keep the V17.0.0 rows that Release 19 changed |
+| Obstacles / LOS blockage | blockage models A and B, soft LOS, correlation distances ([obstacles.md](obstacles.md)) | TR 38.901 V17.0.0 §7.6.3.3, §7.6.4.1, §7.6.4.2 | checked against ETSI TR 138 901 V17.0.0 (2022-04) on 2026-10-05; the check moved model A's loss inside its angular window |
