@@ -39,7 +39,7 @@ Every new field below defaults to off (or to the earlier behaviour), and at the 
 
 #### Power control, CQI and antennas
 
-- Closed-loop uplink power control `ul_tpc=False` (TS 38.213 §7.1.1) on top of `ul_pc`, with `ul_tpc_mode="accumulate"` (or `"absolute"`), `ul_tpc_target_db=None` (the 10% BLER SINR of MCS 14 of `mcs_table`), `ul_tpc_steps_db=None` (38.213 Table 7.1.1-1), `ul_tpc_delay_slots=None` (k2) and `ul_tpc_range_db=20`. The offset enters `UlMac._pc()` wherever `pc_backoff` did (scheduler estimate, power split, inter-cell interference, energy tap), and a handover resets it. `L2` reference and `graph` ([docs/configurability.md](docs/configurability.md#closed-loop-power-control-cqi-table-and-sector-antennas)).
+- Closed-loop uplink power control `ul_tpc=False` (TS 38.213 §7.1.1) on top of `ul_pc`, with `ul_tpc_mode="accumulate"` (or `"absolute"`), `ul_tpc_target_db=None` (the 10% BLER SINR of MCS 14 of `mcs_table`), `ul_tpc_steps_db=None` (38.213 Table 7.1.1-1), `ul_tpc_delay_slots=None` (k2) and `ul_tpc_range_db=20`. The offset enters `UlMac._pc()` wherever `pc_backoff` did (scheduler estimate, power split, inter-cell interference, energy tap), and a handover resets it. `L2`, every backend ([docs/configurability.md](docs/configurability.md#closed-loop-power-control-cqi-table-and-sector-antennas)).
 - `cqi_table="38214"` (default `"mcs"`) reports the DL CQI on TS 38.214 Tables 5.2.2.1-2 / -3 with a CQI-to-MCS mapping (`phy.CQI_T1`, `CQI_T2`, `cqi_tables`); it needs `dl=True`.
 - `gnb_antenna="sector"` (default `"isotropic"`) applies the TR 38.901 Table 7.3-1 gNB element per cell in `RadioMC.rx_dbm`, with `cell_azimuth_deg=None` (30, 150 and 270 degrees cycled over the cells), `cell_tilt_deg=0.0` and `gnb_antenna_gain_dbi=8.0`. It changes only the path gain, so every backend runs it ([docs/channels.md](docs/channels.md#antenna-patterns)).
 - `isaac_net/tools/scene/bake.py --gnb-antenna sector --cell-azimuth ... --cell-tilt ... --gnb-antenna-gain` applies the TR 38.901 sector pattern at bake time, per grid point along the direct direction rather than per ray, and records it in the map metadata ([docs/scene-radio-map.md](docs/scene-radio-map.md#sector-antennas-at-bake-time)). `RadioMapChannel` raises if `gnb_antenna="sector"` is used with a sector-baked map, since the doubled pattern would shift links by up to 16 dB.
@@ -48,16 +48,28 @@ Every new field below defaults to off (or to the earlier behaviour), and at the 
 
 - Contention-based RACH and connection setup on `L2` ([docs/access.md](docs/access.md)): `rach=False`, `rach_occasion_slots=20`, `rach_preambles=64`, `rach_rar_window_slots=10`, `rach_msg3_slots=10`, `rach_backoff_ms=20`, `rach_max_attempts=10`, `rach_initial="connected"` (or `"idle"`) and `rach_release_after_ms=None`. Collisions are counted per occasion and cell with one `scatter_add` over the preambles, and the preamble and backoff draws use counter-RNG sites 16 and 17.
 - Connected-mode DRX: `drx=False`, `drx_inactivity_ms=100`, `drx_cycle_ms=160`, `drx_on_ms=10`, `drx_short_cycle_ms=None`, `drx_short_cycles=2`, `drx_start_offset_ms=0` and `drx_ul_wake="sr"` (or `"on_duration"`). 5G-LENA has RACH but no DRX.
-- An `AccessStage` inside the engine gates robots through `MacLink.sched_ok`. With RACH or DRX on, the step dict gains `access_state`, `access_sleep_frac` and `rach_attempts`, and `counters()` gains `"access"`. Reference and `graph` backends.
+- An `AccessStage` inside the engine gates robots through `MacLink.sched_ok`. With RACH or DRX on, the step dict gains `access_state`, `access_sleep_frac` and `rach_attempts`, and `counters()` gains `"access"`. Reference, `graph` and `triton` backends.
 - `EnergyConfig.drx_sleep_power_w=None` (= `idle_power_w`) is charged for the dormant or idle share of each step.
 
 #### Downlink, duplexing and tools
 
-- Downlink traffic models on `L2` with `dl=True`: `TrafficModel(..., direction="dl")` or `.downlink()` ([docs/configurability.md](docs/configurability.md#downlink-models)). They draw from their own generator with a separate seed, so the uplink draws are unchanged. The step adds per DL frame `dl_delivered`, `dl_lost`, `dl_delay`, `dl_tag`, `dl_bytes`, `dl_generated` and `dl_deadline_miss`, and per robot `gen_dl_accepted` and `gen_dl_bytes`. Generated DL frames carry `cls < 0`, which keeps them apart from `EdgeLoop` `nr_dl` commands. Reference and `graph` backends: on `graph` the DL arrival gate reads static buffers refilled before each replay, and the outputs are bitwise equal to the reference.
+- Downlink traffic models on `L2` with `dl=True`: `TrafficModel(..., direction="dl")` or `.downlink()` ([docs/configurability.md](docs/configurability.md#downlink-models)). They draw from their own generator with a separate seed, so the uplink draws are unchanged. The step adds per DL frame `dl_delivered`, `dl_lost`, `dl_delay`, `dl_tag`, `dl_bytes`, `dl_generated` and `dl_deadline_miss`, and per robot `gen_dl_accepted` and `gen_dl_bytes`. Generated DL frames carry `cls < 0`, which keeps them apart from `EdgeLoop` `nr_dl` commands. Reference, `graph` and `triton` backends: on `graph` and `triton` the DL arrival gate reads static buffers refilled before each step, and the `graph` outputs are bitwise equal to the reference.
 - Downlink background on `L2`: `BackgroundConfig.dl_traffic=()` (DL traffic models of the background UEs) and `dl_load_frac=0.0` (a fixed share of every DL RBG) ([docs/background-energy-sharding.md](docs/background-energy-sharding.md#downlink-background)).
 - FDD: `NRConfig.duplex="fdd"` (default `"tdd"`) with `dl_n_prb=None` / `dl_bandwidth_mhz=None` (default: the UL carrier) gives an all-`U` UL carrier and an all-`D` DL carrier that share the subband grid and the fading state. The per-PRB DL SINR shifts by −10 log10(dl_nprb / nprb) ([docs/configurability.md](docs/configurability.md#duplexing-tdd-and-fdd)).
 - Radio environment map export, `isaac_net.tools.rem` and the console script `isaac-net-rem`: per-cell path gain and RSRP, best-cell SINR, serving cell and LOS state as `.npz`, with an optional PNG ([docs/rem.md](docs/rem.md)).
 - `SlotTap.dl_prb` counts the PRB-slots of DL transport blocks.
+
+#### MIMO rank and mini-slot grants
+
+- Rank-1/2 SU-MIMO on `L2` ([docs/configurability.md](docs/configurability.md#mimo-rank)): `n_layers_max=1` (2 turns it on), `rank_rule="sinr_los"` (or `"sinr"`, `"los"`), `rank_sinr_min_db=10`, `rank_k_max_db=3`, `rank_layer_penalty_db=3`, `ul_mimo=False` and `dl_mimo=True`. The rank is chosen per new TB from the wideband SINR and the Rician K of the serving link and kept per HARQ process (`h_rank`), the TBS counts the layers (`tbs_38214(layers=)`, also `tbs_lena`), and MCS selection and decoding use the per-layer SINR, SINR − 10 log10(rank) − `rank_layer_penalty_db`, with both layers as one codeword.
+- With `n_layers_max=2` the step dict gains `rank` (UL) and `dl_rank`. There is no PMI, Type-I codebook or rank-conditioned CQI, so rank 2 at a 40 dB SNR gives about 1.75 times the rank-1 saturated throughput instead of 2. Reference and `graph` backends; `triton` refuses it.
+- Mini-slot (type B) grants on `L2` ([docs/configurability.md](docs/configurability.md#mini-slot-grants)): `ul_mini_slot_symbols=None` (2, 4 or 7) splits every UL data slot into round(nsym / m) scheduling occasions, the last one taking the remaining symbols, and `mini_slot_dl=False` splits the DL data slots too. Fading, CQI, SR, handover and the N+I estimate run once per slot, and grant, PF, MCS, TBS, decode, HARQ and RLC once per occasion. Reference and `graph` backends; `triton` refuses it.
+- Timers stay in slots, and feedback from an occasion takes effect at the next slot (OLLA, the lumped BSR and the UL CSI are frozen within the slot). With mini-slots on, `pf_window` counts occasions, `delay` carries the end fraction of the occasion within its slot, and occasion j decodes with the RNG slot key rel + j·N. At light load the mean delay of 10 B commands drops from 5.77 ms to 5.62, 5.51 and 5.42 ms for m = 7, 4 and 2, and the saturated throughput is 0.91, 0.83 and 0.55 of whole slots (DMRS overhead).
+
+#### Triton backend
+
+- Closed-loop UL power control (`ul_tpc`, accumulate and absolute) and the 38.214 CQI table (`cqi_table="38214"`) run in the fused kernel (constexprs `TPC`, `CQI38214`). The per-robot TPC state is carried through the step and stored back.
+- The RACH / DRX access gate (`ACCESS`), FDD with a DL carrier of its own width (`FDD`, `NPRB_D`, a per-RBG DL PRB table) and the DL arrival gate of the DL traffic models (`DLGATE`, static buffers) run in the fused kernel. The kernel recomputes the per-slot schedulability from the `AccessStage` state, because DRX depends on activity within the slot, so with RACH or DRX on the UL and DL slots run in one kernel.
 
 ### Documentation
 
@@ -68,7 +80,8 @@ Every new field below defaults to off (or to the earlier behaviour), and at the 
 
 - The minimum torch version is 2.7: the `compile` backend sets `torch._dynamo.config.recompile_limit`, which first appears in 2.7 (it was `cache_size_limit` before).
 - The sdist now includes `prototype/`. The version on main is `0.1.1.dev0`.
-- The `triton` NR backend refuses every feature it does not implement in one place, `NRTritonEngine.__init__`, with `TritonUnsupported` (both a `NotImplementedError` and a `ValueError`) and a message that points to `graph`: several cells, the BSR grant pipeline, `ul_tpc`, `cqi_table="38214"`, RACH, DRX, `duplex="fdd"` and DL traffic models. `NRTritonEngine.refusals(cfg)` lists them, and a test checks the backend table of docs/configurability.md against the code.
+- The `triton` NR backend refuses every feature it does not implement in one place, `NRTritonEngine.__init__`, with `TritonUnsupported` (both a `NotImplementedError` and a `ValueError`) and a message that points to `graph`. `NRTritonEngine.refusals(cfg)` now lists only several cells (and with them A3 handover and RLF), the SR / BSR grant pipeline (`ul_grant_model="bsr"`), rank-2 MIMO and mini-slot grants; SINR hooks are refused at the first step. A test checks the backend table of docs/configurability.md against the code.
+- `core.slot_tap` counts a mini-slot occasion as its share of the slot's data symbols.
 - `proactive_grant="per_period"` is refused with FDD, and every level other than `L2` refuses `rach` / `drx` (`ValueError`).
 - With `radio="engine"`, the `blocked` output of `NetModule` reports the engine's blockage. The Isaac `blocked_fn` drives the engine radio only with `los_source="callback"` and is otherwise ignored with a warning.
 
@@ -140,11 +153,14 @@ Every new field below defaults to off (or to the earlier behaviour), and at the 
 - On CPU the shard test compares `L1` / `L2-legacy` float outputs to float32 rounding; on CUDA it stays bitwise.
 - `tests/test_qos.py` and `tests/test_freqfade.py` cover the new scheduler and the frequency correlation, and the configs `qos`, `qos_rbg`, `ul_fcorr` and `ul_fcorr_rician` of `tests/nr_equiv.py` join the GPU equivalence lists.
 - `tests/test_limits_closed.py` and `tests/limits_off_scenarios.py` check the closed limits, with ten switch-off configurations against `tests/fixtures/limits_off_golden.json` (digests valid on the platform that wrote them).
+- `tests/test_mimo.py`, `tests/test_minislot.py`, `tests/test_triton_tpc_cqi.py` and `tests/test_triton_access_fdd_dl.py` cover the wave-3 features. The equivalence configs `ul_tpc`, `ul_tpc_abs`, `ul_dl_cqi38214`, `ul_tpc_cqi`, `ul_access`, `ul_fdd`, `ul_dl_fdd` and `ul_dl_traffic` join G1, G2 and G7, and `ul_dl_mimo2`, `ul_minislot2` and `ul_minislot4` join G1 and G7 (`graph` only).
 - GPU and Isaac tests are skipped by marker, not by keyword. CI tests torch 2.7 on Python 3.10 and adds Python 3.12.
 
 ### Known limits
 
-- The `triton` kernel has no mirror of closed-loop TPC, the 38.214 CQI table, RACH, DRX, FDD or DL traffic.
+- The `triton` backend does not implement several cells, the SR / BSR grant pipeline, SINR hooks, rank-2 MIMO or mini-slot grants.
+- No equivalence config yet combines TPC or the CQI table with the access gate, FDD or DL traffic on `triton`. The kernel changes were first compiled in the 2026-10-05 lab-box GPU run, where the teacher-forced G2 test is the decisive check.
+- Mini-slot grants shorten only commands that fit the first occasion. With SR access a 200 B frame arrives one TDD period later, because the one-RBG bootstrap grant carries about 30 B in a 2-symbol occasion ([docs/configurability.md](docs/configurability.md#mini-slot-grants)).
 - The Sionna RT bake applies the sector pattern per grid point along the direct direction, not per traced ray.
 - The 802.11 VHT exclusions are confirmed through FreeBSD net80211 and the N_CBPS / N_ES rule, because the standard itself is paywalled.
 - Soft LOS mixes path loss and shadowing linearly in dB, while TR 38.901 eq. 7.6-19 mixes the channel matrices with power weights.
