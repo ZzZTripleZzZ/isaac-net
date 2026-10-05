@@ -11,6 +11,7 @@
 | add-on LOS state from geometry | LOS / NLOS of every link from a baked `los_prob` map, a 2.5-D ray march over an `obstacle_z` height map, or a `blocked_fn` callback, with optional knife-edge diffraction; TR 38.901 soft LOS for the stochastic state ([obstacles.md](obstacles.md)) | `los_source`, `los_raycast_samples`, `los_diffraction`, `los_soft`, `nlos_extra_loss_db` |
 | add-on per-robot Doppler | AR(1) fading correlation from each robot's speed (NR engine) | `fading_doppler="per_robot"`, `doppler_min_speed_mps` |
 | add-on Rician fading | specular term with a per-link K-factor, fixed or from the LOS state (NR engine) | `fading_rician`, `rician_k_db`, `rician_k_from_los`, `rician_k_ramp_slots` |
+| add-on gNB antenna | TR 38.901 sector element per cell, added to every link | `gnb_antenna="sector"`, `cell_azimuth_deg`, `cell_tilt_deg`, `gnb_antenna_gain_dbi` |
 
 ```python
 from isaac_net import NRConfig, make_engine
@@ -90,6 +91,17 @@ rtenv/bin/python isaac_net/tools/bake_radio_map_sionna.py --out warehouse.npz --
 With `blockage=True` every other robot of the same env is a sphere of radius `blockage_radius_m` centred at its antenna position `(x, y, ue_height_m)`. A link loses `blockage_loss_db` (20 dB by default, the value of the Isaac layer's blockage) when the segment from the robot's antenna to the gNB antenna passes through at least one sphere. A robot never blocks itself, and a sphere behind the robot or beyond the gNB does not count. The test is one pairwise tensor op of shape `[E, R, R, C]`, cheap up to a few hundred robots per env. The gNB height is the scenario's for `tr38901` and `gnb_height_m` otherwise (unset means 2-D geometry at robot height, where any robot on the line blocks). The loss is one fixed value per link. It does not model diffraction around the body, several blockers adding up, or static obstacles, which belong in a radio map or in the Isaac layer's mesh ray test (`isaac/radio.py`).
 
 This is `blockage_model="sphere"`, the default. `blockage_model="screen"` (TR 38.901 model B, knife-edge screens for robots and for per-step `blockers=` such as people and vehicles) and `"stochastic"` (model A, angular regions for scenes without geometry) are described in [obstacles.md](obstacles.md), together with `RadioMC.los_state()` / `blocked_state()` and the `los` / `blocked` step keys.
+## Antenna patterns
+
+With `gnb_antenna="sector"` every gNB has one TR 38.901 Table 7.3-1 element, and its gain toward each robot is added to the link in `RadioMC.rx_dbm`, after the channel model and blockage. Association, handover, interference, the SINR and the open-loop power control all see it (`channels/antenna.py`). The pattern is
+
+- vertical cut `A_V = -min(12 ((theta - 90 - tilt) / 65)^2, 30)` dB, with `theta` the zenith angle of the link (90 degrees is the horizon) and `tilt` the downtilt `cell_tilt_deg`,
+- horizontal cut `A_H = -min(12 (phi / 65)^2, 30)` dB, with `phi` the link azimuth minus the cell's boresight `cell_azimuth_deg`,
+- combined `A = -min(-(A_V + A_H), 30)` dB, and gain `gnb_antenna_gain_dbi + A` (8 dBi by default).
+
+The half-power beamwidth is 65 degrees in both planes: the gain is 3 dB below the maximum at ±32.5 degrees and reaches the 30 dB floor at about ±103 degrees. The default boresights, 30, 150 and 270 degrees cycled over the cells, are the 3-sector site convention. Three cells at one position (`cell_layout="custom"`) form a 3-sector site whose sectors meet at 90, 210 and 330 degrees with −2.2 dBi each. With the cells of the hex preset, which sit at different sites, set `cell_azimuth_deg` to match the deployment. The elevation uses the gNB height of the channel (the scenario's for `tr38901`, `gnb_height_m` otherwise, robot height when unset) and `ue_height_m`. Downtilt is applied in the separable form `theta - 90 - tilt`, which is exact for links in the boresight's vertical plane and the usual system-level simplification of the 38.901 Sec. 7.1 rotation. The UE antenna stays isotropic, there is no array gain or beamforming, and the Sionna RT bake (`tools/scene/bake.py`) still uses isotropic antennas, so a `radio_map` channel plus `gnb_antenna="sector"` adds the pattern on top of an isotropic map.
+
+The default `gnb_antenna="isotropic"` adds nothing, so every model stays bitwise unchanged. The gain is one fixed-shape `[E, R, C]` op on the poses, so it is captured in CUDA graphs like the rest of the radio.
 
 ## Per-robot Doppler
 

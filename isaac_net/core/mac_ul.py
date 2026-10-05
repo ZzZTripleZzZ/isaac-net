@@ -16,6 +16,17 @@ Grant models (cfg.ul_grant_model):
   estimate), boot (bootstrap grant owed), rep_v / rep_g (reports in flight: value, PUSCH slot), hid / hid_until
   (residue not yet reported), enq_seen / armed (new data since the last drain).
 With ul_amc_alloc="previous", last_nprb (PRBs of the robot's last PUSCH) is state too.
+
+Closed-loop power control (cfg.ul_tpc, TS 38.213 Sec. 7.1.1; needs the open-loop P0 + alpha PL of cfg.ul_pc_on): the
+UE transmits at P0 + alpha PL + f, where f is the robot's TPC offset (TPC_STATE tpc_f). After every PUSCH the gNB
+measures its SINR: the per-PRB SINR at this PUSCH's PSD, averaged in linear scale over every RBG of the carrier (an
+SRS-like wideband measurement against the gNB's N+I estimate, so it does not depend on which RBGs were granted). If
+no command of that robot is in flight, sends the step of cfg.ul_tpc_set closest to target - measured
+("accumulate": f += step, clamped to +-ul_tpc_range_db, and a positive step is dropped while the UE was at full power,
+the 38.213 rule; "absolute": f = the step closest to f + target - measured). The command takes effect
+ul_tpc_delay_slots (default k2) after the PUSCH. One command in flight per robot keeps the loop from reacting to its
+own delay. The offset enters wherever the open-loop backoff does (_pc: scheduler estimate, power split, the other
+cells' interference through _split, the energy tap), so the PHR cap is unchanged. A handover resets f.
 """
 from __future__ import annotations
 
@@ -38,6 +49,10 @@ BSR_STATE = {
     "enq_seen": ((), torch.long, 0), "armed": ((), torch.bool, False),
 }
 AMC_STATE = {"last_nprb": ((), torch.float32, 0.0)}
+# ul_tpc: offset f (dB) the UE adds to its open-loop power, the command in flight (dB) and the slot it applies (-1 =
+# none), the last measured PUSCH SINR (dB, NaN before the first PUSCH; observation only)
+TPC_STATE = {"tpc_f": ((), torch.float32, 0.0), "tpc_cmd": ((), torch.float32, 0.0),
+             "tpc_at": ((), torch.long, -1), "tpc_sinr": ((), torch.float32, float("nan"))}
 
 
 class UlMac(MacLink):
@@ -61,6 +76,8 @@ class UlMac(MacLink):
             st.update(BSR_STATE)
         if cfg.ul_amc_alloc == "previous":
             st.update(AMC_STATE)
+        if cfg.ul_tpc:
+            st.update(TPC_STATE)
         if len(st) > len(MacLink.STATE):
             self.STATE = st
         self._bsr_model = cfg.ul_grant_model == "bsr"
@@ -74,8 +91,25 @@ class UlMac(MacLink):
                                    # does not depend on interference); None = sinr_ref.mean(-1)
         P = len(cfg.tdd_pattern)
         self._pg_pos = next(p for p in range(P) if cfg.slot_symbols(p)[1] > 0)
+        self._tpc = bool(cfg.ul_tpc)
+        if self._tpc:
+            self._tpc_steps = torch.tensor(cfg.ul_tpc_set, dtype=torch.float32, device=self.dev)
+            self._tpc_delay = cfg.ul_tpc_delay
+            # default target: the 10 % BLER SINR of the middle MCS of the table (one 10-PRB RBG)
+            self.tpc_target = (float(self.phy.thr_ref[self.phy.M // 2]) if cfg.ul_tpc_target_db is None
+                               else float(cfg.ul_tpc_target_db))
+            self._tpc_meas = None          # (measured SINR, power-limited) of the slot being processed [E,R]
+
+    def _pc(self):
+        """Backoff (dB) of the power-control PSD from the full power over snr_ref_prbs PRBs: the open-loop
+        pc_backoff, minus the closed-loop TPC offset when cfg.ul_tpc (None without power control)."""
+        if self._tpc and self.pc_backoff is not None:
+            return self.pc_backoff - self.tpc_f
+        return self.pc_backoff
 
     def _pre_slot(self, g, gh):
+        if self._tpc:                  # TPC commands due by this slot take effect
+            self._tpc_apply(g)
         if self._bsr_model:
             return self._pre_slot_bsr(g)
         cfg = self.cfg
@@ -93,7 +127,7 @@ class UlMac(MacLink):
 
     def _sched_estimate(self, sinr_ref):
         cfg, w, S = self.cfg, self.sb_prb, self.S
-        pc = self.pc_backoff
+        pc = self._pc()
         if cfg.ul_power == "whole_band":       # PSD fixed: same per-PRB SINR whatever the grant size
             wb = 10 * math.log10(cfg.nprb / cfg.snr_ref_prbs)
             est = sinr_ref - (wb if pc is None else pc.clamp(min=wb)[..., None]) + self.csi
@@ -116,13 +150,44 @@ class UlMac(MacLink):
             sp = torch.full_like(n_prb, 10 * math.log10(self.cfg.nprb / self.cfg.snr_ref_prbs))
         else:
             sp = 10 * torch.log10((n_prb / self.cfg.snr_ref_prbs).clamp(min=1e-3))
-        return sp if self.pc_backoff is None else torch.maximum(sp, self.pc_backoff)
+        pc = self._pc()
+        return sp if pc is None else torch.maximum(sp, pc)
 
     def _la_estimate(self, sinr_ref, n_prb, est):
         return sinr_ref - self._split(n_prb)[..., None] + self.csi
 
     def _rx_sinr(self, sinr_ref, n_prb, gain_now):
-        return sinr_ref - self._split(n_prb)[..., None] + gain_now
+        split = self._split(n_prb)
+        act = sinr_ref - split[..., None] + gain_now
+        if self._tpc:                  # gNB measurement for the TPC loop (used in _post_slot for the robots that sent)
+            lin = (10 ** (act.clamp(-30, 60) / 10)).mean(-1)
+            pc = self.pc_backoff - self.tpc_f
+            self._tpc_meas = (10 * torch.log10(lin), split > pc)      # split above the PC backoff: UE at full power
+        return act
+
+    # ---------------- ul_tpc: closed-loop power control ----------------
+    def _tpc_apply(self, g):
+        cfg = self.cfg
+        due = (self.tpc_at >= 0) & (self.tpc_at <= g)
+        r = float(cfg.ul_tpc_range_db)
+        new = (self.tpc_f + self.tpc_cmd) if cfg.ul_tpc_mode == "accumulate" else self.tpc_cmd
+        self.tpc_f = torch.where(due, new.clamp(-r, r), self.tpc_f)
+        self.tpc_at = torch.where(due, torch.full_like(self.tpc_at, -1), self.tpc_at)
+
+    def _tpc_issue(self, g, tx):
+        """After a PUSCH: the gNB sends the TPC command of every robot that transmitted and has none in flight."""
+        meas, limited = self._tpc_meas
+        err = self.tpc_target - meas
+        acc = self.cfg.ul_tpc_mode == "accumulate"
+        want = err if acc else self.tpc_f + err
+        cmd = self._tpc_steps[(want[..., None] - self._tpc_steps).abs().argmin(-1)]
+        if acc:                        # 38.213: no positive accumulation while the UE is at its maximum power
+            cmd = torch.where(limited & (cmd > 0), torch.zeros_like(cmd), cmd)
+        issue = tx & (self.tpc_at < 0)
+        self.tpc_cmd = torch.where(issue, cmd, self.tpc_cmd)
+        self.tpc_at = torch.where(issue, g + self._tpc_delay, self.tpc_at)
+        self.tpc_sinr = torch.where(tx, meas, self.tpc_sinr)
+        self._tpc_meas = None
 
     def _harq_times(self, g, ack_slot):
         return 0, g, g + self.cfg.ul_rtt          # gNB decodes: process free at once; retx after proc + K2
@@ -132,6 +197,8 @@ class UlMac(MacLink):
             self._post_slot_bsr(g, tx, tx_new, tbs_new)
         else:
             self.bsr = torch.where(tx, self.unsent(), self.bsr)     # BSR rides every PUSCH
+        if self._tpc:
+            self._tpc_issue(g, tx)
         self.csi = gain_now                                     # PUSCH/SRS measurement for the next decision
 
     def handover(self, ho, flush=False):
@@ -140,6 +207,9 @@ class UlMac(MacLink):
         super().handover(ho, flush)
         self.sr_t = torch.where(ho, torch.full_like(self.sr_t, -1), self.sr_t)
         self.bsr = torch.where(ho, self.unsent(), self.bsr)
+        if self._tpc:                  # the target cell starts the closed loop afresh
+            self.tpc_f = torch.where(ho, torch.zeros_like(self.tpc_f), self.tpc_f)
+            self.tpc_at = torch.where(ho, torch.full_like(self.tpc_at, -1), self.tpc_at)
         if self._bsr_model:            # the target learns the (quantized) buffer; reports in flight are lost
             vis = self._visible()
             rep = torch.where(vis > 0, self._quant(vis + self.cfg.bsr_hdr_bytes) + self.cfg.bsr_est_hdr_bytes,

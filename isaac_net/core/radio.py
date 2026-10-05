@@ -33,6 +33,7 @@ import torch
 from .channels import (PlaneWaveField, RadioMapChannel, TR38901Channel, blocked_links, draw_plane_waves,
                        eval_plane_waves)
 from .channels.blockage import BlockageA, screen_loss_db
+from .channels.antenna import gnb_antenna_gain_db
 from .channels.fields import counter_uniform
 from .channels.los import LosState, knife_edge_db
 from .channels.models import load_radio_map
@@ -257,6 +258,8 @@ class RadioMC:
                 rx = rx - self.cfg.blockage_loss_db * self._blocked.float()
             else:
                 rx = rx - self._blockage_db(pos, blockers)
+        if self.cfg.gnb_antenna != "isotropic":      # gNB sector pattern on every link (channels/antenna.py)
+            rx = rx + gnb_antenna_gain_db(self.cfg, pos, self.gnb3, self.h_ut)
         return rx
 
     def _log_distance_rx(self, pos):
