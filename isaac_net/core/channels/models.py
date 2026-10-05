@@ -7,9 +7,25 @@ from __future__ import annotations
 
 import torch
 
+import math
+
 from . import tr38901 as tr
 from .fields import PlaneWaveField, sum_of_cosines_cdf_table, uniform_from_field
+from .los import knife_edge_db
 from .radio_map import SYNTHETIC_MAP, RadioMap
+
+
+def soft_los(u, p, lam):
+    """TR 38.901 Sec. 7.6.3.3 soft LOS state in [0, 1] from the LOS-state uniform u and Pr_LOS p:
+    1/2 + atan(sqrt(20 / lambda) (F - G)) / pi, F = sqrt(2) erfinv(2 p - 1), G = sqrt(2) erfinv(2 u - 1), so it
+    tends to the hard state u < p as lambda -> 0 and is continuous in p. [verify: the spec writes the argument as
+    sqrt(20 / lambda) (G + F) with G its own zero-mean Gaussian; with G -> -G (same law) this is that form; the
+    scale sqrt(20 / lambda), lambda in m, is taken from the task statement and memory, not checked against the
+    spec text]"""
+    eps = 1e-6
+    F = math.sqrt(2) * torch.erfinv((2 * p - 1).clamp(-1 + eps, 1 - eps))
+    G = math.sqrt(2) * torch.erfinv((2 * u - 1).clamp(-1 + eps, 1 - eps))
+    return 0.5 + torch.atan(math.sqrt(20 / lam) * (F - G)) / math.pi
 
 
 class TR38901Channel:
@@ -25,6 +41,14 @@ class TR38901Channel:
     Randomness: `generator`, or an engine CounterRNG `rng` with base stream id `stream`: the three fields use streams
     stream + 0..2 (LOS shadow fading), + 3..5 (NLOS), + 6..8 (LOS state), the O2I draws + 9..11, all RESET draws keyed
     by (seed, env id, episode), so an env's channel does not depend on E or on other envs' resets.
+
+    Obstacles (docs/obstacles.md). los_ext: a channels.los.LosState that replaces the LOS probability as the source
+    of self.los (NRConfig.los_source "map" / "raycast" / "callback"; RadioMC sets it); path loss and shadow field
+    then follow that state exactly as they follow the stochastic one. With its Fresnel parameter (los_diffraction)
+    the NLOS excess becomes min(J(v), PL_NLOS - PL_LOS) and the shadow field is blended with the same weight, so the
+    LOS -> NLOS step is a knife-edge ramp. los_soft (Sec. 7.6.3.3): the stochastic state is blended,
+    LOS_soft = 1/2 + atan(sqrt(20 / lambda) (F - G)) / pi with F = sqrt(2) erfinv(2 Pr_LOS - 1) and G the Gaussian
+    of the LOS-state field, and the path loss and shadow field mix LOS and NLOS with weight LOS_soft (in dB).
     """
 
     def __init__(self, cfg, E, C, gnb_xy, device, generator=None, rng=None, stream=0):
@@ -59,6 +83,9 @@ class TR38901Channel:
         self.o2i_wall = tr.o2i_wall_db(cfg.o2i_model, self.fc) if self.o2i else 0.0
         self.o2i_sigma = tr.O2I_SIGMA_DB[cfg.o2i_model]
         self.R = None
+        self.los_ext = None              # channels.los.LosState (los_source != "stochastic"), set by RadioMC
+        self.soft = bool(getattr(cfg, "los_soft", False))
+        self.soft_w = None               # LOS_soft [E,R,C] of the last call (los_soft)
 
     # per-robot O2I state, allocated at the first call (R known) and redrawn by reset
     def _draw_o2i(self, E, R):
@@ -93,11 +120,16 @@ class TR38901Channel:
 
     def los_state(self, pos, d2):
         """bool [E,R,C]; d2 = d_2D-out."""
+        if self.los_ext is not None:
+            return self.los_ext.update(pos, getattr(self, "_raw_pos", None))
         mode = self.cfg.tr38901_los
         if mode != "stochastic":
             return torch.full(d2.shape, mode == "los", dtype=torch.bool, device=d2.device)
         u = uniform_from_field(self.los_field(pos), self.table)
-        return u < tr.p_los(self.scn, d2, self.h_ut, self.k_subsce)
+        p = tr.p_los(self.scn, d2, self.h_ut, self.k_subsce)
+        if self.soft:
+            self.soft_w = soft_los(u, p, tr.C_LIGHT / (self.fc * 1e9))
+        return u < p
 
     def pathgain_db(self, pos):
         if self.R is None:
@@ -109,9 +141,22 @@ class TR38901Channel:
             d2_out = torch.where(self.indoor[..., None], (d2 - self.d_in[..., None]).clamp(min=1.0), d2)
         self.los = self.los_state(pos, d2_out)
         a = (self.scn, d2, d3, self.fc, self.h_bs, self.h_ut)
-        pl = torch.where(self.los, tr.pl_los(*a), tr.pl_nlos(*a))
-        s_los, s_nlos = tr.sigma_sf(self.scn, d2, self.fc, self.h_bs, self.h_ut)
-        sf = torch.where(self.los, s_los * self.sf_los(pos), s_nlos * self.sf_nlos(pos))
+        v = None if self.los_ext is None else self.los_ext.v
+        if not self.soft and v is None:
+            pl = torch.where(self.los, tr.pl_los(*a), tr.pl_nlos(*a))
+            s_los, s_nlos = tr.sigma_sf(self.scn, d2, self.fc, self.h_bs, self.h_ut)
+            sf = torch.where(self.los, s_los * self.sf_los(pos), s_nlos * self.sf_nlos(pos))
+        else:
+            pl_l, pl_n = tr.pl_los(*a), tr.pl_nlos(*a)
+            gap = pl_n - pl_l                                                   # >= 0 (max floors of 7.4.1-1)
+            if self.soft:
+                w = 1 - self.soft_w                                             # NLOS weight
+            else:                                                               # knife-edge ramp
+                exc = torch.minimum(knife_edge_db(v), gap)
+                w = torch.where(gap > 1e-6, exc / gap.clamp(min=1e-6), (~self.los).float())
+            pl = pl_l + w * gap
+            s_los, s_nlos = tr.sigma_sf(self.scn, d2, self.fc, self.h_bs, self.h_ut)
+            sf = (1 - w) * (s_los * self.sf_los(pos)) + w * (s_nlos * self.sf_nlos(pos))
         loss = pl + sf
         if self.o2i:
             o2i = self.o2i_wall + 0.5 * self.d_in + self.o2i_sigma * self.xp                  # [E,R]
@@ -142,6 +187,9 @@ class RadioMapChannel:
             if want.shape != gnb_xy.shape or not torch.allclose(want, gnb_xy.cpu(), atol=0.5):
                 raise ValueError(f"the radio map was made for gNBs at {want.tolist()}; set cell_positions_m to match "
                                  "(association, interference and blockage use the config positions)")
+        if getattr(cfg, "los_diffraction", False) and bool(self.map.meta.get("diffraction", False)):
+            raise ValueError("los_diffraction with a radio map baked with --diffraction would count the lit-side "
+                             "Fresnel loss twice; use a map baked without diffraction")
 
     def reset(self, m):
         pass

@@ -32,7 +32,10 @@ import torch
 
 from .channels import (PlaneWaveField, RadioMapChannel, TR38901Channel, blocked_links, draw_plane_waves,
                        eval_plane_waves)
+from .channels.blockage import BlockageA, screen_loss_db
 from .channels.fields import counter_uniform
+from .channels.los import LosState, knife_edge_db
+from .channels.models import load_radio_map
 from .config import NRConfig
 from .proto.netsim import Radio  # noqa: F401  (re-export: the prototype single-cell radio)
 from .queues import env_mask, onehot, reset_where
@@ -48,7 +51,8 @@ def pick(x, idx):
 # prototype 0..12, NR engine (site << 16) with sites 1..4)
 LOG_DISTANCE_STREAM = 10            # + 0..2, = proto Radio's streams
 RADIO_STREAM = 0x52 << 16
-STREAMS = {"white": RADIO_STREAM, "tr38901": RADIO_STREAM + 16}
+STREAMS = {"white": RADIO_STREAM, "tr38901": RADIO_STREAM + 16, "los_map": RADIO_STREAM + 32,
+           "blockage_a": RADIO_STREAM + 48}
 
 
 class RadioMC:
@@ -85,8 +89,97 @@ class RadioMC:
         self.gnb3 = torch.cat([self.gnb, torch.full((self.C, 1), h_bs, device=device)], -1)       # [C,3]
         self.R = None
         self.speed = None
+        self._init_obstacles(radio_map)
         if R is not None:
             self._alloc(R)
+
+    def _init_obstacles(self, radio_map=None):
+        """The obstacle stack (docs/obstacles.md): a geometric LOS state (los_source != "stochastic"), the
+        blockage model state (model A), and the step outputs. Nothing is drawn or allocated at the defaults."""
+        cfg = self.cfg
+        self.los_st = self.blk_a = self._blocked = None
+        self._t_step_s = cfg.control_step_ms * 1e-3
+        self.obstacle_outputs = cfg.los_source != "stochastic" or cfg.blockage
+        self.lam = 3.0e8 / (cfg.carrier_ghz * 1e9)
+        self._sizes = torch.tensor(cfg.blocker_size_m, dtype=torch.float32, device=self.dev).reshape(-1, 2)
+        if cfg.los_source != "stochastic":
+            m = None
+            if cfg.los_source in ("map", "raycast"):
+                m = self.ch.map if self.model == "radio_map" else load_radio_map(cfg, self.dev, radio_map)
+            g3 = self.gnb3
+            gz = None if m is None else m.meta.get("gnb_z")
+            if gz is not None and cfg.gnb_height_m is None and self.model != "tr38901":
+                gz = torch.as_tensor(gz, dtype=torch.float32, device=self.dev).reshape(-1)
+                if gz.numel() == self.C:                     # the baked antenna heights (2-D models have none)
+                    g3 = torch.cat([self.gnb, gz[:, None]], -1)
+            share = self.model == "tr38901" and cfg.los_source == "map"
+            self.los_st = LosState(cfg, self.E, self.C, g3, self.dev, m, self.gen, self.rng, STREAMS["los_map"],
+                                   field=self.ch.los_field if share else None, table=self.ch.table if share else None)
+            if self.model == "tr38901":
+                self.ch.los_ext = self.los_st
+        if cfg.blockage and cfg.blockage_model == "stochastic":
+            self.blk_a = BlockageA(cfg, self.E, self.dev, self.gen, self.rng, STREAMS["blockage_a"])
+
+    def los_state(self):
+        """Current LOS state [E,R,C] bool of every link (the last rx_dbm call), or None when the model has none
+        (log_distance / radio_map with los_source="stochastic", or before the first call). Interface for the
+        fading (K-factor) and the step outputs."""
+        if self.los_st is not None:
+            return self.los_st.los
+        if self.model == "tr38901":
+            return getattr(self.ch, "los", None)
+        return None
+
+    def blocked_state(self):
+        """[E,R,C] bool: a dynamic blocker (another robot, an extra blocker, a model-A region) is on the direct path
+        (the last rx_dbm call), or None without blockage."""
+        return self._blocked
+
+    def set_los_callback(self, fn):
+        """los_source="callback": fn(poses [E,R,2|3] as passed to rx_dbm) -> [E,R,C] bool, True = blocked (the
+        Isaac layer's blocked_fn signature, e.g. isaac.radio.mesh_blocked_fn around the Warp kernel)."""
+        if self.los_st is None or self.los_st.source != "callback":
+            raise ValueError("set_los_callback needs NRConfig(los_source='callback')")
+        self.los_st.set_callback(fn)
+
+    def _nlos_excess(self, los):
+        """Extra loss [E,R,C] of the geometric LOS state for log_distance (nlos_extra_loss_db when NLOS, or the
+        knife-edge ramp min(J(v), nlos_extra_loss_db)) and radio_map (only the lit-side Fresnel loss J(min(v, 0)),
+        0..6 dB: the map already holds the shadow-side loss, so the state adds no NLOS path loss there)."""
+        v = self.los_st.v
+        if self.model == "radio_map":
+            if v is None:
+                return None
+            return knife_edge_db(v.clamp(max=0.0))
+        x = self.cfg.nlos_extra_loss_db
+        if v is None:
+            return x * (~los).float()
+        return torch.minimum(knife_edge_db(v), torch.full_like(v, x))
+
+    def _blockage_db(self, pos, blockers):
+        """Loss [E,R,C] of the screen / stochastic blockage models; sets self._blocked."""
+        cfg = self.cfg
+        a3 = torch.cat([pos, torch.full_like(pos[..., :1], self.h_ut)], -1)
+        if cfg.blockage_model == "stochastic":
+            self.blk_a.advance(self._t_step_s)
+            loss, self._blocked = self.blk_a.loss_db(a3, self.gnb3, cfg.blockage_max_db)
+            return loss
+        sizes = self._sizes                                                                   # [classes, 2]
+        E, R = pos.shape[:2]
+        bxy = pos
+        size = sizes[0].expand(E, R, 2)
+        active = torch.ones(E, R, dtype=torch.bool, device=pos.device)
+        excl = torch.eye(R, dtype=torch.bool, device=pos.device)[None].expand(E, R, R)
+        if blockers is not None:
+            M = blockers.shape[1]
+            cls = blockers[..., 2].round().long()
+            ok = (cls >= 0) & (cls < sizes.shape[0])
+            bxy = torch.cat([bxy, blockers[..., :2].to(pos.dtype)], 1)
+            size = torch.cat([size, sizes[cls.clamp(0, sizes.shape[0] - 1)]], 1)
+            active = torch.cat([active, ok], 1)
+            excl = torch.cat([excl, torch.zeros(E, R, M, dtype=torch.bool, device=pos.device)], -1)
+        loss, self._blocked = screen_loss_db(a3, self.gnb3, bxy, size, active, self.lam, cfg.blockage_max_db, excl)
+        return loss
 
     def _draw(self, n):
         cfg = self.cfg
@@ -116,6 +209,10 @@ class RadioMC:
             self.white.reset(m)
         if self.ch is not None:
             self.ch.reset(m)
+        if self.los_st is not None:
+            self.los_st.reset(m)
+        if self.blk_a is not None:
+            self.blk_a.reset(m)
         if self.R is not None:
             self.has_prev = self.has_prev & ~m[:, None]
             self.speed = torch.where(m[:, None], torch.full_like(self.speed, self.cfg.doppler_min_speed_mps), self.speed)
@@ -133,17 +230,33 @@ class RadioMC:
         obj.white = obj.ch = obj.speed = obj.R = None
         obj.h_ut = float(cfg.ue_height_m)
         obj.gnb3 = torch.cat([obj.gnb, torch.full((1, 1), obj.h_ut, device=device)], -1)
+        obj.los_st = obj.blk_a = obj._blocked = None
+        obj.obstacle_outputs = False
         return obj
 
-    def rx_dbm(self, pos):
-        """pos [E,R,2] or [E,R,3] (z ignored) -> [E,R,C] dBm."""
+    def rx_dbm(self, pos, blockers=None):
+        """pos [E,R,2] or [E,R,3] (z ignored) -> [E,R,C] dBm. blockers [E,M,3] (x, y, class) per step: extra
+        model-B screens (blockage_model="screen"; class indexes blocker_size_m, < 0 = empty slot)."""
+        raw = pos
         pos = pos[..., :2]
+        if blockers is not None and not (self.cfg.blockage and self.cfg.blockage_model == "screen"):
+            raise ValueError("blockers= needs NRConfig(blockage=True, blockage_model='screen')")
+        if self.model == "tr38901" and self.los_st is not None:
+            self.ch._raw_pos = raw                   # the callback source sees the poses as passed
         if self.model == "log_distance":
             rx = self._log_distance_rx(pos)          # the legacy expression order (bitwise default)
         else:
             rx = self.cfg.ue_tx_dbm + self.ch.pathgain_db(pos)
+        if self.los_st is not None and self.model != "tr38901":
+            exc = self._nlos_excess(self.los_st.update(pos, raw))
+            if exc is not None:
+                rx = rx - exc
         if self.cfg.blockage:
-            rx = rx - self.cfg.blockage_loss_db * self.blocked(pos).float()
+            if self.cfg.blockage_model == "sphere":
+                self._blocked = self.blocked(pos)
+                rx = rx - self.cfg.blockage_loss_db * self._blocked.float()
+            else:
+                rx = rx - self._blockage_db(pos, blockers)
         return rx
 
     def _log_distance_rx(self, pos):
@@ -156,9 +269,9 @@ class RadioMC:
             rx = rx - self.white(pos)
         return rx
 
-    def pathgain_db(self, pos):
+    def pathgain_db(self, pos, blockers=None):
         """Large-scale gain (negative dB, incl. shadowing, LOS state, O2I and blockage) of every link [E,R,C]."""
-        return self.rx_dbm(pos) - self.cfg.ue_tx_dbm
+        return self.rx_dbm(pos, blockers) - self.cfg.ue_tx_dbm
 
     def blocked(self, pos):
         """bool [E,R,C]: robot-gNB segment passes through another robot's sphere (blockage add-on)."""
