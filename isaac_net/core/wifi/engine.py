@@ -187,9 +187,13 @@ class WifiNet(LevelNet):
 
     # ------------------------------------------------------------------ radio, association, sensing (eager)
     def _radio(self):
+        """The APs' RadioMC, made on first use. With rng="engine" its shadowing / LOS / O2I draws come from the
+        engine's counter RNG keyed by (seed, env id, episode), so an env's channel depends neither on E nor on other
+        envs' resets (LevelNet.reset advances the reset envs' episode before radio.reset); rng="global": self.gen."""
         if self.radio is None:
             from ..radio import RadioMC
-            self.radio = RadioMC(radio_config(self.config, self.wc), self.E, self.dev, generator=self.gen, R=self.R)
+            self.radio = RadioMC(radio_config(self.config, self.wc), self.E, self.dev, generator=self.gen, R=self.R,
+                                 rng=self.rng)
         return self.radio
 
     def step(self, t, x=None, cur_hid=None, *, rx_dbm=None, sense=None):
