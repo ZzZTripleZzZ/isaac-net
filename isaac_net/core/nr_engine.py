@@ -80,11 +80,14 @@ class NRNet:
         self.log_sinr = False      # multi-cell: per-TB SINR samples in self.sinr_log (host copies; sweeps only)
         if self.C > 1:
             self._init_cells()
+        elif self.cfg.rlf:
+            raise ValueError("rlf=True needs n_cells > 1: radio link failure and re-establishment live in the "
+                             "multi-cell association (CellAssociation), which the single-cell engine does not run")
         self.reset()
 
     def _init_cells(self):
         cfg, C, d = self.cfg, self.C, self.dev
-        self.assoc = CellAssociation(cfg, self.E, self.R, C, d, cfg.slots_per_step, slot_ms=cfg.slot_ms)
+        self.assoc = CellAssociation(cfg, self.E, self.R, C, d, cfg.slots_per_step, slot_ms=cfg.slot_ms, rlf=cfg.rlf)
         thermal = cfg.noise_model == "thermal"
         self.use_int = {"ul": thermal and cfg.ul_interference, "dl": thermal and cfg.dl_interference}
         self.noise_mw = {"ul": 10 ** (cfg.noise_dbm_per_prb("gnb") / 10), "dl": 10 ** (cfg.noise_dbm_per_prb("ue") / 10)}
@@ -345,6 +348,31 @@ class NRNet:
         if self.dl is not None:
             self.dl.handover(ho, flush)
 
+    def _rlf_links(self, m, flush):
+        """RLF declaration (flush per rlf_rlc), re-establishment (flush=False: per-cell MAC state starts afresh at the
+        new cell) or idle (flush=True) of the robots m [E,R]: the MAC side of a handover."""
+        self.ul.handover(m, flush)
+        if self.dl is not None:
+            self.dl.handover(m, flush)
+
+    def _rlf_events(self, g, k_ho, fired, g_ho, rx, sinr_c):
+        """RLF declarations and re-establishment completions due by slot g, before the handovers of that slot. A T310
+        expiry that a handover precedes (or ties) is cancelled by that handover (switch() stops T310). Returns (the
+        handover candidates up to slot g without the robots in RLF, the robots declared now): a handover planned in
+        this step for a robot that failed first never fires, even if its re-establishment completes in the step."""
+        asc = self.assoc
+        ho = (k_ho >= 0) & (g_ho <= g) & ~fired
+        exp = asc.expired(g) & ~(ho & (g_ho <= asc.t310_end))
+        asc.declare(exp, rx, sinr_c)
+        self._rlf_links(exp, self.cfg.rlf_flush)
+        self._rlf_links(asc.complete(g), False)
+        return ho & ~asc.rlf_active & ~exp, exp
+
+    def _cells_sinr_db(self):
+        """serving_sinr_db toward every cell [E,R,C] (each gNB's latest wideband N+I estimate): the RLF cell search."""
+        ni = 10 * torch.log10(self.ni_ul.mean(-1))[:, None, :]
+        return self._pg + self.cfg.ue_tx_dbm - self.ref_db - ni
+
     def serving_sinr_db(self):
         """Full-power SINR over snr_ref_prbs PRBs on the serving link against the gNB's latest wideband N+I
         estimate [E,R] (the multi-cell counterpart of the SNR input; observation and frame feature)."""
@@ -367,13 +395,21 @@ class NRNet:
         rx = pathgain_db + cfg.ue_tx_dbm                      # RSRP up to a constant: full UE power, no fading
         asc = self.assoc
         asc.associate(rx)
+        rlf = asc.rlf
+        if rlf:                                               # radio link monitoring once per step (CellAssociation)
+            sinr_c = self._cells_sinr_db()
+            self._rlf_links(asc.rlm(self.serving_sinr_db(), rx, sinr_c, g0v), True)
         k_ho, tgt = asc.plan(rx)
         g_ho = g0v + k_ho
         fired = torch.zeros(self.E, self.R, dtype=torch.bool, device=self.dev)
         links = [x for x in (self.ul, self.dl) if x is not None]
         for rel, dls, uls, sr, cqi, ack in self._schedule(g0):
             g, gv = g0 + rel, g0v + rel
-            ho = (k_ho >= 0) & (k_ho <= rel) & ~fired          # A3 triggers up to this slot switch now
+            if rlf:
+                ho, failed = self._rlf_events(gv, k_ho, fired, g_ho, rx, sinr_c)
+                fired = fired | failed
+            else:
+                ho = (k_ho >= 0) & (k_ho <= rel) & ~fired      # A3 triggers up to this slot switch now
             self._handover(ho, tgt, g_ho)
             fired = fired | ho
             self._evolve(g, rel)
@@ -404,11 +440,16 @@ class NRNet:
                 if cfg.ul_pc_on:
                     self.ul.pc_backoff = self._pc_backoff(rx_s)
                 self.ul.slot(gv, frac, uls, ul_ref, gain, 0, gh=g, rel=rel)
-        late = (k_ho >= 0) & ~fired                           # triggers after the last active slot of the step
+        if rlf:
+            late = self._rlf_events(g0v + N - 1, k_ho, fired, g_ho, rx, sinr_c)[0]
+        else:
+            late = (k_ho >= 0) & ~fired                       # triggers after the last active slot of the step
         self._handover(late, tgt, g_ho)
         out = self._finish(tv, cur_hid, full)
         if full:
             out["serving_cell"] = asc.serv.clone()
+            if rlf:
+                out["rlf"] = asc.rlf_active.clone()
         return out
 
     def _log_sinr(self, d, won, act, i_db):
@@ -539,4 +580,6 @@ class NRNet:
         res = {"ul": f(self.ul)}
         if self.dl is not None:
             res["dl"] = f(self.dl)
+        if self.C > 1 and self.cfg.rlf:
+            res["rlf"] = {k: float(v) for k, v in self.assoc.ctr.items()}
         return res

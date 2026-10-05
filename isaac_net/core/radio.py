@@ -185,21 +185,39 @@ class RadioMC:
 
 
 class CellAssociation:
-    """Serving cell per robot with A3 handover.
+    """Serving cell per robot with A3 handover and, optionally, radio link failure (RLF) with re-establishment.
 
     RSRP = rx_dbm (L3-filtered: large-scale only). Initial association (after every reset) = max RSRP.
     A3: best neighbour > serving + a3_offset + a3_hyst, held continuously toward the same target for
     ttt_slots. RSRP changes once per control step, so plan() evaluates the condition once per step and
     returns the exact slot inside the step at which the HO fires (at slot k the condition has held
     cnt + k + 1 slots, so k = ttt - cnt - 1). After a HO the robot cannot be scheduled for ho_int_slots.
+    Target admission (5G-LENA NrA3RsrpHandoverAlgorithm MinTargetRsrpDbm): with cfg.a3_min_target_rsrp_dbm set, a
+    neighbour whose RSRP (gNB EPRE gnb_tx_dbm - 10 log10(12 nprb) plus the path gain) is below it never satisfies A3.
 
     Slot unit: UL slots (NetSlotMC, cfg.ttt_slots / ho_int_slots) by default; slot_ms counts every slot
     of that duration instead (the NR engine passes cfg.slot_ms and slots_per_step).
+
+    RLF (rlf=True; the NR engine with cfg.rlf, slot_ms required). Radio link monitoring once per control step, at the
+    step's first slot, the cadence of A3 (rlm()): the serving-link SINR [E,R] of that moment below rlf_qout_db is one
+    out-of-sync indication, above rlf_qin_db one in-sync indication (none in between). While T310 is not running,
+    n310 consecutive out-of-sync indications (an in-sync one restarts the count) start T310; while it runs, n311
+    consecutive in-sync indications stop it. A handover stops T310 (TS 38.331 5.3.10.3, 5.3.5.5.2). T310 expires at
+    its exact slot (declare()): RLF, the robot is unschedulable, T311 starts and the cell search runs: the max-RSRP
+    suitable cell is selected, suitable meaning that its SINR estimate is at least rlf_qin_db (the robot could
+    decode its control channel, so random access can succeed) and its RSRP at least a3_min_target_rsrp_dbm when set,
+    and the re-establishment completes reest_delay later at that cell (complete()). The search runs at the RLF slot and then at every evaluation; if T311 expires
+    first, the robot goes idle (the engine drops its queue) and keeps searching (a new connection, same delay). A
+    robot in RLF neither handles A3 nor counts indications. Timers are slot numbers (-1 = not running), counters
+    are tensors, so the state machine is graph-capturable and partial reset clears it per env.
     """
 
     INIT = {"serv": 0, "pending": True, "a3_cand": -1, "a3_cnt": 0, "ho_end": 0, "n_ho": 0}
+    RLF_INIT = {"rlf_active": False, "oos_cnt": 0, "is_cnt": 0, "t310_end": -1, "t311_end": -1, "reest_end": -1,
+                "reest_cell": 0, "n_rlf": 0}
+    RLF_CTR = ("rlf", "reest", "rlf_idle", "t310_start", "t310_stop")
 
-    def __init__(self, cfg: NRConfig, E, R, C, device, slots_per_step, slot_ms=None):
+    def __init__(self, cfg: NRConfig, E, R, C, device, slots_per_step, slot_ms=None, rlf=False):
         self.cfg, self.E, self.R, self.C, self.dev, self.K = cfg, E, R, C, device, slots_per_step
         if slot_ms is None:
             self.ttt, self.ho_int = cfg.ttt_slots, cfg.ho_int_slots
@@ -213,11 +231,29 @@ class CellAssociation:
         self.a3_cnt = z(torch.long, 0)
         self.ho_end = z(torch.long, 0)
         self.n_ho = z(torch.long, 0)
+        floor = getattr(cfg, "a3_min_target_rsrp_dbm", None)
+        # the admission floor on the rx scale (rx = path gain + ue_tx_dbm): RSRP - rx = gNB EPRE - ue_tx_dbm
+        self.floor_rx = None if floor is None else floor - (cfg.gnb_tx_dbm - 10 * math.log10(12 * cfg.nprb)
+                                                            - cfg.ue_tx_dbm)
+        self.rlf = bool(rlf)
+        self._init = dict(self.INIT)
+        if self.rlf:
+            if slot_ms is None:
+                raise ValueError("RLF needs the NR engine's slot clock (CellAssociation(slot_ms=...))")
+            ms = lambda v: int(round(v / slot_ms))
+            self.t310, self.t311, self.reest = ms(cfg.t310_ms), ms(cfg.t311_ms), ms(cfg.reest_delay_ms)
+            self._init.update(self.RLF_INIT)
+            for n, v in self.RLF_INIT.items():
+                setattr(self, n, z(torch.bool if isinstance(v, bool) else torch.long, v))
+            self.ctr = {k: torch.zeros((), dtype=torch.long, device=device) for k in self.RLF_CTR}
 
     def reset(self, env_ids=None):
         m = env_mask(self.E, env_ids, self.dev)
-        for n, v in self.INIT.items():
+        for n, v in self._init.items():
             setattr(self, n, reset_where(getattr(self, n), m, v))
+        if self.rlf and env_ids is None:                 # global counters: cleared by a full reset only
+            for v in self.ctr.values():
+                v.zero_()
 
     def associate(self, rx):
         """Initial max-RSRP association for envs flagged by reset (no host sync)."""
@@ -237,6 +273,10 @@ class CellAssociation:
         rs = pick(rx, self.serv)
         best, bc = rx.masked_fill(onehot(self.serv, self.C), -float("inf")).max(-1)
         cond = best > rs + cfg.a3_offset_db + cfg.a3_hyst_db
+        if self.floor_rx is not None:                    # target admission: MinTargetRsrpDbm
+            cond = cond & (best >= self.floor_rx)
+        if self.rlf:                                     # no measurement reporting while in RLF
+            cond = cond & ~self.rlf_active
         cnt = torch.where(cond & (bc == self.a3_cand), self.a3_cnt, torch.zeros_like(self.a3_cnt))
         k_fire = (self.ttt - cnt - 1).clamp(min=0)
         fire = cond & (k_fire < self.K)
@@ -249,6 +289,84 @@ class CellAssociation:
         self.serv = torch.where(ho, target, self.serv)
         self.ho_end = torch.where(ho, g + self.ho_int, self.ho_end)
         self.n_ho = self.n_ho + ho.long()
+        if self.rlf:                                     # the handover command stops T310 and the counts
+            self.ctr["t310_stop"] += (ho & (self.t310_end >= 0)).sum()
+            self.t310_end = torch.where(ho, -1, self.t310_end)
+            self.oos_cnt = torch.where(ho, 0, self.oos_cnt)
+            self.is_cnt = torch.where(ho, 0, self.is_cnt)
 
     def schedulable(self, g):
+        if self.rlf:
+            return (g >= self.ho_end) & ~self.rlf_active
         return g >= self.ho_end
+
+    # ---- radio link failure (rlf=True) ----
+    def rlm(self, sinr_db, rx, sinr_c, g):
+        """Step evaluation at slot g (the step's first slot): T311 expiry, the cell search of robots in RLF, then the
+        out-of-sync / in-sync indications of the connected robots and T310 start / stop. sinr_db [E,R] serving-link
+        SINR, rx [E,R,C] RSRP up to a constant (as plan), sinr_c [E,R,C] the SINR estimate of every link (cell
+        search). Returns the robots that went idle (T311 expired with no suitable cell found) [E,R]; their queue is
+        the caller's to drop."""
+        cfg = self.cfg
+        idle = self.rlf_active & (self.reest_end < 0) & (self.t311_end >= 0) & (self.t311_end <= g)
+        self.t311_end = torch.where(idle, -1, self.t311_end)
+        self.ctr["rlf_idle"] += idle.sum()
+        self.search(rx, sinr_c, g, self.rlf_active)
+        conn = ~self.rlf_active
+        oos = conn & (sinr_db < cfg.rlf_qout_db)
+        ins = conn & (sinr_db > cfg.rlf_qin_db)
+        run = self.t310_end >= 0
+        oc = torch.where(ins, 0, self.oos_cnt + oos.long())
+        start = conn & ~run & (oc >= cfg.n310)
+        ic = torch.where(oos, 0, self.is_cnt + ins.long())
+        stop = run & (ic >= cfg.n311)
+        self.oos_cnt = torch.where(run | start | ~conn, 0, oc)
+        self.is_cnt = torch.where(run & ~stop, ic, 0)
+        self.t310_end = torch.where(start, g + self.t310, torch.where(stop, -1, self.t310_end))
+        self.ctr["t310_start"] += start.sum()
+        self.ctr["t310_stop"] += stop.sum()
+        return idle
+
+    def expired(self, g):
+        """Robots whose T310 has expired by slot g [E,R] (connected; not yet declared)."""
+        return (self.t310_end >= 0) & (self.t310_end <= g) & ~self.rlf_active
+
+    def declare(self, new, rx, sinr_c):
+        """RLF of the robots `new` [E,R] at their T310 expiry slot: unschedulable, T311 starts, cell search at once.
+        Returns the RLF slot [E,R] (meaningful where new)."""
+        g_rlf = self.t310_end
+        self.rlf_active = self.rlf_active | new
+        self.t311_end = torch.where(new, g_rlf + self.t311, self.t311_end)
+        self.t310_end = torch.where(new, -1, self.t310_end)
+        self.reest_end = torch.where(new, -1, self.reest_end)
+        self.oos_cnt = torch.where(new, 0, self.oos_cnt)
+        self.is_cnt = torch.where(new, 0, self.is_cnt)
+        self.a3_cnt = torch.where(new, 0, self.a3_cnt)
+        self.a3_cand = torch.where(new, -1, self.a3_cand)
+        self.n_rlf = self.n_rlf + new.long()
+        self.ctr["rlf"] += new.sum()
+        self.search(rx, sinr_c, g_rlf, new)
+        return g_rlf
+
+    def search(self, rx, sinr_c, g, mask):
+        """Cell selection for the robots `mask` in RLF without a target: the max-RSRP suitable cell (SINR estimate
+        sinr_c >= rlf_qin_db, RSRP >= the admission floor when set) is selected at slot g (int or [E,R]) and the
+        re-establishment completes there reest_delay later."""
+        ok = sinr_c >= self.cfg.rlf_qin_db
+        if self.floor_rx is not None:
+            ok = ok & (rx >= self.floor_rx)
+        best, bc = rx.masked_fill(~ok, -float("inf")).max(-1)
+        cand = mask & self.rlf_active & (self.reest_end < 0) & ok.any(-1)
+        self.reest_end = torch.where(cand, g + self.reest, self.reest_end)
+        self.reest_cell = torch.where(cand, bc, self.reest_cell)
+
+    def complete(self, g):
+        """Re-establishments that complete by slot g: the robot attaches to the selected cell and is schedulable
+        again. Returns the mask [E,R] (the caller resets their per-cell MAC state as on a handover)."""
+        done = self.rlf_active & (self.reest_end >= 0) & (self.reest_end <= g)
+        self.serv = torch.where(done, self.reest_cell, self.serv)
+        self.rlf_active = self.rlf_active & ~done
+        self.t311_end = torch.where(done, -1, self.t311_end)
+        self.reest_end = torch.where(done, -1, self.reest_end)
+        self.ctr["reest"] += done.sum()
+        return done
