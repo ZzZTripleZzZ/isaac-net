@@ -146,8 +146,10 @@ class NRGraphEngine(NREngine):
         super().reset(env_ids)
         self._rebind()
 
-    def submit(self, t, requests, snr_db=None):
-        acc = super().submit(t, requests, snr_db)
+    def submit(self, t, requests, snr_db=None, *, tag=None, priority=None, deadline_ms=None):
+        # NREngine.submit enables the message extras (new queue fields, gate hooks) before it enqueues, exactly as
+        # the reference; the graph key holds _extras, so the next step captures a graph that carries them
+        acc = super().submit(t, requests, snr_db, tag=tag, priority=priority, deadline_ms=deadline_ms)
         self._rebind()
         return acc
 
@@ -215,7 +217,8 @@ class NRGraphEngine(NREngine):
         dt0 = (1 if net.last_g is None else g0 + sched[0][0] - net.last_g) if fad else 0
         P = len(cfg.tdd_pattern)
         skey = g0 % math.lcm(P, cfg.sr_period_slots, cfg.cqi_period_slots)
-        key = (skey, dt0, kind, tuple((k, tuple(v.shape)) for k, v in ins.items()), bool(self.log_stats), gate,
+        key = (skey, dt0, kind, tuple((k, tuple(v.shape), v.dtype) for k, v in ins.items()),   # dtype: own buffers
+               bool(self.log_stats), gate,
                bool(getattr(self, "_extras", False)),
                tuple(lk.sinr_hook for lk in (net.ul, net.dl) if lk is not None))   # a hook installed later recaptures
         self._tdev.fill_(T)
