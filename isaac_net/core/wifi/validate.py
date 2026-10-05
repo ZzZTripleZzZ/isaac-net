@@ -4,7 +4,9 @@ Tables (docs/wifi.md reports them):
   A  Bianchi's saturation throughput (his Table I FHSS parameters, basic access and RTS/CTS): the analytic model
      (exact root), the tensor solver after its fixed iterations, and the event-driven simulator.
   B  802.11ax 20 MHz, MCS 7, AC_BE, saturated stations: aggregate throughput and mean access delay of the
-     mean-field model against the event-driven simulator, over the number of stations and the bytes per access.
+     mean-field model against the event-driven simulator, over the number of stations and the bytes per access;
+     plus rows with a residual frame error rate (FER = 0.2, basic access and RTS/CTS), where an errored frame
+     occupies the medium for its full exchange time Ts in both models.
   C  EDCA: AC_VO and AC_BE stations together, saturated: throughput per AC.
   D  The full WIFI engine (sub-steps, Poisson accesses, FIFO, timeouts) against the event-driven simulator driven
      with the same traffic: every robot submits one message per 100 ms control step, synchronized as in an RL env.
@@ -137,24 +139,27 @@ def table_b(quick, jobs):
     rates, _ = mcs_table("ax", 20)
     rate = rates[7]
     ns = (1, 2, 5, 10, 20, 50)
-    sizes = [(1500, 0), (8000, 65535), (30000, 65535)]
+    # (bytes per access, max_ampdu_bytes, frame_error_rate, rts_cts)
+    sizes = [(1500, 0, 0.0, False), (8000, 65535, 0.0, False), (30000, 65535, 0.0, False),
+             (1500, 0, 0.2, False), (30000, 65535, 0.2, True)]
     sim_us = 2e6 if quick else 10e6
     tasks, keys = [], []
-    for B, agg in sizes:
-        w = wc.with_(max_ampdu_bytes=agg)
+    for B, agg, fer, rts in sizes:
+        w = wc.with_(max_ampdu_bytes=agg, frame_error_rate=fer, rts_cts=rts)
         st = _wifi_station(w, "BE", rate, B=min(B, w.msdu_payload_bytes) if agg == 0 else B)
         for n in ns:
             tasks.append(([st] * n, sim_us, w.slot_us, w.sifs_us, None, 2000 + n, math.inf, 0.0))
-            keys.append((B, agg, n, st.cap))
+            keys.append((B, agg, fer, rts, n, st.cap))
     sims = _pool(jobs, tasks)
     rows = []
-    for (B, agg, n, cap), r in zip(keys, sims):
-        w = wc.with_(max_ampdu_bytes=agg)
+    for (B, agg, fer, rts, n, cap), r in zip(keys, sims):
+        w = wc.with_(max_ampdu_bytes=agg, frame_error_rate=fer, rts_cts=rts)
         m = meanfield_saturated(w, [(n, "BE", rate, cap)])[0]
         thr_ev = float(r["throughput_bps"].sum()) / 1e6
-        p_ev = float(r["n_coll"].sum() / max(r["n_att"].sum(), 1))
+        p_ev = float(1.0 - r["n_succ"].sum() / max(r["n_att"].sum(), 1))      # collisions and frame errors
         drop_ev = float(r["dropped_bytes"].sum() / max(r["dropped_bytes"].sum() + r["delivered_bytes"].sum(), 1))
-        rows.append({"bytes_per_access": cap, "n": n, "thr_mf": m["thr_mbps"], "thr_event": thr_ev,
+        rows.append({"bytes_per_access": cap, "fer": fer, "rts_cts": rts, "n": n, "thr_mf": m["thr_mbps"],
+                     "thr_event": thr_ev,
                      "err_thr": rel(m["thr_mbps"], thr_ev), "p_mf": m["p"], "p_event": p_ev,
                      "drop_mf": m["p"] ** w.max_tx, "drop_event": drop_ev})
     return rows
@@ -336,7 +341,7 @@ def main(argv=None):
     g = "{:.3f}"
     fmt = {"S_bianchi": "{:.4f}", "S_solver": "{:.4f}", "S_event": "{:.4f}", "err_solver": "{:+.2%}",
            "err_event": "{:+.2%}", "thr_mf": "{:.2f}", "thr_event": "{:.2f}", "err_thr": p, "access_mf_us": "{:.0f}",
-           "access_event_us": "{:.0f}", "err_access": p, "p_mf": g, "p_event": g, "drop_mf": "{:.4f}", "drop_event": "{:.4f}", "bytes_per_access": "{:.0f}",
+           "access_event_us": "{:.0f}", "err_access": p, "p_mf": g, "p_event": g, "drop_mf": "{:.4f}", "drop_event": "{:.4f}", "bytes_per_access": "{:.0f}", "fer": "{:.1f}",
            "vo_mf": "{:.2f}", "vo_event": "{:.2f}", "be_mf": "{:.2f}", "be_event": "{:.2f}", "err_vo": p,
            "err_be": p, "err_total": p, "offered_mbps": "{:.1f}", "mean_engine_ms": "{:.2f}",
            "mean_event_ms": "{:.2f}", "p50_engine_ms": "{:.2f}", "p50_event_ms": "{:.2f}",
@@ -344,7 +349,7 @@ def main(argv=None):
            "deliv_frac_engine": g, "deliv_frac_event": g, "engine_s": "{:.1f}", "substep_ms": "{}",
            "thr_ns3": "{:.2f}", "err_mf": p, "thr_mf_ack": "{:.2f}", "err_mf_ack": p}
     cols = {"A": ["access", "W", "m", "n", "S_bianchi", "S_solver", "S_event", "err_solver", "err_event"],
-            "B": ["bytes_per_access", "n", "thr_mf", "thr_event", "err_thr", "p_mf", "p_event", "drop_mf", "drop_event"],
+            "B": ["bytes_per_access", "fer", "rts_cts", "n", "thr_mf", "thr_event", "err_thr", "p_mf", "p_event", "drop_mf", "drop_event"],
             "C": ["n_vo", "n_be", "vo_mf", "vo_event", "err_vo", "be_mf", "be_event", "err_be", "err_total"],
             "D": ["n", "size", "offered_mbps", "mean_engine_ms", "mean_event_ms", "err_mean", "p50_engine_ms",
                   "p50_event_ms", "p95_engine_ms", "p95_event_ms", "err_p95", "deliv_frac_engine",

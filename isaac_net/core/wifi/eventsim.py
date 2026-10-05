@@ -12,8 +12,10 @@ It keeps the exact slot-level semantics of 802.11 DCF / EDCA that the mean-field
     has been idle for its AIFS is sent at the next slot boundary (immediate access); if the medium is busy or not
     idle long enough, it draws a counter first;
   * one access carries B = min(queued bytes, cap_i) application bytes (A-MPDU aggregation), as in the mean-field
-    model; the busy time of a success is busy_succ(i, B) and of a collision the longest busy_coll(i, B) of the
-    colliding stations. Channel times come from phy.AccessTiming (or Bianchi's parameters).
+    model; the busy time of a single transmission is busy_succ(i, B), whether it is received or lost to the residual
+    frame error (the PPDU still occupies the medium for its full duration, and the ACK timeout / EIFS that follows
+    is about the SIFS + ACK of a success), and of a collision the longest busy_coll(i, B) of the colliding
+    stations, as in meanfield.slot_time. Channel times come from phy.AccessTiming (or Bianchi's parameters).
 Not modeled (as in the mean-field model): propagation delay, capture, hidden nodes, EIFS after a collision seen
 by a third station, rate adaptation dynamics, and several queues per station.
 
@@ -45,7 +47,7 @@ class Station:
     Wmax: int                     # CWmax + 1
     aifsn: int
     cap: float                    # application bytes per access
-    busy_succ: object             # f(B) -> us: busy time of a successful exchange (after AIFS + backoff)
+    busy_succ: object             # f(B) -> us: busy time of a lone transmission, received or errored (after AIFS)
     busy_coll: object             # f(B) -> us: busy time of a collision
     max_tx: int = 7
     fer: float = 0.0
@@ -140,7 +142,7 @@ def run(stations, sim_us, sigma, sifs, arrivals=None, seed=0, timeout_us=math.in
         if len(tx) == 1:
             i = tx[0]
             ok = rng.random() >= stations[i].fer
-            busy = stations[i].busy_succ(Bs[i]) if ok else stations[i].busy_coll(Bs[i])
+            busy = stations[i].busy_succ(Bs[i])          # an errored frame occupies the medium as a success
             fails = [] if ok else [i]
         else:
             busy = max(stations[i].busy_coll(Bs[i]) for i in tx)
