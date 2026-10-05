@@ -83,6 +83,14 @@ CFGS = {
                                 dl=True, frame_buffer=64,
                                 traffic=[TM.periodic(600, 10, jitter_ms=2, priority=2),
                                          TM.bursty(1400, 30, 2, (0.3, 0.3), priority=1), TM.policy()]),
+    # closed-loop UL power control and the 38.214 CQI table (docs/configurability.md "Closed-loop power control, CQI
+    # table and sector antennas"): accumulation with the default command set; absolute commands (+-4 dB) clamped to a
+    # 3 dB range; the CQI table on the DL; both together with MCS table 2, a 2-slot TPC delay and a set target
+    "ul_tpc": lambda: NRConfig(ul_pc=True, ul_tpc=True),
+    "ul_tpc_abs": lambda: NRConfig(ul_pc=True, ul_tpc=True, ul_tpc_mode="absolute", ul_tpc_range_db=3.0),
+    "ul_dl_cqi38214": lambda: NRConfig(dl=True, cqi_table="38214"),
+    "ul_tpc_cqi": lambda: NRConfig(ul_pc=True, ul_tpc=True, ul_tpc_delay_slots=2, ul_tpc_target_db=10.0, dl=True,
+                                   cqi_table="38214", mcs_table=2),
 }
 RICIAN_CFGS = ("ul_rician", "ul_rician_los", "cells3_rician", "ul_dl_pf_rician")
 FCORR_CFGS = ("ul_fcorr", "ul_fcorr_rician")                 # both run on graph and triton
