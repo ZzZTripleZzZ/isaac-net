@@ -83,7 +83,14 @@ CFGS = {
                                 dl=True, frame_buffer=64,
                                 traffic=[TM.periodic(600, 10, jitter_ms=2, priority=2),
                                          TM.bursty(1400, 30, 2, (0.3, 0.3), priority=1), TM.policy()]),
+    # mini-slot grants (docs/configurability.md "Mini-slot grants"): 2-symbol occasions on UL and DL; 4-symbol UL
+    # occasions (and the special slot's 2 UL symbols as one) with the BSR pipeline and per-RBG PF (graph only: triton
+    # refuses mini-slots)
+    "ul_minislot2": lambda: NRConfig(ul_mini_slot_symbols=2, dl=True, mini_slot_dl=True),
+    "ul_minislot4": lambda: NRConfig(ul_mini_slot_symbols=4, special_ul_data=True, ul_grant_model="bsr",
+                                     pf_update="rbg", pf_avg_idle="freeze"),
 }
+MINISLOT_CFGS = ("ul_minislot2", "ul_minislot4")              # graph only (G1, G7)
 RICIAN_CFGS = ("ul_rician", "ul_rician_los", "cells3_rician", "ul_dl_pf_rician")
 FCORR_CFGS = ("ul_fcorr", "ul_fcorr_rician")                 # both run on graph and triton
 RICIAN_TRITON_CFGS = ("ul_rician", "ul_rician_los")          # one cell, lumped grants

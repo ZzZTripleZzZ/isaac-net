@@ -13,7 +13,8 @@ GPU (marker gpu; tests/nr_equiv.py is the harness, its CLI runs the 300-step ver
   G1 graph == reference bitwise: every output and every state tensor at every step, UL, UL+DL, three cells, per-robot
      Doppler, round robin / max C/I, traffic models with sub-step arrivals (one and three cells), Rician fading (fixed
      K, K from the LOS state, three cells), frequency-correlated fading (fixed delay spread, per-link delay spread
-     with Rician from the LOS state), the QoS scheduler (two and three classes, per-RBG PF), with random partial resets; statistics and counters at the end
+     with Rician from the LOS state), the QoS scheduler (two and three classes, per-RBG PF), mini-slot grants (2-symbol
+     UL + DL, 4-symbol UL with the BSR pipeline), with random partial resets; statistics and counters at the end
   G2 triton, teacher forced: identical decisions from an identical state (UL, UL+DL, LENA-like UL, and the 5G-LENA
      MAC switches the kernel implements: per-RBG PF with frozen averages, TDMA UL retx, previous-PUSCH AMC; Rician
      fading with fixed K and with K from the LOS state; frequency-correlated fading, FCORR = 1 and 2; the QoS scheduler)
@@ -22,8 +23,8 @@ GPU (marker gpu; tests/nr_equiv.py is the harness, its CLI runs the 300-step ver
   G5 make_engine("L2", backend="graph" / "triton") through the Isaac NetModule
   G7 graph == reference bitwise with the 5G-LENA MAC switches on (lena_match_v2, per-RBG PF on UL + DL with the BSR
      pipeline, every switch at three cells, the switches without the BSR pipeline, Rician with the BSR pipeline,
-     frequency-correlated fading with per-RBG PF); triton
-     refuses the BSR pipeline
+     frequency-correlated fading with per-RBG PF, mini-slot grants); triton
+     refuses the BSR pipeline and mini-slots
      (test_nr_loadfix.py L10)
 """
 import math
@@ -130,7 +131,7 @@ def test_r4_fast_backends_need_engine_rng_and_cuda():
 @pytest.mark.gpu
 @pytest.mark.parametrize("cfg", ["ul", "ul_dl", "cells3", "ul_doppler", "ul_maxci_pc", "ul_lena", "traffic",
                                  "traffic_c3", "ul_rician", "ul_rician_los", "cells3_rician",
-                                 "ul_fcorr", "ul_fcorr_rician", "qos", "qos_rbg"])
+                                 "ul_fcorr", "ul_fcorr_rician", "qos", "qos_rbg", "ul_minislot2", "ul_minislot4"])
 def test_g1_graph_bitwise(cfg):
     # steps 25..64 of the cycle: 25 medium steps (p = 0.4), then 15 all-large burst steps (p = 0.9). The reference
     # delivers 228 (ul_maxci_pc) to 12399 (traffic_c3) frames here, against 3 to 3800 for the old 12 idle steps.
@@ -152,7 +153,7 @@ def test_g2_triton_teacher_forced(cfg):
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("cfg", ["ul_lena_v2", "ul_dl_pf_rbg", "cells3_v2", "ul_lena_sched", "ul_dl_pf",
-                                 "ul_dl_pf_rician", "ul_fcorr"])
+                                 "ul_dl_pf_rician", "ul_fcorr", "ul_minislot2", "ul_minislot4"])
 def test_g7_graph_bitwise_lena_mac_switches(cfg):
     """graph == reference bitwise with the 5G-LENA MAC switches on (BSR pipeline state, per-RBG PF, TDMA retx)."""
     r = nr_equiv.run("graph", cfg, E=8, R=6, steps=40, seed=3, p_reset=0.2, phase_offset=25)
