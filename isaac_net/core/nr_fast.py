@@ -173,7 +173,7 @@ class NRGraphEngine(NREngine):
         return b
 
     def step(self, t, x=None, cur_hid=None, *, snr_db=None, dl_snr_db=None, pathgain_db=None, vel=None,
-             triggers=None):
+             triggers=None, blockers=None):
         """See NREngine.step (same inputs and outputs)."""
         net, cfg = self.net, self.config
         if net.trace_frames is not None or net.trace_frames_dl is not None or net.log_sinr or \
@@ -181,6 +181,8 @@ class NRGraphEngine(NREngine):
             raise NotImplementedError("debug traces are not supported by the fast backends; use backend='reference'")
         T = self._now(t)
         legacy = cur_hid is not None
+        if blockers is not None and (pathgain_db is not None or x is None or x.dim() != 3):
+            raise ValueError("blockers= needs poses x [E,R,2|3] through the engine's radio")
         if net.C > 1 and pathgain_db is None and (x is None or x.dim() != 3):
             raise ValueError("several cells: pass poses [E,R,2|3] or pathgain_db=[E,R,C]")
         if net.C == 1 and pathgain_db is not None:
@@ -195,14 +197,14 @@ class NRGraphEngine(NREngine):
             if pathgain_db is None:
                 if x is None or x.dim() != 3:
                     raise ValueError("several cells: pass poses [E,R,2|3] or pathgain_db=[E,R,C]")
-                pathgain_db = self._pathgain(x, vel)
+                pathgain_db = self._pathgain(x, vel, blockers)
             kind = "cells"
             ins["x"] = self._buf("pg", pathgain_db)
         elif pathgain_db is not None:
             raise ValueError("pathgain_db= needs config.n_cells > 1; use x (poses or SNR) with one cell")
         elif snr_db is None and x.dim() == 3:
             kind = "pg"
-            ins["x"] = self._buf("pg", self._pathgain(x, vel)[..., 0])
+            ins["x"] = self._buf("pg", self._pathgain(x, vel, blockers)[..., 0])
         else:
             xs = x if snr_db is None else snr_db
             kind = "snr" if xs.dim() == 2 else "snr3"
@@ -247,6 +249,8 @@ class NRGraphEngine(NREngine):
         res = {k: v.clone() for k, v in o.items()}
         if gen is not None:
             res["gen_accepted"], res["gen_bytes"] = gen
+        if x is not None and x.dim() == 3:
+            self._obstacle_outputs(res)            # eager radio state, after the replay (as the reference)
         return res
 
     def _static_gate(self):

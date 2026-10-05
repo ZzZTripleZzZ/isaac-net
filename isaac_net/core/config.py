@@ -82,6 +82,8 @@ FIELD_GROUPS = {
               "shadow_acf", "shadow_white_dcorr_m", "channel", "tr38901_scenario", "tr38901_los", "gnb_height_m",
               "ue_height_m", "o2i_indoor_frac", "o2i_model", "inf_clutter_density", "inf_clutter_size_m",
               "inf_clutter_height_m", "radio_map_path", "blockage", "blockage_radius_m", "blockage_loss_db",
+              "los_source", "los_raycast_samples", "los_diffraction", "los_soft", "nlos_extra_loss_db",
+              "blockage_model", "blocker_size_m", "blockage_max_db",
               "n_cells", "cell_layout", "cell_positions_m", "cell_isd_m", "cell_center_m", "cell_arena_m"),
     "multicell": ("ul_interference", "li_alpha", "ul_pc", "ul_pc_p0_dbm", "ul_pc_alpha", "a3_offset_db",
                   "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc"),
@@ -114,11 +116,34 @@ INTERFERENCE_FIELDS = ("ul_interference", "dl_interference", "li_alpha")    # n_
 UL_PC_FIELDS = ("ul_pc_p0_dbm", "ul_pc_alpha")               # ul_pc_on
 TR38901_FIELDS = ("tr38901_scenario", "tr38901_los", "o2i_indoor_frac", "o2i_model", "inf_clutter_density",
                   "inf_clutter_size_m", "inf_clutter_height_m")             # channel="tr38901"
-BLOCKAGE_FIELDS = ("blockage_radius_m", "blockage_loss_db")                 # blockage=True
+BLOCKAGE_FIELDS = ("blockage_radius_m", "blockage_loss_db", "blockage_model", "blocker_size_m",
+                   "blockage_max_db")                                       # blockage=True
+SPHERE_FIELDS = ("blockage_radius_m", "blockage_loss_db")                   # blockage_model="sphere"
+LOS_SOURCES = ("stochastic", "map", "raycast", "callback")
 FADING_FIELDS = ("fading_rho_per_ms", "ue_speed_mps", "fading_doppler", "doppler_min_speed_mps")   # fading=True
 # frame fields the multi-cell legacy engine (NetSlotMC) reads: only through ul_slot_ms, which converts the A3
 # time-to-trigger and the handover interruption to UL slots (ttt_slots, ho_int_slots), so only with n_cells > 1
 NETSLOTMC_FRAME_FIELDS = ("mu", "tdd_pattern", "special_split", "special_ul_data", "ul_data_symbols")
+
+
+def _obstacle_unread(cfg):
+    """Obstacle fields (channels/los.py, channels/blockage.py) that cfg's switches leave unread."""
+    off = set()
+    if cfg.los_source != "raycast":
+        off |= {"los_raycast_samples", "los_diffraction"}
+    if not (cfg.channel == "tr38901" and cfg.los_source == "stochastic"):
+        off.add("los_soft")
+    if not (cfg.channel == "log_distance" and cfg.los_source != "stochastic"):
+        off.add("nlos_extra_loss_db")
+    if cfg.los_source != "stochastic":
+        off.add("tr38901_los")                     # the geometric source decides the state
+    if cfg.blockage_model != "sphere":
+        off |= set(SPHERE_FIELDS)
+    if cfg.blockage_model != "screen":
+        off.add("blocker_size_m")
+    if cfg.blockage_model == "sphere":
+        off.add("blockage_max_db")
+    return off
 
 
 def _switch_unread(cfg, nr):
@@ -138,10 +163,11 @@ def _switch_unread(cfg, nr):
         off |= {"gnb_nf_db", "ue_nf_db"}
     if cfg.channel != "tr38901":
         off |= set(TR38901_FIELDS)
-    if cfg.channel != "radio_map":
-        off.add("radio_map_path")
+    if cfg.channel != "radio_map" and cfg.los_source not in ("map", "raycast"):
+        off.add("radio_map_path")              # map / raycast LOS sources read los_prob / obstacle_z from the map
     if not cfg.blockage:
         off |= set(BLOCKAGE_FIELDS)
+    off |= _obstacle_unread(cfg)
     if nr:
         if not cfg.fading:
             off |= set(FADING_FIELDS)
@@ -380,6 +406,19 @@ class NRConfig:
     blockage: bool = False               # add-on to every channel: other robots are spheres that block the link
     blockage_radius_m: float = 0.3
     blockage_loss_db: float = 20.0       # extra loss on a link blocked by at least one robot body
+    # ---- obstacles and NLOS (channels/los.py, channels/blockage.py; see docs/obstacles.md) ----
+    los_source: str = "stochastic"       # LOS state: "stochastic" (tr38901 Pr_LOS, today) | "map" (radio map los_prob)
+                                         # | "raycast" (radio map obstacle_z height map) | "callback" (a blocked_fn,
+                                         # RadioMC.set_los_callback); map / raycast read radio_map_path
+    los_raycast_samples: int = 32        # raycast: samples along each robot-gNB segment
+    los_diffraction: bool = False        # raycast: ITU-R P.526 knife-edge loss from the clearance (LOS -> NLOS ramp)
+    los_soft: bool = False               # tr38901 with los_source="stochastic": Sec. 7.6.3.3 soft LOS blend
+    nlos_extra_loss_db: float = 0.0      # log_distance with a geometric LOS state: extra loss on NLOS links
+    blockage_model: str = "sphere"       # blockage=True: "sphere" (above) | "screen" (38.901 model B, robots and
+                                         # step(blockers=) as screens) | "stochastic" (38.901 model A)
+    blocker_size_m: tuple = ((0.6, 1.5), (0.3, 1.7), (4.8, 1.4))   # screen (w, h) m per class: robot, human,
+                                         # vehicle (Table 7.6.4.2-5 for human and vehicle)
+    blockage_max_db: float = 40.0        # screen / stochastic: cap of the summed blockage loss per link
     # ---- cells: layout, uplink interference and power control, association and handover ----
     # Default: one gNB at the origin with the fixed noise floor, which is the legacy NetSlot geometry.
     # multicell() gives the multi-cell preset. n_cells > 1 runs on level "L2" (NR engine, UL and DL
@@ -485,6 +524,17 @@ class NRConfig:
         assert self.fading_doppler in ("global", "per_robot") and self.doppler_min_speed_mps >= 0
         assert self.tr38901_los in ("stochastic", "los", "nlos") and self.o2i_model in ("low", "high")
         assert 0.0 <= self.o2i_indoor_frac <= 1.0 and self.blockage_radius_m > 0
+        assert self.los_source in LOS_SOURCES, f"los_source must be one of {LOS_SOURCES}"
+        assert self.los_raycast_samples >= 2 and self.nlos_extra_loss_db >= 0 and self.blockage_max_db > 0
+        assert not self.los_diffraction or self.los_source == "raycast", "los_diffraction needs los_source='raycast'"
+        assert not self.los_soft or (self.channel == "tr38901" and self.los_source == "stochastic"
+                                     and self.tr38901_los == "stochastic"), \
+            "los_soft needs channel='tr38901', los_source='stochastic' and tr38901_los='stochastic'"
+        assert self.blockage_model in ("sphere", "screen", "stochastic"), \
+            "blockage_model must be 'sphere', 'screen' or 'stochastic'"
+        self.blocker_size_m = tuple(tuple(float(x) for x in wh) for wh in self.blocker_size_m)
+        assert len(self.blocker_size_m) >= 1 and all(len(wh) == 2 and wh[0] > 0 and wh[1] > 0
+                                                     for wh in self.blocker_size_m), "blocker_size_m: ((w, h), ...)"
         if self.channel == "tr38901":
             from .channels.tr38901 import SCENARIOS, scenario_name
             self.tr38901_scenario = scenario_name(self.tr38901_scenario)

@@ -56,6 +56,7 @@ class SceneRadioMapCfg:
     depth: int = 4
     diffraction: bool = False
     los_map: bool = True
+    obstacle_z: bool = False                   # also bake the obstacle height map (NRConfig.los_source="raycast")
     seed: int = 42
     variant: Optional[str] = None              # Mitsuba variant ("cuda", "llvm", ...); None = Sionna's default
     python: Optional[str] = None               # interpreter with sionna-rt when this one has none
@@ -114,7 +115,7 @@ def bake_stage_map(stage, scfg: SceneRadioMapCfg, tx: Sequence[Sequence[float]],
     bounds = tuple(scfg.bounds) if scfg.bounds is not None else \
         (res.bounds_min[0], res.bounds_min[1], res.bounds_max[0], res.bounds_max[1])
     key = bake_key(res.scene_hash, tx, fc_ghz, bounds, scfg.cell_m, ue_h, scfg.samples, scfg.depth, True,
-                   scfg.diffraction, scfg.los_map, 3, scfg.seed)
+                   scfg.diffraction, scfg.los_map, 3, scfg.seed, scfg.obstacle_z)
     path = os.path.join(root, f"{key[:24]}.pt")
     final_scene = os.path.join(root, f"scene_{res.scene_hash[:16]}")
     if os.path.exists(final_scene):                  # same geometry: refresh the files (the writer may have changed)
@@ -133,7 +134,8 @@ def bake_stage_map(stage, scfg: SceneRadioMapCfg, tx: Sequence[Sequence[float]],
     if _sionna_available():
         import json
         m = bake_scene(xml, tx, fc_ghz, bounds, scfg.cell_m, ue_h, scfg.samples, scfg.depth,
-                       diffraction=scfg.diffraction, los_map=scfg.los_map, seed=scfg.seed, variant=scfg.variant)
+                       diffraction=scfg.diffraction, los_map=scfg.los_map, seed=scfg.seed, variant=scfg.variant,
+                       obstacle_z=scfg.obstacle_z)
         m.update(scene_hash=res.scene_hash, bake_key=key, source="sionna-rt RadioMapSolver, stage " + scfg.root,
                  materials=json.dumps(dict(materials=res.materials, sources=res.sources, coverage=res.coverage())))
         write_map(path, m)
@@ -152,6 +154,8 @@ def bake_stage_map(stage, scfg: SceneRadioMapCfg, tx: Sequence[Sequence[float]],
             cmd.append("--los-map")
         if scfg.diffraction:
             cmd.append("--diffraction")
+        if scfg.obstacle_z:
+            cmd.append("--obstacle-z")
         if scfg.variant:
             cmd += ["--variant", scfg.variant]
         env = dict(os.environ, PYTHONPATH=REPO_ROOT + os.pathsep + os.environ.get("PYTHONPATH", ""))

@@ -19,7 +19,8 @@ isaac_net/
       tr38901.py     #   TR 38.901 path loss, LOS probability, shadow-fading sigma, O2I (tables, hand-checkable)
       models.py      #   TR38901Channel (spatially consistent LOS state, O2I), RadioMapChannel
       radio_map.py   #   RadioMap: [C,H,W] gain map file format and bilinear sampling
-      blockage.py    #   robot bodies as spheres on the robot-gNB segment
+      blockage.py    #   robot bodies as spheres; TR 38.901 blockage model B (screens) and model A (regions)
+      los.py         #   geometric LOS state (baked los_prob, 2.5-D ray march over obstacle_z, callback), knife edge
       doppler.py     #   per-robot AR(1) fading correlation for the NR engine
     phy.py           # 3GPP MCS/TBS tables, EESM effective SINR, BLER tables (Sionna, or local 5G-LENA)
     mac.py           # MacLink: per-slot MAC of one direction: multi-process HARQ, PF per RBG (one scheduler per

@@ -6,8 +6,14 @@ File format (.npz, or .pt holding the same keys):
                             so it serves UL and DL. Row i runs along y, column j along x.
   bounds   float [4]        (x0, y0, x1, y1) env-local metres: x_j = x0 + j (x1 - x0) / (W - 1), y_i likewise, so the
                             grid points include the arena corners.
-  optional metadata: fc_ghz, ue_height_m, source (str).
-Outside the bounds the map is clamped to its border. Sampling is in dB, bilinear, fixed-shape and graph-safe.
+  los_prob    float [C, H, W]  optional: share of LOS points per grid cell (tools/scene/bake.py --los-map); kept as
+                               RadioMap.los_prob, read by NRConfig.los_source="map" (channels/los.py)
+  obstacle_z  float [H, W]     optional: obstacle top height above the floor (m, 0 = free floor) per grid cell, the
+                               max triangle z of the static scene over the cell (bake.py --obstacle-z); kept as
+                               RadioMap.obstacle_z, read by los_source="raycast"
+  optional metadata: fc_ghz, ue_height_m, gnb_xy, gnb_z, diffraction (bool), source (str).
+Outside the bounds the map is clamped to its border. Sampling is in dB, bilinear, fixed-shape and graph-safe; los_prob
+and obstacle_z are sampled the same way. Files without los_prob / obstacle_z load as before (both None).
 
 Sources of maps: tools/bake_radio_map_sionna.py (Sionna RT RadioMapSolver on a scene), measurements on a grid, or
 make_synthetic_map() below (the tiny map shipped in core/data/radio_map_synthetic.npz).
@@ -23,8 +29,11 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 SYNTHETIC_MAP = os.path.join(DATA_DIR, "radio_map_synthetic.npz")
 
 
+GRIDS = ("los_prob", "obstacle_z")        # optional grids kept as attributes (not metadata)
+
+
 class RadioMap:
-    def __init__(self, gain_db, bounds, device="cpu", meta=None):
+    def __init__(self, gain_db, bounds, device="cpu", meta=None, los_prob=None, obstacle_z=None):
         g = torch.as_tensor(gain_db, dtype=torch.float32)
         if g.dim() == 2:
             g = g[None]
@@ -35,9 +44,24 @@ class RadioMap:
         self.bounds = (x0, y0, x1, y1)
         self.meta = dict(meta or {})
         self.gain = g.to(device).reshape(self.C, self.H * self.W).contiguous()
+        self.los_prob = self.obstacle_z = None
+        if los_prob is not None:
+            lp = torch.as_tensor(los_prob, dtype=torch.float32)
+            lp = lp[None] if lp.dim() == 2 else lp
+            assert lp.shape == g.shape, f"los_prob must be [C, H, W] = {tuple(g.shape)}, got {tuple(lp.shape)}"
+            self.los_prob = lp.to(device).reshape(self.C, self.H * self.W).contiguous()
+        if obstacle_z is not None:
+            oz = torch.as_tensor(obstacle_z, dtype=torch.float32)
+            assert tuple(oz.shape) == (self.H, self.W), f"obstacle_z must be [H, W] = {(self.H, self.W)}"
+            self.obstacle_z = oz.to(device).reshape(1, self.H * self.W).contiguous()
+
+    def _grid(self, x):
+        return None if x is None else x.view(-1, self.H, self.W)
 
     def to(self, device):
-        return RadioMap(self.gain.view(self.C, self.H, self.W), self.bounds, device, self.meta)
+        oz = None if self.obstacle_z is None else self.obstacle_z.view(self.H, self.W)
+        return RadioMap(self.gain.view(self.C, self.H, self.W), self.bounds, device, self.meta,
+                        los_prob=self._grid(self.los_prob), obstacle_z=oz)
 
     @classmethod
     def load(cls, path, device="cpu"):
@@ -48,16 +72,34 @@ class RadioMap:
             with np.load(path, allow_pickle=False) as z:
                 d = {k: z[k] for k in z.files}
         meta = {k: (v.item() if hasattr(v, "item") and np.ndim(v) == 0 else v) for k, v in d.items()
-                if k not in ("gain_db", "bounds")}
-        return cls(d["gain_db"], np.asarray(d["bounds"]).reshape(4), device, meta)
+                if k not in ("gain_db", "bounds") + GRIDS}
+        grids = {k: np.asarray(d[k], dtype=np.float32) for k in GRIDS if k in d}
+        return cls(d["gain_db"], np.asarray(d["bounds"]).reshape(4), device, meta, **grids)
 
     def save(self, path):
         meta = {k: np.asarray(v) for k, v in self.meta.items()}
+        grids = {}
+        if self.los_prob is not None:
+            grids["los_prob"] = self.los_prob.view(self.C, self.H, self.W).cpu().numpy()
+        if self.obstacle_z is not None:
+            grids["obstacle_z"] = self.obstacle_z.view(self.H, self.W).cpu().numpy()
         np.savez_compressed(path, gain_db=self.gain.view(self.C, self.H, self.W).cpu().numpy(),
-                            bounds=np.asarray(self.bounds, dtype=np.float64), **meta)
+                            bounds=np.asarray(self.bounds, dtype=np.float64), **meta, **grids)
 
     def sample(self, pos):
         """pos [E,R,2|3] (z ignored) -> path gain [E,R,C] dB, bilinear in dB, clamped at the border."""
+        return self._bilinear(self.gain, pos)
+
+    def sample_los(self, pos):
+        """pos [E,R,2|3] -> baked LOS share [E,R,C] (bilinear; needs los_prob)."""
+        return self._bilinear(self.los_prob, pos)
+
+    def sample_height(self, xy):
+        """xy [..., 2] -> obstacle top height [...] in m (bilinear; needs obstacle_z)."""
+        return self._bilinear(self.obstacle_z, xy)[..., 0]
+
+    def _bilinear(self, g, pos):
+        """g [K, H*W] -> [*pos.shape[:-1], K], bilinear, clamped at the border (the op order of sample())."""
         x0, y0, x1, y1 = self.bounds
         W, H = self.W, self.H
         fx = ((pos[..., 0] - x0) * ((W - 1) / (x1 - x0))).clamp(0, W - 1)
@@ -66,12 +108,11 @@ class RadioMap:
         iy = fy.floor().clamp(max=H - 2)
         tx, ty = fx - ix, fy - iy
         i00 = (iy.long() * W + ix.long()).reshape(-1)
-        g = self.gain
         v00, v01 = g[:, i00], g[:, i00 + 1]
         v10, v11 = g[:, i00 + W], g[:, i00 + W + 1]
         tx, ty = tx.reshape(-1), ty.reshape(-1)
         out = (v00 * (1 - tx) + v01 * tx) * (1 - ty) + (v10 * (1 - tx) + v11 * tx) * ty      # [C, E*R]
-        return out.t().reshape(*pos.shape[:-1], self.C)
+        return out.t().reshape(*pos.shape[:-1], g.shape[0])
 
 
 def make_synthetic_map(gnb_xy, bounds=(0.0, 0.0, 150.0, 150.0), H=16, W=16, pl_const_db=40.0, pl_exp=3.5,

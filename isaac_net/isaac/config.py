@@ -26,7 +26,10 @@ Observation features (one normalization, documented in docs/isaac-lab.md):
     serving_cell    G     one-hot serving cell (G = number of gNBs)
     last_delivered  1     at least one message of the robot was delivered this step
     delay_history   k     delays of the last k delivered messages / time scale, newest first, 0 = none yet
-    blocked         1     line of sight to the serving gNB blocked in the last pose chunk
+    blocked         1     line of sight to the serving gNB blocked in the last pose chunk (Isaac radio); with
+                          radio="engine": a dynamic blocker on the serving link (NRConfig.blockage)
+    los             1     line of sight to the serving gNB: the engine radio's LOS state (NRConfig.los_source,
+                          docs/obstacles.md) with radio="engine", else not blocked
 
 Time scale: obs_time_scale_s, default 50 control steps (5 s at 100 ms). Before the first step of an episode every
 feature is 0.
@@ -54,7 +57,7 @@ from ..core.config import NRConfig, fields_read_by
 
 # ------------------------------------------------------------------------------------------------ observation
 OBS_FEATURES = ("delivered_mask", "msg_delay", "aoi", "queue_len", "queue_bytes", "sinr", "rsrp", "serving_cell",
-                "last_delivered", "delay_history", "blocked")
+                "last_delivered", "delay_history", "blocked", "los")
 DEFAULT_OBS = ("aoi", "sinr", "queue_len", "last_delivered")
 _OBS_ALIASES = {"delivered": "last_delivered", "snr": "sinr", "delay": "msg_delay", "queue": "queue_len"}
 DB_SCALE = 40.0                       # every dB quantity is divided by this

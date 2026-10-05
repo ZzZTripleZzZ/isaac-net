@@ -190,3 +190,28 @@ try:
         out[e, r, g] = wp.where(q.result, 1, 0)
 except Exception:          # warp missing; the torch fallback above still works
     wp = None
+
+
+def mesh_blocked_fn(mesh, gnb, to_world):
+    """A blocked_fn around los_blocked_kernel: poses [E,R,3] (radio frame) -> [E,R,G] bool. mesh: a wp.Mesh of
+    the static scene (robots excluded); gnb: [E,G,3] radio-frame gNB positions, or a callable returning them (e.g.
+    lambda: net.radio.gnb_env for the Isaac radio; for the engine radio, RadioMC.gnb3 expanded to [E,C,3]);
+    to_world [E,3] = scene.env_origins - pose_offset_m. Works for IsaacNetCfg's blocked_fn and for the engine radio
+    with NRConfig(los_source="callback") (NetModule.step(..., blocked_fn=...) or NREngine.set_los_callback).
+    Needs warp; runs outside CUDA-graph capture (the engines evaluate the radio eagerly)."""
+    if wp is None:
+        raise ImportError("mesh_blocked_fn needs warp (ships with Isaac Lab)")
+
+    def fn(p):
+        g = gnb() if callable(gnb) else gnb
+        p3 = p if p.shape[-1] == 3 else torch.cat([p, torch.zeros_like(p[..., :1])], -1)
+        E, R = p3.shape[:2]
+        G = g.shape[1]
+        out = torch.zeros(E, R, G, dtype=torch.int32, device=p3.device)
+        wp.launch(los_blocked_kernel, dim=(E, R, G),
+                  inputs=[mesh.id, wp.from_torch(p3.contiguous(), dtype=wp.vec3),
+                          wp.from_torch(g.contiguous(), dtype=wp.vec3), wp.from_torch(to_world.contiguous(),
+                                                                                       dtype=wp.vec3),
+                          wp.from_torch(out)])
+        return out.bool()
+    return fn

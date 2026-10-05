@@ -1,7 +1,7 @@
 """Bake a radio map (NRConfig.channel="radio_map") from a USD stage or a Sionna RT scene with Sionna RT.
 
     python -m isaac_net.tools.scene.bake --usd scene.usd --tx 10 20 6 --tx 50 20 6 --fc 3.5 --cell 1.0 \\
-        --out map.pt [--los-map] [--variant llvm]
+        --out map.pt [--los-map] [--obstacle-z] [--variant llvm]
 
 Steps: export the stage (usd_export: meshes, world transforms, ITU materials, map frame), run Sionna RT's
 RadioMapSolver for every transmitter on a horizontal grid at the robot antenna height, and write the file that
@@ -13,10 +13,14 @@ channels.RadioMap loads:
     gnb_xy    [C, 2], gnb_z [C]
     los_prob  [C, H, W]  optional (--los-map): share of the cell (k x k points at the antenna height, --los-sub k)
                          with an unobstructed straight segment to the gNB antenna
+    obstacle_z [H, W]    optional (--obstacle-z): obstacle top height (m, 0 = floor) per cell, the max z of the
+                         exported triangles over the cell (heightmap.py), for NRConfig.los_source="raycast"; robots
+                         must be excluded from the export and a ceiling dropped with --z-max
     valid     [H, W]     cells that received ray energy from at least one gNB. Cells a gNB's rays never reached
                          (inside solid obstacles, or beyond max_depth interactions) are filled per gNB from their
                          neighbours (--no-fill keeps the floor value, -250 dB)
-    metadata  fc_ghz, ue_height_m, cell_m, samples, max_depth, scene_hash, bake_key, materials (JSON), bake_s, source
+    metadata  fc_ghz, ue_height_m, cell_m, samples, max_depth, diffraction, scene_hash, bake_key, materials (JSON),
+              bake_s, source
 
 A .pt output holds torch tensors (torch is then needed, and RadioMap.load reads it with weights_only); any other
 suffix writes an .npz, which needs numpy only.
@@ -44,13 +48,16 @@ BAKE_VERSION = 2          # bump when the bake's output for identical inputs cha
 
 
 def bake_key(scene_hash: str, tx, fc_ghz, bounds, cell, ue_h, samples, depth, refraction=True, diffraction=False,
-             los_map=False, los_sub=3, seed=42) -> str:
-    """Cache key of a bake: the scene hash and every parameter that changes the map."""
+             los_map=False, los_sub=3, seed=42, obstacle_z=False) -> str:
+    """Cache key of a bake: the scene hash and every parameter that changes the map (obstacle_z enters only when
+    set, so the keys of earlier bakes are unchanged)."""
     d = dict(v=BAKE_VERSION, scene=scene_hash, tx=[[round(float(x), 4) for x in t] for t in tx],
              fc=round(float(fc_ghz), 6), bounds=None if bounds is None else [round(float(b), 4) for b in bounds],
              cell=round(float(cell), 4), ue_h=round(float(ue_h), 4), samples=int(samples), depth=int(depth),
              refraction=bool(refraction), diffraction=bool(diffraction), los=bool(los_map), los_sub=int(los_sub),
              seed=int(seed))
+    if obstacle_z:
+        d["obstacle_z"] = True
     return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
 
 
@@ -120,10 +127,19 @@ def los_probability(scene, tx: Sequence[float], cell_centers: np.ndarray, cell: 
     return 1.0 - blocked.reshape(H, W, sub * sub).mean(-1)
 
 
+def obstacle_height_map(scene_xml: str, bounds, H: int, W: int) -> np.ndarray:
+    """obstacle_z [H, W] from the meshes next to an exported scene.xml (meshes/*.ply), on the map grid."""
+    from .heightmap import height_map, scene_triangles
+
+    v, f = scene_triangles(os.path.dirname(os.path.abspath(scene_xml)))
+    return height_map(v, f, bounds, H, W)
+
+
 def bake_scene(scene_xml: str, tx: Sequence[Sequence[float]], fc_ghz: float, bounds: Sequence[float],
                cell: float = 1.0, ue_h: float = 1.5, samples: int = 1_000_000, depth: int = 4,
                refraction: bool = True, diffraction: bool = False, los_map: bool = False, los_sub: int = 3,
-               seed: int = 42, variant: Optional[str] = None, fill: bool = True, floor_db: float = -250.0) -> dict:
+               seed: int = 42, variant: Optional[str] = None, fill: bool = True, floor_db: float = -250.0,
+               obstacle_z: bool = False) -> dict:
     """Run Sionna RT's RadioMapSolver on a Mitsuba scene. bounds (x0, y0, x1, y1) is the area to cover; the grid
     starts at (x0, y0) with cells of `cell` metres and is rounded up to whole cells. Returns the map dict (module
     docstring) with numpy arrays."""
@@ -166,7 +182,9 @@ def bake_scene(scene_xml: str, tx: Sequence[Sequence[float]], fc_ghz: float, bou
                bounds=np.array([cc[0, 0, 0], cc[0, 0, 1], cc[-1, -1, 0], cc[-1, -1, 1]], np.float64),
                gnb_xy=np.array([[p[0], p[1]] for p in tx], np.float64), gnb_z=np.array([p[2] for p in tx], np.float64),
                valid=valid, fc_ghz=float(fc_ghz), ue_height_m=float(ue_h), cell_m=float(cell), samples=int(samples),
-               max_depth=int(depth), radio_map_s=float(t_rm))
+               max_depth=int(depth), radio_map_s=float(t_rm), diffraction=bool(diffraction))
+    if obstacle_z:
+        out["obstacle_z"] = obstacle_height_map(scene_xml, out["bounds"], gain.shape[1], gain.shape[2])
     if los_map:
         t1 = time.perf_counter()
         out["los_prob"] = np.stack([los_probability(scene, p, cc, cell, los_sub) for p in tx]).astype(np.float32)
@@ -239,6 +257,8 @@ def build_parser():
     ap.add_argument("--diffraction", action="store_true", help="enable wedge diffraction")
     ap.add_argument("--los-map", action="store_true", help="also write los_prob [C,H,W]")
     ap.add_argument("--los-sub", type=int, default=3, help="k x k points per cell for los_prob")
+    ap.add_argument("--obstacle-z", action="store_true",
+                    help="also write obstacle_z [H,W] (max triangle z per cell) for los_source='raycast'")
     ap.add_argument("--no-fill", action="store_true", help="leave cells no ray reached at the floor value")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--variant", default=None, help="Mitsuba variant: cuda, llvm (CPU) or a full name")
@@ -309,10 +329,10 @@ def main(argv=None):
         raise SystemExit("--bounds is needed with --scene-xml without a manifest.json")
     m = bake_scene(xml, a.tx, a.fc, bounds, a.cell, a.ue_height, int(a.samples), a.depth,
                    refraction=not a.no_refraction, diffraction=a.diffraction, los_map=a.los_map, los_sub=a.los_sub,
-                   seed=a.seed, variant=a.variant, fill=not a.no_fill)
+                   seed=a.seed, variant=a.variant, fill=not a.no_fill, obstacle_z=a.obstacle_z)
     m["scene_hash"] = scene_hash
     m["bake_key"] = bake_key(scene_hash, a.tx, a.fc, bounds, a.cell, a.ue_height, int(a.samples), a.depth,
-                             not a.no_refraction, a.diffraction, a.los_map, a.los_sub, a.seed)
+                             not a.no_refraction, a.diffraction, a.los_map, a.los_sub, a.seed, a.obstacle_z)
     m["source"] = "sionna-rt RadioMapSolver, " + os.path.basename(a.usd or a.scene_xml)
     if manifest is not None:
         m["materials"] = json.dumps(manifest)
