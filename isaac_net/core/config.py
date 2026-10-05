@@ -86,6 +86,10 @@ FIELD_GROUPS = {
     "multicell": ("ul_interference", "li_alpha", "ul_pc", "ul_pc_p0_dbm", "ul_pc_alpha", "a3_offset_db",
                   "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc"),
     "nr_multicell": ("dl_interference",),      # read by the NR engine only (NetSlotMC has no downlink)
+    "access": ("rach", "rach_occasion_slots", "rach_preambles", "rach_rar_window_slots", "rach_msg3_slots",
+               "rach_backoff_ms", "rach_max_attempts", "rach_initial", "rach_release_after_ms", "drx",
+               "drx_inactivity_ms", "drx_cycle_ms", "drx_on_ms", "drx_short_cycle_ms", "drx_short_cycles",
+               "drx_start_offset_ms", "drx_ul_wake"),   # core/access.py, level "L2" only
     "traffic": ("traffic",),
     "wrappers": ("background", "energy"),      # make_engine wrappers (core/background.py, core/energy.py)
     "wifi": ("wifi",),                         # level WIFI (core/wifi), which also reads app, proto (rng) and radio
@@ -116,6 +120,8 @@ TR38901_FIELDS = ("tr38901_scenario", "tr38901_los", "o2i_indoor_frac", "o2i_mod
                   "inf_clutter_size_m", "inf_clutter_height_m")             # channel="tr38901"
 BLOCKAGE_FIELDS = ("blockage_radius_m", "blockage_loss_db")                 # blockage=True
 FADING_FIELDS = ("fading_rho_per_ms", "ue_speed_mps", "fading_doppler", "doppler_min_speed_mps")   # fading=True
+RACH_FIELDS = tuple(f for f in FIELD_GROUPS["access"] if f.startswith("rach_"))     # rach=True
+DRX_FIELDS = tuple(f for f in FIELD_GROUPS["access"] if f.startswith("drx_"))       # drx=True
 # frame fields the multi-cell legacy engine (NetSlotMC) reads: only through ul_slot_ms, which converts the A3
 # time-to-trigger and the handover interruption to UL slots (ttt_slots, ho_int_slots), so only with n_cells > 1
 NETSLOTMC_FRAME_FIELDS = ("mu", "tdd_pattern", "special_split", "special_ul_data", "ul_data_symbols")
@@ -149,6 +155,12 @@ def _switch_unread(cfg, nr):
             off.add("doppler_min_speed_mps")
         if cfg.tbs_mode != "lena":
             off.add("lena_ref_sc_per_rb")
+        if not cfg.rach:
+            off |= set(RACH_FIELDS)
+        if not cfg.drx:
+            off |= set(DRX_FIELDS)
+        elif cfg.drx_short_cycle_ms is None:
+            off.add("drx_short_cycles")
     return off
 
 
@@ -159,7 +171,7 @@ def fields_read_by(level, cfg=None):
     fields of the selected channel model, blockage and fading fields only when on, lena_ref_sc_per_rb only with
     tbs_mode="lena")."""
     groups = {"L0": ("app", "proto", "l0"), "L0DR": ("app", "proto", "l0dr"), "L1": ("app", "proto", "l1"),
-              "L2": ("app", "frame", "nr", "link", "radio", "multicell", "nr_multicell", "traffic")}.get(
+              "L2": ("app", "frame", "nr", "link", "radio", "multicell", "nr_multicell", "traffic", "access")}.get(
         level, ("app", "proto"))
     netslot_mc = level == "L2-legacy" and cfg is not None and not cfg.is_legacy_cell()
     if netslot_mc:
@@ -403,6 +415,28 @@ class NRConfig:
     a3_ttt_ms: float = 300.0             # ... held for the time-to-trigger
     ho_interruption_ms: float = 40.0     # robot cannot be scheduled after a handover
     ho_rlc: str = "carry"                # "carry": lossless, queued frames continue at the target; "flush": dropped
+    # ---- access state machine (core/access.py, level "L2"): RACH / connection setup and connected-mode DRX ----
+    # Off by default (every robot always connected and awake, the engine before these fields, bitwise).
+    rach: bool = False                   # contention-based random access (TS 38.321 Sec. 5.1) before a robot is served
+    rach_occasion_slots: int = 20        # RACH occasion (RO) period; ROs at the first UL-capable slot of every period
+                                         # window (a multiple of the TDD period; 20 slots = 10 ms at mu = 1)
+    rach_preambles: int = 64             # contention-based preambles per cell and RO (TS 38.211: 64 per cell)
+    rach_rar_window_slots: int = 10      # preamble -> RAR (the RAR is taken at the end of ra-ResponseWindow)
+    rach_msg3_slots: int = 10            # RAR -> contention resolution (Msg3 on PUSCH, Msg4); then the robot is served
+    rach_backoff_ms: float = 20.0        # backoff after a collision: uniform in [0, rach_backoff_ms] (38.321 Sec.
+                                         # 5.1.4, backoff indicator; 20 ms = BI index 2 of Table 7.2-1)
+    rach_max_attempts: int = 10          # preambleTransMax; a procedure that reaches it fails and restarts
+    rach_initial: str = "connected"      # state after a reset: "connected" (as without RACH) or "idle" (power-on)
+    rach_release_after_ms: float | None = None   # RRC release to idle after this inactivity; None = never
+    drx: bool = False                    # connected-mode DRX (TS 38.321 Sec. 5.7)
+    drx_inactivity_ms: float = 100.0     # drx-InactivityTimer: awake this long after the last scheduling activity
+    drx_cycle_ms: float = 160.0          # drx-LongCycle
+    drx_on_ms: float = 10.0              # drx-onDurationTimer
+    drx_short_cycle_ms: float | None = None   # drx-ShortCycle; None = no short cycle
+    drx_short_cycles: int = 2            # drx-ShortCycleTimer in short cycles
+    drx_start_offset_ms: float = 0.0     # drx-StartOffset (on-durations start at slot offset mod cycle)
+    drx_ul_wake: str = "sr"              # UL data while dormant: "sr" wakes the robot at once (a pending SR is Active
+                                         # Time, 38.321 Sec. 5.7), "on_duration" waits for the next on-duration
     # ---- directions and application ----
     ul: bool = True
     dl: bool = False
@@ -474,6 +508,14 @@ class NRConfig:
         assert self.l0_delay_median_steps > 0 and 0 <= self.l0_loss <= 1 and self.l1_eta > 0
         assert self.rng in ("engine", "global"), "rng must be 'engine' or 'global'"
         assert self.frame_buffer >= 1 and self.timeout_steps >= 1 and self.control_step_ms > 0
+        assert self.rach_initial in ("connected", "idle"), "rach_initial: 'connected' or 'idle'"
+        assert self.rach_occasion_slots >= 1 and self.rach_preambles >= 1 and self.rach_max_attempts >= 1
+        assert min(self.rach_rar_window_slots, self.rach_msg3_slots) >= 0 and self.rach_backoff_ms >= 0
+        assert self.rach_release_after_ms is None or self.rach_release_after_ms > 0
+        assert self.drx_ul_wake in ("sr", "on_duration"), "drx_ul_wake: 'sr' or 'on_duration'"
+        assert self.drx_inactivity_ms >= 0 and 0 < self.drx_on_ms <= self.drx_cycle_ms and self.drx_start_offset_ms >= 0
+        assert self.drx_short_cycle_ms is None or 0 < self.drx_on_ms <= self.drx_short_cycle_ms <= self.drx_cycle_ms
+        assert self.drx_short_cycles >= 1
         assert self.proto_ul_slots_per_step is None or self.proto_ul_slots_per_step >= 1
         if self.ue_speed_mps is not None:
             self.fading_rho_per_ms = fading_rho_from_speed(self.ue_speed_mps, self.carrier_ghz)
