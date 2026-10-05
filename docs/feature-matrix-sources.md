@@ -67,3 +67,21 @@ Abbreviations in the table: `LENA/x.rst` is `https://gitlab.com/cttc-lena/nr/-/b
 | Simu5G | Multi-cell / handover | supported | "Macro, micro, pico cells", "X2 interface; handover", "background cells for large-scale scenarios" | https://simu5g.org/#main-features | Main Features > eNodeB/gNodeB, PHY |
 | Simu5G | Interference | supported | "interference"; SINR computed "querying the Binder to know which other nodes were interfering on the same resources"; background-cell interference; `downlinkInterference` and `uplinkInterference` default to false in `StochasticChannelModel` | https://simu5g.org/users-guide/overview#physical-layer-modeling ; S5G/src/simu5g/stack/phy/channelmodel/StochasticChannelModel.ned | Overview > Physical layer modeling |
 | Simu5G | Carrier aggregation / BWP | partial | "Carrier Aggregation (CA)" with `ComponentCarrier` modules; bandwidth parts not documented | https://simu5g.org/users-guide/overview#nr-resource-management | Overview > NR resource management |
+
+## Rows added after the 2026-09-29 check
+
+The feature branches merged on 2026-10-05 added six rows to the matrix. Their 5G-LENA, Sionna SYS and Simu5G cells were written with the features and have not been checked against the pinned documentation yet, so every cell below is *unverified* or *not assessed* until someone does that check.
+
+| Tool | Feature | Status | What the matrix states | Basis | Section to check |
+|:---|:---|:---|:---|:---|:---|
+| 5G-LENA | Obstacles / LOS blockage | *unverified* | LOS from `Building` boxes (`BuildingsChannelConditionModel`); blockage model A in `ThreeGppChannelModel` (`Blockage`, `NumNonselfBlocking`, `BlockerSpeed`); model B not found | [obstacles.md](obstacles.md#comparison-with-ns-3-buildingschannelconditionmodel) | ns-3 buildings module; ns-3 propagation `ThreeGppChannelModel` attributes |
+| 5G-LENA | Rician fading / K-factor | *unverified* | K-factor inside the TR 38.901 cluster model | [channels.md](channels.md#rician-fading) | LENA/helpers.rst (NR Channel Helper) |
+| 5G-LENA | Antenna patterns | *unverified* | 3GPP UPAs, dual polarization, multi-panel, isotropic / cosine / parabolic elements | the matrix cell only | LENA/phy-layer.rst (antenna and beamforming model) |
+| 5G-LENA | Radio link failure | *unverified* | RLF via the ns-3 LTE RRC; A3 `MinTargetRsrpDbm` | [multicell.md](multicell.md#radio-link-failure) | LENA/rrc-layer.rst; ns-3 LTE `NrA3RsrpHandoverAlgorithm` attributes |
+| 5G-LENA | RACH / connection setup | *unverified* | contention-based RACH (preamble, RAR, Msg3), ideal or real RRC | [access.md](access.md#what-5g-lena-does) | LENA/rrc-layer.rst; LENA/mac-layer.rst |
+| 5G-LENA | DRX | *unverified* | not supported | [access.md](access.md#what-5g-lena-does) | LENA/FEATURES.md |
+| Sionna SYS | Rician fading / K-factor | *unverified* | inside the TR 38.901 CDL / TDL models of Sionna PHY | the matrix cell only | Sionna PHY channel models |
+| Sionna SYS | Antenna patterns | *unverified* | antenna arrays and patterns via Sionna PHY | the matrix cell only | Sionna PHY antenna arrays |
+| Sionna SYS, Simu5G | Obstacles / LOS blockage, Radio link failure, RACH / connection setup, DRX | not assessed | not assessed | none | — |
+| Simu5G | Rician fading / K-factor | not assessed | not assessed | none | — |
+| Simu5G | Antenna patterns | *unverified* | isotropic or directional per node | the matrix cell only | S5G NED files of the PHY |

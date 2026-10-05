@@ -4,6 +4,50 @@ All notable changes to `isaac-net` are listed here, grouped by area. The format 
 
 ## [Unreleased]
 
+### Added
+
+Every new field below defaults to off (or to the earlier behaviour), and at the defaults the engine's outputs are bitwise unchanged.
+
+#### Obstacles and NLOS
+
+- Geometric LOS state ([docs/obstacles.md](docs/obstacles.md)): `NRConfig.los_source` (default `"stochastic"`, the TR 38.901 probability) can be `"map"` (a baked `los_prob` grid thresholded against the spatially consistent field), `"raycast"` (a 2.5-D fixed-step ray march over an `obstacle_z` height map, `los_raycast_samples=32`) or `"callback"` (an Isaac `blocked_fn`, also with multi-cell `radio="engine"`). `RadioMC.los_state()` and `blocked_state()` return the state of every link.
+- `los_diffraction=False` adds an ITU-R P.526 single knife-edge loss from the ray-march clearance (obstacle tops and vertical rack edges), `los_soft=False` the TR 38.901 §7.6.3.3 soft LOS blend, and `nlos_extra_loss_db=0.0` a fixed extra loss on NLOS links of `log_distance`. With `channel="radio_map"` the LOS state adds no path loss, since the map already holds the NLOS loss, and maps baked with `--diffraction` are refused together with `los_diffraction`.
+- TR 38.901 blockage models through `blockage_model` (default `"sphere"`, the earlier robot spheres): `"screen"` is model B (§7.6.4.2), knife-edge screens for the robots and for per-step blockers passed as `step(..., blockers=)` rows (x, y, class), and `"stochastic"` is model A (§7.6.4.1), K = 4 spatially and temporally consistent regions without self-blocking. `blocker_size_m` sets the (w, h) per class (robot, human, vehicle) and `blockage_max_db=40.0` caps the summed loss.
+- With the obstacle stack on, the step dict gains `los` and `blocked`, the Isaac layer gains a `los` observation feature, and `NetModule.step` takes `blockers=`.
+- `RadioMap.los_prob` and `obstacle_z` grids, `bake.py --obstacle-z`, `make_synthetic_radio_map --obstacles` (a synthetic rack hall) and `isaac.radio.mesh_blocked_fn` (Warp, not yet tested).
+
+#### Fading
+
+- Rician fast fading on the NR engine ([docs/channels.md](docs/channels.md#rician-fading)): `fading_rician=False`, `rician_k_db=None` (a fixed K for every link), `rician_k_from_los=True` (K log-normal per link from TR 38.901 Table 7.5-6 for the scenario, K = 0 when NLOS or blocked) and `rician_k_ramp_slots=4` (linear ramp on LOS changes), with a fixed per-link specular phase from the engine RNG. Runs on the reference, `graph` and `triton` backends. At K = 7 dB the 1% fade is about −9.8 dB, against −20 dB for Rayleigh.
+- `nr_rng` has two new reset sites, KFAC (5) and KPHI (6). The `triton` kernel takes the new inputs `k_ptr`, `kf_ptr`, `kg_ptr`, `phi_ptr` and the `RICIAN` constexpr.
+
+#### Multi-cell
+
+- Radio link failure and re-establishment in the multi-cell NR engine ([docs/multicell.md](docs/multicell.md#radio-link-failure)): `rlf=False`, `rlf_qout_db=-8.0`, `rlf_qin_db=-6.0`, `n310=1`, `n311=1`, `t310_ms=1000`, `t311_ms=3000`, `reest_delay_ms=40` and `rlf_rlc=None` (follow `ho_rlc`). The serving-link SINR is compared with Qout and Qin once per control step, a robot in RLF cannot be scheduled, it re-establishes at the strongest suitable cell and goes idle when T311 expires. With `rlf=True` the step dict gains `rlf` and `counters()` gains `"rlf"`. `n_cells > 1`, reference and `graph` backends.
+- The monitored quantity is the uplink `sinr_db`, so the −8 / −6 dB defaults are tuning knobs rather than the 3GPP PDCCH BLER points, and the N310, N311, T310 and T311 defaults are network-configured values.
+- A3 target admission `a3_min_target_rsrp_dbm=None` (5G-LENA `MinTargetRsrpDbm`) in the NR engine and `NetSlotMC`; it is also the RSRP floor of the RLF cell search.
+
+#### Power control, CQI and antennas
+
+- Closed-loop uplink power control `ul_tpc=False` (TS 38.213 §7.1.1) on top of `ul_pc`, with `ul_tpc_mode="accumulate"` (or `"absolute"`), `ul_tpc_target_db=None` (the 10% BLER SINR of MCS 14 of `mcs_table`), `ul_tpc_steps_db=None` (38.213 Table 7.1.1-1), `ul_tpc_delay_slots=None` (k2) and `ul_tpc_range_db=20`. The offset enters `UlMac._pc()` wherever `pc_backoff` did (scheduler estimate, power split, inter-cell interference, energy tap), and a handover resets it. `L2` reference and `graph` ([docs/configurability.md](docs/configurability.md#closed-loop-power-control-cqi-table-and-sector-antennas)).
+- `cqi_table="38214"` (default `"mcs"`) reports the DL CQI on TS 38.214 Tables 5.2.2.1-2 / -3 with a CQI-to-MCS mapping (`phy.CQI_T1`, `CQI_T2`, `cqi_tables`); it needs `dl=True`.
+- `gnb_antenna="sector"` (default `"isotropic"`) applies the TR 38.901 Table 7.3-1 gNB element per cell in `RadioMC.rx_dbm`, with `cell_azimuth_deg=None` (30, 150 and 270 degrees cycled over the cells), `cell_tilt_deg=0.0` and `gnb_antenna_gain_dbi=8.0`. It changes only the path gain, so every backend runs it ([docs/channels.md](docs/channels.md#antenna-patterns)).
+
+#### Access: RACH and DRX
+
+- Contention-based RACH and connection setup on `L2` ([docs/access.md](docs/access.md)): `rach=False`, `rach_occasion_slots=20`, `rach_preambles=64`, `rach_rar_window_slots=10`, `rach_msg3_slots=10`, `rach_backoff_ms=20`, `rach_max_attempts=10`, `rach_initial="connected"` (or `"idle"`) and `rach_release_after_ms=None`. Collisions are counted per occasion and cell with one `scatter_add` over the preambles, and the preamble and backoff draws use counter-RNG sites 16 and 17.
+- Connected-mode DRX: `drx=False`, `drx_inactivity_ms=100`, `drx_cycle_ms=160`, `drx_on_ms=10`, `drx_short_cycle_ms=None`, `drx_short_cycles=2`, `drx_start_offset_ms=0` and `drx_ul_wake="sr"` (or `"on_duration"`). 5G-LENA has RACH but no DRX.
+- An `AccessStage` inside the engine gates robots through `MacLink.sched_ok`. With RACH or DRX on, the step dict gains `access_state`, `access_sleep_frac` and `rach_attempts`, and `counters()` gains `"access"`. Reference and `graph` backends.
+- `EnergyConfig.drx_sleep_power_w=None` (= `idle_power_w`) is charged for the dormant or idle share of each step.
+
+#### Downlink, duplexing and tools
+
+- Downlink traffic models on `L2` with `dl=True`: `TrafficModel(..., direction="dl")` or `.downlink()` ([docs/configurability.md](docs/configurability.md#downlink-models)). They draw from their own generator with a separate seed, so the uplink draws are unchanged. The step adds per DL frame `dl_delivered`, `dl_lost`, `dl_delay`, `dl_tag`, `dl_bytes`, `dl_generated` and `dl_deadline_miss`, and per robot `gen_dl_accepted` and `gen_dl_bytes`. Generated DL frames carry `cls < 0`, which keeps them apart from `EdgeLoop` `nr_dl` commands. Reference backend only.
+- Downlink background on `L2`: `BackgroundConfig.dl_traffic=()` (DL traffic models of the background UEs) and `dl_load_frac=0.0` (a fixed share of every DL RBG) ([docs/background-energy-sharding.md](docs/background-energy-sharding.md#downlink-background)).
+- FDD: `NRConfig.duplex="fdd"` (default `"tdd"`) with `dl_n_prb=None` / `dl_bandwidth_mhz=None` (default: the UL carrier) gives an all-`U` UL carrier and an all-`D` DL carrier that share the subband grid and the fading state. The per-PRB DL SINR shifts by −10 log10(dl_nprb / nprb) ([docs/configurability.md](docs/configurability.md#duplexing-tdd-and-fdd)).
+- Radio environment map export, `isaac_net.tools.rem` and the console script `isaac-net-rem`: per-cell path gain and RSRP, best-cell SINR, serving cell and LOS state as `.npz`, with an optional PNG ([docs/rem.md](docs/rem.md)).
+- `SlotTap.dl_prb` counts the PRB-slots of DL transport blocks.
+
 ### Documentation
 
 - The paper is on arXiv as [arXiv:2610.02370](https://arxiv.org/abs/2610.02370); the README citation, `CITATION.cff`, the project URLs and the status page link to it.
@@ -12,6 +56,10 @@ All notable changes to `isaac-net` are listed here, grouped by area. The format 
 
 - The minimum torch version is 2.7: the `compile` backend sets `torch._dynamo.config.recompile_limit`, which first appears in 2.7 (it was `cache_size_limit` before).
 - The sdist now includes `prototype/`. The version on main is `0.1.1.dev0`.
+- The `triton` NR backend refuses `ul_tpc` and `cqi_table="38214"` with a `NotImplementedError` that points to `graph`.
+- The `triton` NR backend refuses `duplex="fdd"`, and `proactive_grant="per_period"` is refused with FDD (`ValueError`).
+- DL traffic models are refused on the `graph` and `triton` NR backends, RACH and DRX on `triton`, and every level other than `L2` refuses `rach` / `drx` (`ValueError`).
+- With `radio="engine"`, the `blocked` output of `NetModule` reports the engine's blockage. The Isaac `blocked_fn` drives the engine radio only with `los_source="callback"` and is otherwise ignored with a warning.
 
 ### Fixed
 
@@ -78,6 +126,15 @@ All notable changes to `isaac-net` are listed here, grouped by area. The format 
 - New GPU tests cover the `compile` backend and partial-reset isolation of the free-running `triton` kernel.
 - On CPU the shard test compares `L1` / `L2-legacy` float outputs to float32 rounding; on CUDA it stays bitwise.
 - GPU and Isaac tests are skipped by marker, not by keyword. CI tests torch 2.7 on Python 3.10 and adds Python 3.12.
+
+### Known limits
+
+- DL traffic models run on the reference backend only; the `graph` backend does not support them yet.
+- The `EdgeLoop` `return_path="delay"` uses the UL carrier's `nprb` under FDD.
+- RLF re-establishment is one fixed delay and does not go through the RACH model.
+- The `triton` kernel has no mirror of closed-loop TPC, the 38.214 CQI table, RACH or DRX.
+- The Sionna RT bake does not apply the sector antenna pattern.
+- The model B sign rule, the model A Table 7.6.4.1-2 values, the correlation distances and the soft-LOS scale are marked `[verify]` in the code.
 
 ## [0.1.0] - 2026-09-30
 
