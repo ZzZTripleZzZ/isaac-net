@@ -5,7 +5,8 @@
      fields set (they are not read), and at three cells with poses the off switches equal the defaults bitwise
   T2 TPC accumulate: a 10 dB path-loss step is corrected in four commands (3, 3, 3, 1 dB) back to the target; the
      offset clamps at ul_tpc_range_db; a UE at full power accumulates no positive step; absolute mode jumps to the
-     set value at once; the triton backend refuses ul_tpc and cqi_table="38214"
+     set value at once; the triton backend accepts ul_tpc and cqi_table="38214" (tests/test_triton_tpc_cqi.py; its
+     equivalence is test_nr_fast.py G2 on the GPU)
   T3 38.214 CQI: 15 thresholds, non-decreasing, 16 levels over a sweep, CQI 0 below the first threshold, the CQI -> MCS
      mapping never exceeds the CQI's spectral efficiency and takes the highest such MCS (dl_mcs_max respected); the
      tables' efficiencies equal the printed 38.214 values; a DL run reports from the coarser grid
@@ -28,6 +29,7 @@ from isaac_net.core.channels.antenna import element_gain_db, gnb_antenna_gain_db
 from isaac_net.core.config import fields_read_by
 from isaac_net.core.mac_ul import TPC_STATE
 from isaac_net.core.nr_engine import NRNet
+from isaac_net.core.nr_fast import NRTritonEngine, TritonUnsupported
 from isaac_net.core.phy import CQI_T1, CQI_T2, PHY, cqi_tables
 from isaac_net.core.radio import RadioMC
 from nr_frozen.nr_engine import NRNet as FrozenNRNet
@@ -174,10 +176,12 @@ def test_t2_absolute_jumps_to_the_set_value():
     assert [x for _, _, x in tr][:3] == [0.0, -4.0, -4.0] and float(net.ul.tpc_f) == -4.0
 
 
-def test_t2_triton_refuses():
+def test_t2_triton_accepts():
     for kw in (dict(ul_pc=True, ul_tpc=True), dict(dl=True, cqi_table="38214")):
-        with pytest.raises(NotImplementedError, match="ul_tpc"):
+        assert NRTritonEngine.refusals(NRConfig(**kw)) == []
+        with pytest.raises(ValueError, match="CUDA") as ei:       # past the refusals: the CPU device stops it
             make_engine("L2", 2, 2, "cpu", NRConfig(**kw), "triton")
+        assert not isinstance(ei.value, TritonUnsupported)
     with pytest.raises(AssertionError, match="ul_pc"):
         NRConfig(ul_tpc=True)
 

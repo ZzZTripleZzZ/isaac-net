@@ -101,8 +101,8 @@ class _EagerReplay:
 
 
 TRITON_NOT_IMPLEMENTED = ("several cells (n_cells > 1: A3 handover, rlf), the SR / BSR grant pipeline "
-                          "(ul_grant_model='bsr'), closed-loop UL power control (ul_tpc), the 38.214 CQI table, "
-                          "RACH / DRX (rach, drx), FDD (duplex='fdd'), DL traffic models, SINR hooks")
+                          "(ul_grant_model='bsr'), RACH / DRX (rach, drx), FDD (duplex='fdd'), DL traffic models, "
+                          "SINR hooks")
 
 
 class TritonUnsupported(NotImplementedError, ValueError):
@@ -478,7 +478,9 @@ class NRTritonEngine(NRGraphEngine):
     size and BLER-table index of every (symbols, PRBs, MCS) are exact tables precomputed with phy.py; EESM, BLER
     interpolation and HARQ combining run in the kernel in float32 (float64 where phy.py uses it). Reduction order and
     fused multiply-adds differ from ATen, so the engine equals the reference to float rounding, not bitwise.
-    The 5G-LENA MAC switches pf_update, pf_avg_idle, ul_retx_sched and ul_amc_alloc run in the kernel.
+    The 5G-LENA MAC switches pf_update, pf_avg_idle, ul_retx_sched and ul_amc_alloc run in the kernel, and so do
+    closed-loop UL power control (ul_tpc: the kernel carries net.ul's TPC state through the step's UL slots and stores
+    it back) and the 38.214 CQI table (cqi_table="38214").
     What the kernel does not implement is refused here, in __init__, before anything is built (refusals(); the
     backend table of docs/configurability.md lists the same features); SINR hooks, installed after construction,
     are refused at the first step. Robots are padded to a power of two (R up to about 256)."""
@@ -497,10 +499,6 @@ class NRTritonEngine(NRGraphEngine):
             out.append((f"ul_grant_model={cfg.ul_grant_model!r} (the 5G-LENA SR / BSR grant pipeline, which "
                         "lena_match_v2 / lena_validation_v2 turn on)",
                         "the other 5G-LENA MAC switches (pf_update, pf_avg_idle, ul_retx_sched, ul_amc_alloc) run"))
-        if cfg.ul_tpc:
-            out.append(("closed-loop UL power control (ul_tpc)", "it changes the per-slot loop of the kernel"))
-        if cfg.cqi_table != "mcs":
-            out.append(("the 38.214 CQI table (cqi_table='38214')", "it changes the per-slot loop of the kernel"))
         if cfg.rach or cfg.drx:
             out.append(("RACH / DRX (rach, drx)", "they block scheduling through MacLink.sched_ok, which the kernel "
                         "does not read"))
@@ -592,6 +590,21 @@ class NRTritonEngine(NRGraphEngine):
             RETX_TDMA=cfg.ul_retx_sched == "tdma", AMC_PREV=cfg.ul_amc_alloc == "previous",
             LENA_CTR=bool(net.ul._lena_mac), QOS_G=float(cfg.qos_gamma))
         self._num_warps = 16 if RB >= 128 else (8 if RB >= 64 else 4)
+        # ul_tpc (UlMac TPC_STATE; the kernel updates tpc_f / tpc_cmd / tpc_at / tpc_sinr of net.ul in place) and
+        # cqi_table="38214" (DlMac._cqi): constexprs and tables; the off values keep one compiled variant
+        ul = net.ul
+        if cfg.ul_tpc and cfg.ul:
+            assert cfg.ul_pc_on      # NRConfig enforces it: the closed loop corrects the open-loop pc input
+            tb["tpc_set"] = ul._tpc_steps.float().contiguous()
+            self._const.update(TPC=1 if cfg.ul_tpc_mode == "accumulate" else 2, TPC_NS=len(cfg.ul_tpc_set),
+                               TPC_DELAY=int(cfg.ul_tpc_delay), TPC_RANGE=float(cfg.ul_tpc_range_db),
+                               TPC_TARGET=float(ul.tpc_target))
+        else:
+            self._const.update(TPC=0, TPC_NS=1, TPC_DELAY=0, TPC_RANGE=0.0, TPC_TARGET=0.0)
+        cqi = getattr(net.dl, "_cqi", None)
+        if cqi is not None:
+            tb["cqi_thr"], tb["cqi_mcs"] = cqi[0].float().contiguous(), cqi[1].long().contiguous()
+        self._const["CQI38214"] = int(cqi is not None)
 
     def _sched_table(self, g0, sched, dt0):
         cfg = self.config

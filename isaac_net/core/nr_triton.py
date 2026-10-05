@@ -14,8 +14,9 @@ from .proto.rng_triton import uniform as rng_uniform
 # ---------------------------------------------------------------------------------------------- fused step kernel
 # One program per env runs every scheduled slot of one control step (fading evolution, SR, UL and optionally DL data
 # slots and CQI reports) with the robot x {HARQ process, frame, subband, MCS} state in registers. Semantics follow
-# mac.MacLink.slot, mac_ul.UlMac, mac_dl.DlMac and nr_engine.NRNet.step at one cell; see NRTritonEngine in
-# nr_fast.py for what runs outside the kernel and for the equivalence methodology.
+# mac.MacLink.slot, mac_ul.UlMac, mac_dl.DlMac and nr_engine.NRNet.step at one cell (with closed-loop UL TPC, TPC, and
+# the 38.214 CQI table, CQI38214); see NRTritonEngine in nr_fast.py for what runs outside the kernel and for the
+# equivalence methodology.
 NEG_INF = float("-inf")
 AVG_MIN = tl.constexpr(1e-9)   # mac.AVG_MIN: floor of the PF average (as 5G-LENA's max(1e-9, avg))
 
@@ -149,6 +150,51 @@ def _sr_step(enq, sent, bsr, sr_t, g):
 
 
 @triton.jit
+def _tpc_apply(tpc_f, tpc_cmd, tpc_at, g, TPC: tl.constexpr, TPC_RANGE: tl.constexpr):
+    """ul_tpc: TPC commands due by this UL data slot take effect (UlMac._tpc_apply, from UlMac._pre_slot).
+    TPC = 1 accumulate (f + cmd), 2 absolute (cmd); either way clamped to +-TPC_RANGE."""
+    due = (tpc_at >= 0) & (tpc_at <= g)
+    if TPC == 1:
+        new = tpc_f + tpc_cmd
+    else:
+        new = tpc_cmd
+    tpc_f = tl.where(due, tl.minimum(tl.maximum(new, -TPC_RANGE), TPC_RANGE), tpc_f)
+    tpc_at = tl.where(due, -1, tpc_at)
+    return tpc_f, tpc_at
+
+
+@triton.jit
+def _tpc_issue(act, split, pc, tx, tpc_f, tpc_cmd, tpc_at, tpc_sinr, g, sm, tpc_set, S_: tl.constexpr,
+               TPC: tl.constexpr, TPC_NS: tl.constexpr, TPC_DELAY: tl.constexpr, TPC_TARGET: tl.constexpr):
+    """ul_tpc after a PUSCH: the gNB's wideband measurement (UlMac._rx_sinr: per-PRB SINR at this PUSCH's PSD, before
+    any same-slot interference hook, linear mean over every RBG of the carrier) and the command of every robot that
+    transmitted with none in flight (UlMac._tpc_issue). pc is the PSD backoff of this slot, pc_backoff - f."""
+    lin = tl.sum(tl.where(sm[None, :], libdevice.exp10(tl.minimum(tl.maximum(act, -30.0), 60.0) / 10.0), 0.0),
+                 axis=1) / S_
+    meas = 10.0 * libdevice.log10(lin)
+    limited = split > pc               # split above the PC backoff: UE at full power
+    err = TPC_TARGET - meas
+    if TPC == 1:
+        want = err
+    else:
+        want = tpc_f + err
+    cmd = tl.zeros(tpc_f.shape, tl.float32) + tl.load(tpc_set)      # the step closest to want, the first on a tie
+    best = tl.abs(want - cmd)
+    for i in tl.static_range(1, TPC_NS):
+        si = tl.load(tpc_set + i)
+        di = tl.abs(want - si)
+        cmd = tl.where(di < best, si, cmd)
+        best = tl.minimum(di, best)
+    if TPC == 1:                       # 38.213: no positive accumulation while the UE is at its maximum power
+        cmd = tl.where(limited & (cmd > 0), 0.0, cmd)
+    issue = tx & (tpc_at < 0)
+    tpc_cmd = tl.where(issue, cmd, tpc_cmd)
+    tpc_at = tl.where(issue, g + TPC_DELAY, tpc_at)
+    tpc_sinr = tl.where(tx, meas, tpc_sinr)
+    return tpc_cmd, tpc_at, tpc_sinr
+
+
+@triton.jit
 def _pf_update(avg, served, PF_A: tl.constexpr, PF_B: tl.constexpr):
     """PF average after a data slot (MacLink._pf_update): EWMA of the served bytes of every robot, floored at AVG_MIN.
     Kept separate so per-RBG / frozen-while-idle variants plug in here (as in mac.py)."""
@@ -192,13 +238,21 @@ def _mac_slot(
         REF_PRBS: tl.constexpr, PHR_MIN: tl.constexpr, WB_DB: tl.constexpr, W0: tl.constexpr,
         OLLA_UP: tl.constexpr, OLLA_DN: tl.constexpr, PF_A: tl.constexpr, PF_B: tl.constexpr,
         PF_RBG: tl.constexpr, PF_FREEZE: tl.constexpr, RETX_TDMA: tl.constexpr, AMC_PREV: tl.constexpr,
-        LENA_CTR: tl.constexpr, QOS_G: tl.constexpr):
+        LENA_CTR: tl.constexpr, QOS_G: tl.constexpr,
+        # ul_tpc (TPC = 0 off, 1 accumulate, 2 absolute; UL only): offset f, command in flight, its slot, last
+        # measured SINR [RB]; command set [TPC_NS]
+        tpc_f, tpc_cmd, tpc_at, tpc_sinr, tpc_set,
+        TPC: tl.constexpr, TPC_NS: tl.constexpr, TPC_DELAY: tl.constexpr, TPC_RANGE: tl.constexpr,
+        TPC_TARGET: tl.constexpr):
     BIG: tl.constexpr = 2 ** 62
     unsent = enq - sent
     # DL processes whose ACK has reached the gNB become free
     h_st = tl.where((h_st == 2) & (h_rdy <= g), 0, h_st)
     if DIR == 0:           # UL: grants (UlMac._pre_slot)
         bsr, sr_t = _ul_grants(bsr, sr_t, g, pg_now, SR_DELAY)
+    if TPC != 0:           # ul_tpc: due commands apply, then the PSD backoff is pc_backoff - f everywhere (UlMac._pc)
+        tpc_f, tpc_at = _tpc_apply(tpc_f, tpc_cmd, tpc_at, g, TPC, TPC_RANGE)
+        pc = pc - tpc_f
     # ---- candidates ----
     rx_el = (h_st == 1) & (h_rdy <= g)
     rx_p = tl.argmin(tl.where(rx_el, h_rdy, BIG), axis=1)
@@ -486,6 +540,9 @@ def _mac_slot(
     if DIR == 0:
         bsr = tl.where(tx, enq - sent, bsr)
         csi = gain
+    if TPC != 0:
+        tpc_cmd, tpc_at, tpc_sinr = _tpc_issue(act, split, pc, tx, tpc_f, tpc_cmd, tpc_at, tpc_sinr, g, sm, tpc_set,
+                                               S_, TPC, TPC_NS, TPC_DELAY, TPC_TARGET)
     if AMC_PREV:
         lnp = tl.where(tx, n_prb, lnp)
     if PF_RBG | PF_FREEZE:     # pf_update="rbg": granted TB bytes; pf_avg_idle="freeze": active robots only
@@ -532,7 +589,7 @@ def _mac_slot(
     return (sent, olla, avg, bsr, sr_t, last_tx, lnp, csi,
             h_st.to(tl.int32), h_lo, h_hi, h_rdy, h_ntx.to(tl.int32), h_mcs.to(tl.int32), h_tbs.to(tl.int32),
             h_nsb.to(tl.int32), h_comb, h_lexp, h_nrb,
-            lost, fin, cnt_acc, hist_ok, hist_tx, hist_fail)
+            lost, fin, cnt_acc, hist_ok, hist_tx, hist_fail, tpc_f, tpc_cmd, tpc_at, tpc_sinr)
 
 
 @triton.jit
@@ -642,7 +699,14 @@ def nr_step_kernel(
         GNB_PROC: tl.constexpr, REF_PRBS: tl.constexpr, PHR_MIN: tl.constexpr, WB_DB: tl.constexpr,
         W0: tl.constexpr, OLLA_UP: tl.constexpr, OLLA_DN: tl.constexpr, PF_A: tl.constexpr, PF_B: tl.constexpr,
         PF_RBG: tl.constexpr, PF_FREEZE: tl.constexpr, RETX_TDMA: tl.constexpr, AMC_PREV: tl.constexpr,
-        LENA_CTR: tl.constexpr, QOS_G: tl.constexpr):
+        LENA_CTR: tl.constexpr, QOS_G: tl.constexpr,
+        # ul_tpc (TPC: 0 off, 1 accumulate, 2 absolute): per-robot TPC state [E,R] (UlMac TPC_STATE: offset f, command
+        # in flight, its slot, last measured SINR) and the command set [TPC_NS]; any buffer when off, never read
+        u_tpcf, u_tpcc, u_tpca, u_tpcs, tpc_set,
+        # cqi_table="38214" (CQI38214): per-CQI SINR thresholds [15] and CQI -> MCS [16] (phy.cqi_tables); else unread
+        cqi_thr, cqi_mcs,
+        TPC: tl.constexpr, TPC_NS: tl.constexpr, TPC_DELAY: tl.constexpr, TPC_RANGE: tl.constexpr,
+        TPC_TARGET: tl.constexpr, CQI38214: tl.constexpr):
     e = tl.program_id(0).to(tl.int64)
     ridx = tl.arange(0, RB)
     rm = ridx < R
@@ -700,6 +764,16 @@ def nr_step_kernel(
             pc = tl.load(pc_ptr + er, mask=rm, other=0.0)
         else:
             pc = tl.zeros([RB], tl.float32)
+        if TPC != 0:       # ul_tpc state, carried through the step's UL slots (pc stays the open-loop pc_backoff)
+            u_s_tf = tl.load(u_tpcf + er, mask=rm, other=0.0)
+            u_s_tc = tl.load(u_tpcc + er, mask=rm, other=0.0)
+            u_s_ta = tl.load(u_tpca + er, mask=rm, other=-1)
+            u_s_ts = tl.load(u_tpcs + er, mask=rm, other=0.0)
+        else:
+            u_s_tf = tl.zeros([RB], tl.float32)
+            u_s_tc = tl.zeros([RB], tl.float32)
+            u_s_ta = tl.full([RB], -1, tl.int64)
+            u_s_ts = tl.zeros([RB], tl.float32)
         if SCHED == 3:
             u_s_qw = tl.load(u_qw + er, mask=rm, other=0.0)
         else:
@@ -793,13 +867,18 @@ def nr_step_kernel(
                 for m in tl.static_range(M):
                     if m <= MCS_MAX_DL:
                         mi = tl.where(xs >= tl.load(d_thr + m), m, mi)
+                if CQI38214:   # cqi_table="38214": the 4-bit CQI, then CQI -> MCS (DlMac.cqi_report)
+                    nq = tl.zeros([RB, SB], tl.int32)
+                    for q in tl.static_range(15):
+                        nq += (xs >= tl.load(cqi_thr + q)).to(tl.int32)
+                    mi = tl.load(cqi_mcs + nq).to(tl.int32)
                 d_s_csi = tl.load(d_thr + mi) - dref
             if dls != 0:
                 ub = mix32(base0 ^ salt(u32((3 << 16) | rel)))
                 ud = rng_uniform(ub, ridx)
                 (d_s_sent, d_s_olla, d_s_avg, d_s_bsr, d_s_srt, d_s_ltx, _lnp, d_s_csi, d_s_hst, d_s_hlo, d_s_hhi,
                  d_s_hrdy, d_s_hntx, d_s_hmcs, d_s_htbs, d_s_hnsb, d_s_hcomb, d_s_hlexp, d_s_hnrb, d_s_lost,
-                 d_s_fin, d_cnt, d_hok, d_htx, d_hfl) = _mac_slot(
+                 d_s_fin, d_cnt, d_hok, d_htx, d_hfl, _tf, _tc, _ta, _ts) = _mac_slot(
                     d_s_sent, d_s_floor, d_s_olla, d_s_avg, d_s_bsr, d_s_srt, d_s_ltx, d_s_enq,
                     tl.zeros([RB], tl.float32), d_s_qw, d_s_csi, dref,
                     gain, tl.zeros([RB], tl.float32), d_s_hst, d_s_hlo, d_s_hhi, d_s_hrdy, d_s_hntx, d_s_hmcs,
@@ -812,7 +891,9 @@ def nr_step_kernel(
                     1, S_, SB, M, MB, C, G, NL, EQW, NPRB, MODE, COMB, SCHED, WIDEBAND, HARQ_DROP, OLLA,
                     PHR_CAP, WHOLE_BAND, False, STEP, RETX_PRIO, MCS_MAX_DL, MAX_TX, TARGET, TB_OH, SR_DELAY,
                     UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B,
-                    PF_RBG, PF_FREEZE, False, False, LENA_CTR, QOS_G)
+                    PF_RBG, PF_FREEZE, False, False, LENA_CTR, QOS_G,
+                    tl.zeros([RB], tl.float32), tl.zeros([RB], tl.float32), tl.full([RB], -1, tl.int64),
+                    tl.zeros([RB], tl.float32), tpc_set, 0, 1, 0, 0.0, 0.0)
         if UL:
             if GATE:
                 if (srf != 0) | (uls != 0):
@@ -825,7 +906,7 @@ def nr_step_kernel(
                 uu = rng_uniform(ub, ridx)
                 (u_s_sent, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_lnp, u_s_csi, u_s_hst, u_s_hlo, u_s_hhi,
                  u_s_hrdy, u_s_hntx, u_s_hmcs, u_s_htbs, u_s_hnsb, u_s_hcomb, u_s_hlexp, u_s_hnrb, u_s_lost,
-                 u_s_fin, u_cnt, u_hok, u_htx, u_hfl) = _mac_slot(
+                 u_s_fin, u_cnt, u_hok, u_htx, u_hfl, u_s_tf, u_s_tc, u_s_ta, u_s_ts) = _mac_slot(
                     u_s_sent, u_s_floor, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_enq, u_s_lnp, u_s_qw,
                     u_s_csi,
                     uref,
@@ -839,7 +920,8 @@ def nr_step_kernel(
                     0, S_, SB, M, MB, C, G, NL, EQW, NPRB, MODE, COMB, SCHED, WIDEBAND, HARQ_DROP, OLLA,
                     PHR_CAP, WHOLE_BAND, PC, STEP, RETX_PRIO, MCS_MAX_UL, MAX_TX, TARGET, TB_OH, SR_DELAY,
                     UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B,
-                    PF_RBG, PF_FREEZE, RETX_TDMA, AMC_PREV, LENA_CTR, QOS_G)
+                    PF_RBG, PF_FREEZE, RETX_TDMA, AMC_PREV, LENA_CTR, QOS_G,
+                    u_s_tf, u_s_tc, u_s_ta, u_s_ts, tpc_set, TPC, TPC_NS, TPC_DELAY, TPC_RANGE, TPC_TARGET)
     if FADING and STORE_H:
         tl.store(h_ptr + o_h, hr, mask=m_rs)
         tl.store(h_ptr + o_h + 1, hi, mask=m_rs)
@@ -852,6 +934,11 @@ def nr_step_kernel(
                  u_s_fin, ridx, rm, sidx, sm, pidx, pm, fidx, fm, S_, P, F)
         if AMC_PREV:
             tl.store(u_lnp + er, u_s_lnp, mask=rm)
+        if TPC != 0:
+            tl.store(u_tpcf + er, u_s_tf, mask=rm)
+            tl.store(u_tpcc + er, u_s_tc, mask=rm)
+            tl.store(u_tpca + er, u_s_ta, mask=rm)
+            tl.store(u_tpcs + er, u_s_ts, mask=rm)
         tl.store(acc_ptr + ao + hidx, u_cnt)
         tl.store(acc_ptr + ao + HB + hidx, u_hok)
         tl.store(acc_ptr + ao + 2 * HB + hidx, u_htx)
@@ -908,6 +995,13 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
     if fc:
         for x in fc_args:
             assert x.is_contiguous()
+    # ul_tpc: the UL link's TPC state, updated in place by the UL kernel; cqi_table="38214": the CQI tables (dummies
+    # when off, never read)
+    tpc = tuple(getattr(U, n) for n in ("tpc_f", "tpc_cmd", "tpc_at", "tpc_sinr")) + (tb["tpc_set"],) \
+        if eng._const["TPC"] else (net.h,) * 5
+    cqi = (tb["cqi_thr"], tb["cqi_mcs"]) if eng._const["CQI38214"] else (net.h,) * 2
+    for x in tpc + cqi:
+        assert x.is_contiguous()
     for ul_p, dl_p in passes:
         const = dict(eng._const, UL=ul_p and UL_on, DL=dl_p and DL_on, STORE_H=ul_p or not UL_on)
         eng._kernel = nr_step_kernel[(E,)](
@@ -927,4 +1021,5 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
             GATE=gate is not None, RHO_R=net.fading_rho_ms is not None, MMB=triton.next_power_of_2(gate[0].shape[-1]) if gate is not None else 1,
             RICIAN=rc, K_RAMP=net.k_ramp if rc else 0, K_RAMP_INV=1.0 / net.k_ramp if rc and net.k_ramp else 0.0,
             FCORR=fc,
+            u_tpcf=tpc[0], u_tpcc=tpc[1], u_tpca=tpc[2], u_tpcs=tpc[3], tpc_set=tpc[4], cqi_thr=cqi[0], cqi_mcs=cqi[1],
             **const, num_warps=eng._num_warps)

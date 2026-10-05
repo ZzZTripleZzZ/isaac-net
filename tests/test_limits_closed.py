@@ -157,8 +157,6 @@ TRITON_CASES = {
     "n_cells": (multicell(3), "several cells"),
     "rlf": (multicell(3, rlf=True), "radio link failure"),
     "bsr": (NRConfig(ul_grant_model="bsr"), "grant pipeline"),
-    "ul_tpc": (NRConfig(ul_pc=True, ul_tpc=True), "ul_tpc"),
-    "cqi": (NRConfig(dl=True, cqi_table="38214"), "38.214 CQI"),
     "rach": (NRConfig(rach=True), "RACH / DRX"),
     "drx": (NRConfig(drx=True), "RACH / DRX"),
     "fdd": (NRConfig(duplex="fdd"), "FDD"),
@@ -178,7 +176,7 @@ def test_triton_refuses_in_one_place(name):
 
 def test_triton_refusals_list_several_features_and_pass_defaults():
     assert NRTritonEngine.refusals(NRConfig()) == [] and NRTritonEngine.refusals(NRConfig(dl=True)) == []
-    assert len(NRTritonEngine.refusals(NRConfig(duplex="fdd", rach=True, dl=True, cqi_table="38214"))) == 3
+    assert len(NRTritonEngine.refusals(NRConfig(duplex="fdd", rach=True, dl=True, ul_grant_model="bsr"))) == 3
 
 
 def test_docs_backend_table_lists_the_triton_refusals():
@@ -187,8 +185,7 @@ def test_docs_backend_table_lists_the_triton_refusals():
     sec = doc[doc.index("## NR engine backends"):]
     sec = sec[:sec.index("\n## ", 3)]
     rows = [ln for ln in sec.splitlines() if ln.startswith("| ") and "refused" in ln]
-    for key in ("n_cells", "rlf", "ul_grant_model", "ul_tpc", "cqi_table", "rach", "drx", "duplex", "direction=\"dl\"",
-                "SINR hook"):
+    for key in ("n_cells", "rlf", "ul_grant_model", "rach", "drx", "duplex", "direction=\"dl\"", "SINR hook"):
         assert any(key in r for r in rows), key
 
 
