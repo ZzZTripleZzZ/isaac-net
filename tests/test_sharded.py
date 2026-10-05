@@ -93,7 +93,10 @@ def test_locate_and_mapping():
 
 
 def test_nr_engine_shards_run_but_are_not_invariant():
-    sh = ShardedEngine("L2", E, R, ["cpu", "cpu"], NRConfig(), seed=1)
+    """L2 with traffic models (TrafficGen: one sequential generator per engine) is not shard-invariant and says so;
+    without them L2 is (tests/test_followup_fixes.py)."""
+    from isaac_net.core.traffic import TrafficModel
+    sh = ShardedEngine("L2", E, R, ["cpu", "cpu"], NRConfig(traffic=(TrafficModel.periodic(500, 50.0),)), seed=1)
     assert not sh.shard_invariant
     o = _drive(sh, "cpu", steps=3)[-1]
     assert o["delivered"].shape == (E, R, 16) and o["t"].shape == (E,)

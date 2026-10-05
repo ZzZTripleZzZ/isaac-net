@@ -16,11 +16,13 @@ Shard invariance. With engine-owned randomness (NRConfig.rng = "engine", the def
 its env id (proto/rng.py). Each shard keys its rows by global id (CounterRNG.set_env_offset, also in the Triton
 kernels), and all shards share the seed, so an env draws the same numbers in shard 0 or shard 1 and the sharded
 engine is bitwise equal to the unsharded one on the same device type. This holds for the prototype levels, L2-legacy
-with one cell (reference and fast backends), the surrogates and bounds, and the background and energy wrappers.
-It does not hold where draws come from a sequential generator whose position depends on the batch: the NR engine L2
-(stepping draws from the global RNG, reset and traffic draws per engine), the multi-cell legacy radio (RadioMC), and
-rng="global". Those shards get distinct derived seeds, so shards are independent but the results depend on the
-split (`shard_invariant` is False).
+(one cell on the reference and fast backends, and the multi-cell NetSlotMC), the NR engine L2 (one or several
+cells), the surrogates and bounds, WIFI, and the background and energy wrappers: the radio (RadioMC) draws its
+shadowing, LOS and O2I fields from the engine RNG too (core/radio.py). It does not hold where draws come from a
+sequential generator whose position depends on the batch: L2 with traffic models (NRConfig.traffic, or background
+UEs, which L2 runs as traffic models; TrafficGen draws from one generator per engine) and rng="global". Those
+shards get distinct derived seeds, so shards are independent but the results depend on the split
+(`shard_invariant` is False). See shard_invariant(level, cfg).
 
 Multi-GPU: the shards run one after another from one Python thread, and since the engines' steps have no host syncs,
 kernels on different GPUs overlap. Resets and bool-mask conversions sync. scripts/hazel/sharded_gpu.sbatch runs the
@@ -33,9 +35,22 @@ import torch
 from .config import NRConfig
 from .levels import BOUND_LEVELS, SURROGATE_LEVELS
 from .proto.rng import CounterRNG
-from .traffic import Requests
+from .traffic import Requests, generates
 
-INVARIANT_LEVELS = ("L0", "L0DR", "L05", "L05Q", "L1", "L2-legacy") + SURROGATE_LEVELS + BOUND_LEVELS
+INVARIANT_LEVELS = ("L0", "L0DR", "L05", "L05Q", "L1", "L2-legacy", "L2", "WIFI") + SURROGATE_LEVELS + BOUND_LEVELS
+
+
+def shard_invariant(level, cfg: NRConfig):
+    """True if every draw of `level` under `cfg` is keyed by (seed, env id, episode), so shards that share the seed
+    and key their rows by global env id equal one unsharded engine. Needs rng="engine"; on L2 also no traffic models,
+    neither the user's (NRConfig.traffic) nor the background UEs' (on L2 BackgroundLoop runs them as ghost traffic
+    models of the inner engine), since TrafficGen draws from one sequential generator per engine."""
+    if cfg.rng != "engine" or level not in INVARIANT_LEVELS:
+        return False
+    if level != "L2":
+        return True
+    bg = cfg.background
+    return not generates(cfg.traffic) and (bg is None or bg.n_background == 0)
 
 
 def set_env_offset(engine, offset):
@@ -77,8 +92,7 @@ class ShardedEngine:
         self.devices, self.split = devices, split
         self.dev = devices[0]
         self.offsets = [sum(split[:i]) for i in range(n)]
-        self.shard_invariant = (level in INVARIANT_LEVELS and cfg.rng == "engine"
-                                and (level != "L2-legacy" or cfg.is_legacy_cell()))
+        self.shard_invariant = shard_invariant(level, cfg)
         self.shards = []
         for i, (d, e) in enumerate(zip(devices, split)):
             s = seed if self.shard_invariant else (int(seed) + i * 0x9E3779B97F4A7C15) % 2 ** 62
