@@ -87,8 +87,10 @@ FIELD_GROUPS = {
               "blockage_model", "blocker_size_m", "blockage_max_db",
               "n_cells", "cell_layout", "cell_positions_m", "cell_isd_m", "cell_center_m", "cell_arena_m"),
     "multicell": ("ul_interference", "li_alpha", "ul_pc", "ul_pc_p0_dbm", "ul_pc_alpha", "a3_offset_db",
-                  "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc"),
-    "nr_multicell": ("dl_interference",),      # read by the NR engine only (NetSlotMC has no downlink)
+                  "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc", "a3_min_target_rsrp_dbm"),
+    # read by the NR engine only (NetSlotMC has no downlink and no radio link failure)
+    "nr_multicell": ("dl_interference", "rlf", "rlf_qout_db", "rlf_qin_db", "n310", "n311", "t310_ms", "t311_ms",
+                     "reest_delay_ms", "rlf_rlc"),
     "traffic": ("traffic",),
     "wrappers": ("background", "energy"),      # make_engine wrappers (core/background.py, core/energy.py)
     "wifi": ("wifi",),                         # level WIFI (core/wifi), which also reads app, proto (rng) and radio
@@ -112,7 +114,11 @@ TR38901_SHORT = {"tr38901_rma": "RMa", "tr38901_uma": "UMa", "tr38901_umi": "UMi
 # fields read only under some switches (fields_read_by drops them when the switch is off)
 DL_ONLY_FIELDS = ("k1", "cqi_period_slots", "dl_mcs_max", "dl_snr_offset_db", "dl_interference", "gnb_tx_dbm",
                   "ue_nf_db")                                 # NR engine downlink (dl=True)
-HANDOVER_FIELDS = ("a3_offset_db", "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc")    # n_cells > 1
+HANDOVER_FIELDS = ("a3_offset_db", "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc",
+                   "a3_min_target_rsrp_dbm", "rlf")                           # n_cells > 1
+RLF_FIELDS = ("rlf_qout_db", "rlf_qin_db", "n310", "n311", "t310_ms", "t311_ms", "reest_delay_ms", "rlf_rlc")  # rlf
+# the A3 admission floor is an RSRP: converting it reads the gNB EPRE (gnb_tx_dbm over 12 nprb subcarriers)
+A3_FLOOR_FIELDS = ("gnb_tx_dbm", "mu", "bandwidth_mhz", "n_prb")             # a3_min_target_rsrp_dbm set
 INTERFERENCE_FIELDS = ("ul_interference", "dl_interference", "li_alpha")    # n_cells > 1 and noise_model="thermal"
 UL_PC_FIELDS = ("ul_pc_p0_dbm", "ul_pc_alpha")               # ul_pc_on
 TR38901_FIELDS = ("tr38901_scenario", "tr38901_los", "o2i_indoor_frac", "o2i_model", "inf_clutter_density",
@@ -157,6 +163,8 @@ def _switch_unread(cfg, nr):
         off |= set(HANDOVER_FIELDS) | set(INTERFERENCE_FIELDS)
     elif cfg.noise_model != "thermal":
         off |= set(INTERFERENCE_FIELDS)
+    if cfg.n_cells == 1 or not cfg.rlf:
+        off |= set(RLF_FIELDS)
     if not cfg.ul_pc_on:
         off |= set(UL_PC_FIELDS)
     if cfg.noise_model == "thermal":
@@ -210,6 +218,8 @@ def fields_read_by(level, cfg=None):
                                                                                      "proactive_grant"}
     if cfg is not None and (level == "L2" or netslot_mc):
         read -= _switch_unread(cfg, nr=level == "L2")
+        if cfg.n_cells > 1 and cfg.a3_min_target_rsrp_dbm is not None:
+            read |= set(A3_FLOOR_FIELDS)
     if cfg is not None and cfg.traffic is not None and not any(m.generates for m in cfg.traffic):
         read.add("traffic")            # policy() only: the submit() path every level has
     return read
@@ -458,6 +468,23 @@ class NRConfig:
     a3_ttt_ms: float = 300.0             # ... held for the time-to-trigger
     ho_interruption_ms: float = 40.0     # robot cannot be scheduled after a handover
     ho_rlc: str = "carry"                # "carry": lossless, queued frames continue at the target; "flush": dropped
+    a3_min_target_rsrp_dbm: float | None = None   # A3 target admission (5G-LENA MinTargetRsrpDbm): a neighbour whose
+                                         # RSRP (gNB EPRE + path gain, dBm per subcarrier) is below it is not a
+                                         # target; also the floor of the RLF cell search. None = no floor
+    # radio link failure (NR engine, n_cells > 1; docs/multicell.md): serving-link SINR (the step's sinr_db) against
+    # Qout / Qin once per control step; n310 out-of-sync in a row start T310, n311 in-sync in a row stop it; at T310
+    # expiry the robot is in RLF (unschedulable) and re-establishes at the strongest suitable cell (SINR >= Qin, RSRP
+    # >= a3_min_target_rsrp_dbm) reest_delay_ms after that cell is found, or goes idle (queue dropped) if T311 expires
+    # first
+    rlf: bool = False
+    rlf_qout_db: float = -8.0            # out-of-sync SINR (TS 38.133 Qout: 10% hypothetical PDCCH BLER, about -8 dB)
+    rlf_qin_db: float = -6.0             # in-sync SINR (TS 38.133 Qin: 2% hypothetical PDCCH BLER, about -6 dB)
+    n310: int = 1                        # TS 38.331 N310 / N311 (network-configured; n1 is the smallest value)
+    n311: int = 1
+    t310_ms: float = 1000.0              # TS 38.331 T310 (network-configured, ms0 to ms6000)
+    t311_ms: float = 3000.0              # TS 38.331 T311 (network-configured, ms1000 to ms30000)
+    reest_delay_ms: float = 40.0         # cell found -> service at that cell (random access and RRC re-establishment)
+    rlf_rlc: str | None = None           # on RLF: "carry" (PDCP AM recovery) or "flush"; None = follow ho_rlc
     # ---- directions and application ----
     ul: bool = True
     dl: bool = False
@@ -512,6 +539,10 @@ class NRConfig:
         assert self.mcs_table in (1, 2) and self.n_harq >= 1 and self.max_harq_tx >= 1
         assert sum(self.special_split) == 14
         assert self.cell_layout in ("hex", "grid", "custom") and self.ho_rlc in ("carry", "flush")
+        assert self.rlf_rlc in (None, "carry", "flush"), "rlf_rlc: None (follow ho_rlc), 'carry' or 'flush'"
+        assert self.rlf_qin_db >= self.rlf_qout_db, "rlf_qin_db must not be below rlf_qout_db"
+        assert self.n310 >= 1 and self.n311 >= 1, "n310 and n311 count indications (>= 1)"
+        assert min(self.t310_ms, self.t311_ms, self.reest_delay_ms) >= 0, "RLF timers must be >= 0"
         assert 1 <= self.n_cells <= 7, "1 to 7 cells"
         if self.cell_layout == "custom":
             assert len(self.cell_positions_m) == self.n_cells, (
@@ -745,6 +776,11 @@ class NRConfig:
         by default). Converts the handover times to NetSlotMC's slots. The NR engine counts them in slot_ms
         instead (CellAssociation(slot_ms=...)), so its values do not depend on this."""
         return self.control_step_ms / self.proto_slots_per_step
+
+    @property
+    def rlf_flush(self):
+        """Whether a radio link failure drops the robot's queued frames: rlf_rlc, or ho_rlc when it is None."""
+        return (self.ho_rlc if self.rlf_rlc is None else self.rlf_rlc) == "flush"
 
     @property
     def ttt_slots(self):
