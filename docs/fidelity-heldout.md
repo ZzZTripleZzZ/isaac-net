@@ -2,6 +2,8 @@
 
 The `lena_validation_v2` preset has no fitted continuous parameter, but its four MAC switches and `tb_overhead_bytes = 8` were chosen while looking at the 153 runs of the primary sweep ([fidelity-load-gap.md](fidelity-load-gap.md)), all on one carrier, one TDD pattern and one arena. This page replays one 5G-LENA scenario that none of those choices was checked against, with the preset unchanged except for the carrier fields. The code is in `benchmarks/fidelity/heldout/` and every number below is in a file under `benchmarks/results/fidelity_heldout/`.
 
+**Re-run 2026-10-05 after the MAC fixes of CHANGELOG "Fixed, L2 MAC and energy" (2026-10-04).** The engine side of all 39 runs was replayed again on commit `1c29443` with the same inputs, seeds and replicas. Every replay file and `per_run_v2.csv` are bitwise identical to the ones behind this page, so no number below changes. The preset drops data on HARQ exhaustion and discards at PDCP arrival, so the HARQ-purge fix never acts, and it freezes the PF average of idle UEs, so the PF floor of the retransmission-priority fix never binds ([fidelity-vs-lena.md](fidelity-vs-lena.md) has the sweep-level re-run).
+
 ## Scenario
 
 Everything is as in the validation scenario of [validation-5g-lena.md](validation-5g-lena.md) (single cell, 100 m arena, flat channel, whole-band UE power, thermal noise with a 7 dB noise figure, 6 dB shadowing, the ≥ 7 dB coverage rule, OFDMA PF, SR/BSR, HARQ with 4 transmissions, EESM IR T1, RLC UM with a 2 s discard), except for the rows below.

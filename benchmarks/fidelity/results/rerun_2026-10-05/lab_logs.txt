@@ -1,0 +1,180 @@
+13:20:36 done heldout/replay/v2 N=16 250 s
+13:22:46 done replay/primary N=16 380 s
+13:22:50 done heldout/replay/v2 N=32 384 s
+13:22:57 done replay/primary_eng N=16 391 s
+13:23:09 done replay/v2_global N=16 403 s
+13:23:30 done replay/v2 N=16 424 s
+13:24:08 done replay/primary N=8 212 s
+13:25:31 done replay/primary N=4 121 s
+13:25:37 done heldout/replay/v2 N=8 148 s
+13:26:16 done replay/primary_eng N=8 210 s
+13:26:19 done replay/primary_eng N=4 131 s
+13:26:35 done replay/v2_global N=8 218 s
+13:26:37 done replay/v2 N=8 227 s
+13:27:29 done replay/primary N=2 73 s
+13:27:37 done replay/primary_eng N=2 78 s
+13:27:45 done replay/primary N=32 679 s
+13:27:46 done replay/v2_global N=4 129 s
+13:27:49 done replay/v2 N=4 138 s
+13:28:01 done replay/v2_global N=2 84 s
+13:28:01 done replay/primary_eng N=32 695 s
+13:28:04 done replay/v2 N=2 89 s
+13:28:15 done replay/v2_global N=32 709 s
+13:28:20 done replay/primary N=1 51 s
+13:28:24 done replay/v2 N=32 718 s
+13:28:29 done replay/primary_eng N=1 52 s
+13:28:36 done replay/v2_global N=1 50 s
+13:28:40 done replay/v2 N=1 55 s
+13:32:21 done replay/primary_eng N=64 955 s
+13:32:21 done replay/primary N=64 955 s
+13:32:33 done replay/v2 N=64 967 s
+13:32:33 done replay/v2_global N=64 967 s
+13:32:33 CPU_DONE
+13:30:31 scalecfg 845 s
+13:31:01 legacy 30 s rc=0
+13:31:15 legacy_fade 14 s
+13:31:15 GPU_DONE
+14:07:36 done replay/harq1 N=64 2004 s
+14:10:42 done replay/sr_grid20 N=64 2190 s
+14:11:37 done replay/ul_power_alloc_phr N=64 2245 s
+14:11:39 done replay/phr_cap_wholeband N=64 2247 s
+14:11:46 done replay/sr_grid8 N=64 2254 s
+14:12:10 done replay/ul_power_alloc N=64 2278 s
+14:12:19 done replay/sr_measured14 N=64 2287 s
+14:12:27 done replay/bler_sionna N=64 2295 s
+14:12:28 done replay/olla_on N=64 2296 s
+14:12:35 done replay/sr_default3 N=64 2303 s
+14:20:20 done replay_fade/fade_matched N=64 490 s
+14:20:35 done replay_fade/fade_olla N=64 496 s
+14:21:45 done replay/phr_cap_wholeband N=32 557 s
+14:21:47 done replay/olla_on N=32 560 s
+14:22:16 done replay/ul_power_alloc N=32 581 s
+14:28:49 done replay/sr_grid26 N=64 1273 s
+14:29:27 done replay/harq1 N=32 532 s
+14:30:03 done replay/sr_grid32 N=64 1161 s
+14:30:04 done replay/ul_power_alloc_phr N=32 584 s
+14:30:23 done replay/sr_grid50 N=64 1117 s
+14:30:46 done replay/sr_grid44 N=64 1147 s
+14:30:52 done replay/sr_grid36 N=64 1155 s
+14:31:08 done replay/sr_measured14 N=32 561 s
+14:31:25 done replay/sr_default3 N=32 580 s
+14:31:38 done replay/bler_sionna N=32 562 s
+14:35:22 done replay/olla_on N=16 254 s
+14:35:31 done replay/phr_cap_wholeband N=16 246 s
+14:35:49 done replay/ul_power_alloc N=16 251 s
+14:37:06 done replay/sr_grid8 N=32 497 s
+14:37:34 done replay/sr_grid20 N=32 487 s
+14:38:10 done replay/sr_grid26 N=32 487 s
+14:38:13 done replay/sr_grid32 N=32 489 s
+14:38:29 done replay/sr_grid36 N=32 486 s
+14:38:41 done replay/sr_grid44 N=32 475 s
+14:38:50 done replay/sr_grid50 N=32 478 s
+14:38:58 done replay/harq1 N=16 207 s
+14:39:17 done replay/ul_power_alloc_phr N=16 235 s
+14:39:49 done replay/sr_default3 N=16 240 s
+14:40:49 done replay/sr_measured14 N=16 223 s
+14:41:06 done replay/bler_sionna N=16 212 s
+14:41:44 done replay/sr_grid8 N=16 214 s
+14:41:48 done replay/sr_grid20 N=16 215 s
+14:41:59 done replay/sr_grid26 N=16 210 s
+14:41:59 done replay_fade/fade_matched N=16 130 s
+14:42:07 done replay/sr_grid32 N=16 206 s
+14:42:16 done replay/sr_grid44 N=16 198 s
+14:42:19 done replay/sr_grid36 N=16 209 s
+14:42:42 done replay/sr_grid50 N=16 205 s
+14:42:53 done replay_fade/fade_olla N=16 124 s
+14:42:57 done replay/olla_on N=8 111 s
+14:43:33 done replay/phr_cap_wholeband N=8 109 s
+14:43:33 done replay/harq1 N=8 94 s
+14:43:34 done replay/ul_power_alloc N=8 106 s
+14:43:49 done replay/ul_power_alloc_phr N=8 110 s
+14:43:51 done replay/sr_default3 N=8 104 s
+14:44:00 done replay/sr_measured14 N=8 104 s
+14:44:04 done replay/bler_sionna N=8 105 s
+14:44:30 done replay/sr_grid8 N=8 108 s
+14:44:35 done replay/sr_grid20 N=8 102 s
+14:44:44 done replay/sr_grid26 N=8 107 s
+14:44:54 done replay/olla_on N=4 63 s
+14:45:03 done replay/phr_cap_wholeband N=4 63 s
+14:45:05 done replay/ul_power_alloc N=4 61 s
+14:45:14 done replay/sr_grid32 N=8 101 s
+14:45:14 done replay/sr_grid36 N=8 101 s
+14:45:17 done replay/sr_grid44 N=8 103 s
+14:45:27 done replay/sr_grid50 N=8 98 s
+14:45:33 done replay/ul_power_alloc_phr N=4 63 s
+14:45:33 done replay/harq1 N=4 58 s
+14:45:50 done replay/sr_default3 N=4 66 s
+14:45:55 done replay/sr_measured14 N=4 61 s
+14:46:02 done replay/bler_sionna N=4 59 s
+14:46:05 done replay/sr_grid8 N=4 60 s
+14:46:12 done replay/sr_grid26 N=4 58 s
+14:46:15 done replay/sr_grid20 N=4 61 s
+14:46:16 done replay/sr_grid32 N=4 59 s
+14:46:27 done replay/sr_grid36 N=4 60 s
+14:46:31 done replay/sr_grid44 N=4 58 s
+14:46:32 done replay/sr_grid50 N=4 59 s
+14:46:36 done replay_fade/fade_matched N=4 46 s
+14:46:39 done replay_fade/fade_olla N=4 44 s
+14:46:41 done replay/olla_on N=2 39 s
+14:46:46 done replay/phr_cap_wholeband N=2 41 s
+14:46:51 done replay/ul_power_alloc N=2 39 s
+14:46:53 done replay/harq1 N=2 37 s
+14:46:55 done replay/ul_power_alloc_phr N=2 40 s
+14:47:02 done replay/sr_default3 N=2 35 s
+14:47:09 done replay/bler_sionna N=2 37 s
+14:47:10 done replay/sr_measured14 N=2 39 s
+14:47:15 done replay/sr_grid8 N=2 39 s
+14:47:16 done replay/sr_grid20 N=2 37 s
+14:47:20 done replay/sr_grid26 N=2 39 s
+14:47:24 done replay/sr_grid32 N=2 38 s
+14:47:30 done replay/sr_grid36 N=2 39 s
+14:47:32 done replay/sr_grid50 N=2 37 s
+14:47:33 done replay/sr_grid44 N=2 40 s
+14:47:36 done replay/olla_on N=1 34 s
+14:47:39 done replay/phr_cap_wholeband N=1 30 s
+14:47:43 done replay/ul_power_alloc N=1 33 s
+14:47:46 done replay/harq1 N=1 30 s
+14:47:47 done replay/ul_power_alloc_phr N=1 32 s
+14:47:52 done replay/sr_default3 N=1 32 s
+14:47:56 done replay/sr_measured14 N=1 32 s
+14:48:00 done replay/bler_sionna N=1 30 s
+14:48:05 done replay/sr_grid26 N=1 29 s
+14:48:05 done replay/sr_grid8 N=1 33 s
+14:48:05 done replay/sr_grid20 N=1 32 s
+14:48:08 done replay/sr_grid32 N=1 29 s
+14:48:09 done replay/sr_grid36 N=1 26 s
+14:48:11 done replay/sr_grid44 N=1 25 s
+14:48:11 done replay/sr_grid50 N=1 24 s
+14:48:11 ABL_DONE
+abl wall 4440.14 s
+13:37:25 gpu 2bb77f8 219 s
+13:41:42 gpu 415c7ff 257 s
+13:55:26 gpu 1f3c90d 824 s
+14:08:53 gpu d153c37 807 s
+14:10:41 cpu 1f3c90d primary N=64 2215 s rc=0
+14:11:00 cpu 415c7ff primary N=64 2234 s rc=0
+14:11:10 cpu 1f3c90d primary_eng N=64 2244 s rc=0
+14:11:18 cpu 415c7ff primary_eng N=64 2252 s rc=0
+14:11:47 cpu 2bb77f8 primary N=64 2281 s rc=0
+14:12:01 cpu 2bb77f8 primary_eng N=64 2295 s rc=0
+14:16:51 gpu a002df8 478 s
+14:16:51 BISECT_DONE
+bisect wall 2585.17 s
+14:49:54 1f3c90d fade_matched N=4 39 s rc=0
+14:49:56 415c7ff fade_matched N=4 41 s rc=0
+14:50:33 1f3c90d fade_matched N=16 78 s rc=0
+14:50:35 415c7ff fade_matched N=16 80 s rc=0
+14:52:08 1f3c90d fade_matched N=64 173 s rc=0
+14:52:14 415c7ff fade_matched N=64 179 s rc=0
+FB_DONE
+fadebisect wall 179.38 s
+13:16:26 start commit 1c29443
+13:32:33 CHAIN_DONE
+13:30:31 scalecfg 845 s
+13:31:01 legacy 30 s rc=0
+13:31:15 legacy_fade 14 s
+13:31:15 GPU_DONE
+13:32:33 done replay/v2 N=64 967 s
+13:32:33 done replay/v2_global N=64 967 s
+13:32:33 CPU_DONE
+chain wall 967.90 s

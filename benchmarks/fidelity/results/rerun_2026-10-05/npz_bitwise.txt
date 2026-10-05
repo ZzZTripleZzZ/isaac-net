@@ -1,0 +1,93 @@
+# Bitwise comparison of the 2026-10-05 replays (commit 1c29443) with the replays behind the committed tables
+# (npz files per run; NaN TB counters of the fast backends compared as equal)
+replay/primary vs ../lenafid/replay/primary: identical 147, differ 6, keys {'delay_ms': 6, 'tb_tx': 6, 'rv_tx': 6, 'tb_fail': 5, 'rv_fail': 5, 'prb_win': 5, 'rep': 4, 'ue': 4}
+replay/primary_eng vs ../loadfix2/replay/primary_eng: identical 144, differ 9, keys {'rep': 7, 'ue': 7, 'delay_ms': 9, 'tb_tx': 9, 'tb_fail': 7, 'rv_tx': 9, 'rv_fail': 7, 'prb_win': 9}
+replay/v2 vs ../loadfix2/replay/v2: identical 153, differ 0, keys {}
+replay/v2_global vs ../loadfix2/replay/v2_global: identical 153, differ 0, keys {}
+replay/olla_on vs ../lenafid/replay/olla_on: identical 126, differ 27, keys {'rep': 22, 'ue': 22, 'delay_ms': 27, 'tb_tx': 25, 'tb_fail': 25, 'rv_tx': 26, 'rv_fail': 25, 'tb_exh': 19, 'prb_win': 26}
+replay/phr_cap_wholeband vs ../lenafid/replay/phr_cap_wholeband: identical 147, differ 6, keys {'delay_ms': 6, 'tb_tx': 6, 'rv_tx': 6, 'tb_fail': 5, 'rv_fail': 5, 'prb_win': 5, 'rep': 4, 'ue': 4}
+replay/ul_power_alloc vs ../lenafid/replay/ul_power_alloc: identical 146, differ 7, keys {'delay_ms': 7, 'tb_tx': 7, 'rv_tx': 7, 'prb_win': 7, 'tb_fail': 6, 'rv_fail': 6, 'rep': 5, 'ue': 5}
+replay/ul_power_alloc_phr vs ../lenafid/replay/ul_power_alloc_phr: identical 144, differ 9, keys {'delay_ms': 9, 'tb_tx': 9, 'rv_tx': 7, 'prb_win': 9, 'rep': 5, 'ue': 5, 'tb_fail': 6, 'rv_fail': 3}
+replay/harq1 vs ../lenafid/replay/harq1: identical 147, differ 6, keys {'delay_ms': 6, 'tb_tx': 6, 'rv_tx': 6, 'tb_fail': 5, 'rv_fail': 5, 'prb_win': 5, 'rep': 4, 'ue': 4}
+replay/sr_default3 vs ../lenafid/replay/sr_default3: identical 145, differ 8, keys {'delay_ms': 8, 'tb_tx': 8, 'prb_win': 7, 'ue': 6, 'tb_fail': 6, 'rv_tx': 6, 'rv_fail': 6, 'rep': 5}
+replay/sr_measured14 vs ../lenafid/replay/sr_measured14: identical 145, differ 8, keys {'delay_ms': 8, 'tb_tx': 8, 'prb_win': 6, 'rv_tx': 7, 'rep': 4, 'ue': 4, 'tb_fail': 4, 'rv_fail': 4}
+replay/bler_sionna vs ../lenafid/replay/bler_sionna: identical 141, differ 12, keys {'tb_tx': 12, 'rv_tx': 12, 'delay_ms': 11, 'tb_fail': 11, 'rv_fail': 10, 'prb_win': 10, 'rep': 7, 'ue': 7}
+replay/sr_grid8 vs ../lenafid/replay/sr_grid8: identical 148, differ 5, keys {'rep': 5, 'ue': 5, 'delay_ms': 5, 'tb_tx': 5, 'tb_fail': 5, 'rv_tx': 5, 'rv_fail': 5, 'prb_win': 5}
+replay/sr_grid20 vs ../lenafid/replay/sr_grid20: identical 147, differ 6, keys {'delay_ms': 6, 'tb_tx': 6, 'rv_tx': 6, 'prb_win': 6, 'rep': 5, 'ue': 5, 'tb_fail': 5, 'rv_fail': 5}
+replay/sr_grid26 vs ../lenafid/replay/sr_grid26: identical 142, differ 11, keys {'rep': 10, 'ue': 10, 'delay_ms': 11, 'tb_tx': 11, 'tb_fail': 10, 'rv_tx': 11, 'rv_fail': 10, 'prb_win': 11}
+replay/sr_grid32 vs ../lenafid/replay/sr_grid32: identical 148, differ 5, keys {'rep': 5, 'ue': 5, 'delay_ms': 5, 'tb_tx': 5, 'tb_fail': 5, 'rv_tx': 5, 'rv_fail': 5, 'prb_win': 5}
+replay/sr_grid36 vs ../lenafid/replay/sr_grid36: identical 148, differ 5, keys {'rep': 5, 'ue': 5, 'delay_ms': 5, 'tb_tx': 5, 'tb_fail': 5, 'rv_tx': 5, 'rv_fail': 5, 'prb_win': 5}
+replay/sr_grid44 vs ../lenafid/replay/sr_grid44: identical 144, differ 9, keys {'delay_ms': 9, 'tb_tx': 9, 'rep': 6, 'ue': 6, 'tb_fail': 6, 'rv_tx': 8, 'rv_fail': 6, 'prb_win': 7}
+replay/sr_grid50 vs ../lenafid/replay/sr_grid50: identical 147, differ 6, keys {'delay_ms': 6, 'tb_tx': 6, 'rep': 4, 'ue': 4, 'tb_fail': 4, 'rv_tx': 4, 'rv_fail': 3, 'prb_win': 4}
+replay/legacy_graph vs ../lenafid/replay/legacy_graph: identical 0, differ 153, keys {'rep': 134, 'ue': 131, 'delay_ms': 153}
+replay_fade/fade_matched vs ../lenafid/replay_fade/fade_matched: identical 21, differ 12, keys {'rep': 12, 'ue': 12, 'delay_ms': 12, 'tb_tx': 12, 'tb_fail': 12, 'tb_exh': 12, 'rv_tx': 12, 'rv_fail': 12, 'prb_win': 12}
+replay_fade/fade_olla vs ../lenafid/replay_fade/fade_olla: identical 21, differ 12, keys {'rep': 12, 'ue': 12, 'delay_ms': 12, 'tb_tx': 12, 'tb_fail': 12, 'tb_exh': 12, 'rv_tx': 12, 'rv_fail': 12, 'prb_win': 12}
+replay_fade/legacy_graph vs ../lenafid/replay_fade/legacy_graph: identical 0, differ 33, keys {'rep': 31, 'ue': 31, 'delay_ms': 33}
+replay_scalecfg/v1_triton vs ../scalecfg/replay_scalecfg/v1_triton: identical 147, differ 6, keys {'delay_ms': 6, 'prb_win': 6, 'rv_tx': 5, 'rv_fail': 5, 'rep': 4, 'ue': 4}
+replay_scalecfg/v2_graph vs ../scalecfg/replay_scalecfg/v2_graph: identical 153, differ 0, keys {}
+replay_scalecfg/nrconfig vs ../scalecfg/replay_scalecfg/nrconfig: identical 121, differ 32, keys {'prb_win': 31, 'rep': 21, 'ue': 20, 'delay_ms': 31, 'rv_tx': 31, 'rv_fail': 30}
+replay_scalecfg/nrconfig_nofade vs ../scalecfg/replay_scalecfg/nrconfig_nofade: identical 118, differ 35, keys {'rep': 34, 'ue': 33, 'delay_ms': 35, 'rv_tx': 34, 'rv_fail': 33, 'prb_win': 19}
+replay_scalecfg/v2_lumped40 vs ../scalecfg/replay_scalecfg/v2_lumped40: identical 153, differ 0, keys {}
+replay_scalecfg/v2_lumped40_fb16 vs ../scalecfg/replay_scalecfg/v2_lumped40_fb16: identical 153, differ 0, keys {}
+heldout/replay/v2 vs ../loaded/heldout/replay/v2: identical 39, differ 0, keys {}
+
+# Attribution (replays at the commits of the fix/mac branch; 2bb77f8 = base, 415c7ff = B8 HARQ purge, 1f3c90d = B9 retx priority + PF floor, d153c37 = B10, a002df8 = B11)
+## 2bb77f8, v1 N=64 (CPU)
+bisect_2bb77f8/primary vs ../lenafid/replay/primary: identical 30, differ 0, keys {}
+bisect_2bb77f8/primary vs replay/primary: identical 24, differ 6, keys {'delay_ms': 6, 'tb_tx': 6, 'rv_tx': 6, 'tb_fail': 5, 'rv_fail': 5, 'prb_win': 5, 'rep': 4, 'ue': 4}
+bisect_2bb77f8/primary_eng vs ../loadfix2/replay/primary_eng: identical 30, differ 0, keys {}
+bisect_2bb77f8/primary_eng vs replay/primary_eng: identical 22, differ 8, keys {'delay_ms': 8, 'tb_tx': 8, 'rv_tx': 8, 'prb_win': 8, 'tb_fail': 6, 'rv_fail': 6, 'rep': 6, 'ue': 6}
+## 415c7ff, v1 N=64 (CPU)
+bisect_415c7ff/primary vs ../lenafid/replay/primary: identical 30, differ 0, keys {}
+bisect_415c7ff/primary vs replay/primary: identical 24, differ 6, keys {'delay_ms': 6, 'tb_tx': 6, 'rv_tx': 6, 'tb_fail': 5, 'rv_fail': 5, 'prb_win': 5, 'rep': 4, 'ue': 4}
+bisect_415c7ff/primary_eng vs ../loadfix2/replay/primary_eng: identical 30, differ 0, keys {}
+bisect_415c7ff/primary_eng vs replay/primary_eng: identical 22, differ 8, keys {'delay_ms': 8, 'tb_tx': 8, 'rv_tx': 8, 'prb_win': 8, 'tb_fail': 6, 'rv_fail': 6, 'rep': 6, 'ue': 6}
+## 1f3c90d, v1 N=64 (CPU)
+bisect_1f3c90d/primary vs ../lenafid/replay/primary: identical 24, differ 6, keys {'delay_ms': 6, 'tb_tx': 6, 'rv_tx': 6, 'tb_fail': 5, 'rv_fail': 5, 'prb_win': 5, 'rep': 4, 'ue': 4}
+bisect_1f3c90d/primary vs replay/primary: identical 30, differ 0, keys {}
+bisect_1f3c90d/primary_eng vs ../loadfix2/replay/primary_eng: identical 22, differ 8, keys {'delay_ms': 8, 'tb_tx': 8, 'rv_tx': 8, 'prb_win': 8, 'tb_fail': 6, 'rv_fail': 6, 'rep': 6, 'ue': 6}
+bisect_1f3c90d/primary_eng vs replay/primary_eng: identical 30, differ 0, keys {}
+## 2bb77f8, triton arms
+bisect_2bb77f8/v1_triton vs ../scalecfg/replay_scalecfg/v1_triton: identical 153, differ 0, keys {}
+bisect_2bb77f8/v1_triton vs replay_scalecfg/v1_triton: identical 147, differ 6, keys {'delay_ms': 6, 'prb_win': 6, 'rv_tx': 5, 'rv_fail': 5, 'rep': 4, 'ue': 4}
+bisect_2bb77f8/nrconfig vs ../scalecfg/replay_scalecfg/nrconfig: identical 153, differ 0, keys {}
+bisect_2bb77f8/nrconfig vs replay_scalecfg/nrconfig: identical 121, differ 32, keys {'prb_win': 31, 'rep': 21, 'ue': 20, 'delay_ms': 31, 'rv_tx': 31, 'rv_fail': 30}
+bisect_2bb77f8/nrconfig_nofade vs ../scalecfg/replay_scalecfg/nrconfig_nofade: identical 153, differ 0, keys {}
+bisect_2bb77f8/nrconfig_nofade vs replay_scalecfg/nrconfig_nofade: identical 118, differ 35, keys {'rep': 34, 'ue': 33, 'delay_ms': 35, 'rv_tx': 34, 'rv_fail': 33, 'prb_win': 19}
+## 415c7ff, triton arms
+bisect_415c7ff/v1_triton vs ../scalecfg/replay_scalecfg/v1_triton: identical 153, differ 0, keys {}
+bisect_415c7ff/v1_triton vs replay_scalecfg/v1_triton: identical 147, differ 6, keys {'delay_ms': 6, 'prb_win': 6, 'rv_tx': 5, 'rv_fail': 5, 'rep': 4, 'ue': 4}
+bisect_415c7ff/nrconfig vs ../scalecfg/replay_scalecfg/nrconfig: identical 147, differ 6, keys {'rep': 6, 'ue': 5, 'delay_ms': 6, 'rv_tx': 6, 'rv_fail': 5, 'prb_win': 5}
+bisect_415c7ff/nrconfig vs replay_scalecfg/nrconfig: identical 127, differ 26, keys {'prb_win': 26, 'delay_ms': 25, 'rv_tx': 25, 'rv_fail': 25, 'rep': 15, 'ue': 15}
+bisect_415c7ff/nrconfig_nofade vs ../scalecfg/replay_scalecfg/nrconfig_nofade: identical 129, differ 24, keys {'rep': 24, 'ue': 24, 'delay_ms': 24, 'rv_tx': 24, 'rv_fail': 23, 'prb_win': 6}
+bisect_415c7ff/nrconfig_nofade vs replay_scalecfg/nrconfig_nofade: identical 137, differ 16, keys {'rep': 15, 'ue': 14, 'delay_ms': 16, 'rv_tx': 15, 'rv_fail': 15, 'prb_win': 16}
+## 1f3c90d, triton arms
+bisect_1f3c90d/v1_triton vs ../scalecfg/replay_scalecfg/v1_triton: identical 147, differ 6, keys {'delay_ms': 6, 'prb_win': 6, 'rv_tx': 5, 'rv_fail': 5, 'rep': 4, 'ue': 4}
+bisect_1f3c90d/v1_triton vs replay_scalecfg/v1_triton: identical 153, differ 0, keys {}
+bisect_1f3c90d/nrconfig vs ../scalecfg/replay_scalecfg/nrconfig: identical 121, differ 32, keys {'prb_win': 31, 'rep': 21, 'ue': 20, 'delay_ms': 31, 'rv_tx': 31, 'rv_fail': 30}
+bisect_1f3c90d/nrconfig vs replay_scalecfg/nrconfig: identical 153, differ 0, keys {}
+bisect_1f3c90d/nrconfig_nofade vs ../scalecfg/replay_scalecfg/nrconfig_nofade: identical 118, differ 35, keys {'rep': 34, 'ue': 33, 'delay_ms': 35, 'rv_tx': 34, 'rv_fail': 33, 'prb_win': 19}
+bisect_1f3c90d/nrconfig_nofade vs replay_scalecfg/nrconfig_nofade: identical 153, differ 0, keys {}
+## d153c37, triton arms
+bisect_d153c37/v1_triton vs ../scalecfg/replay_scalecfg/v1_triton: identical 147, differ 6, keys {'delay_ms': 6, 'prb_win': 6, 'rv_tx': 5, 'rv_fail': 5, 'rep': 4, 'ue': 4}
+bisect_d153c37/v1_triton vs replay_scalecfg/v1_triton: identical 153, differ 0, keys {}
+bisect_d153c37/nrconfig vs ../scalecfg/replay_scalecfg/nrconfig: identical 121, differ 32, keys {'prb_win': 31, 'rep': 21, 'ue': 20, 'delay_ms': 31, 'rv_tx': 31, 'rv_fail': 30}
+bisect_d153c37/nrconfig vs replay_scalecfg/nrconfig: identical 153, differ 0, keys {}
+bisect_d153c37/nrconfig_nofade vs ../scalecfg/replay_scalecfg/nrconfig_nofade: identical 118, differ 35, keys {'rep': 34, 'ue': 33, 'delay_ms': 35, 'rv_tx': 34, 'rv_fail': 33, 'prb_win': 19}
+bisect_d153c37/nrconfig_nofade vs replay_scalecfg/nrconfig_nofade: identical 153, differ 0, keys {}
+## a002df8, triton arms
+bisect_a002df8/v1_triton vs ../scalecfg/replay_scalecfg/v1_triton: identical 147, differ 6, keys {'delay_ms': 6, 'prb_win': 6, 'rv_tx': 5, 'rv_fail': 5, 'rep': 4, 'ue': 4}
+bisect_a002df8/v1_triton vs replay_scalecfg/v1_triton: identical 153, differ 0, keys {}
+bisect_a002df8/nrconfig vs ../scalecfg/replay_scalecfg/nrconfig: identical 121, differ 32, keys {'prb_win': 31, 'rep': 21, 'ue': 20, 'delay_ms': 31, 'rv_tx': 31, 'rv_fail': 30}
+bisect_a002df8/nrconfig vs replay_scalecfg/nrconfig: identical 153, differ 0, keys {}
+bisect_a002df8/nrconfig_nofade vs ../scalecfg/replay_scalecfg/nrconfig_nofade: identical 118, differ 35, keys {'rep': 34, 'ue': 33, 'delay_ms': 35, 'rv_tx': 34, 'rv_fail': 33, 'prb_win': 19}
+bisect_a002df8/nrconfig_nofade vs replay_scalecfg/nrconfig_nofade: identical 153, differ 0, keys {}
+## 415c7ff, fade_matched (CPU)
+fbisect_415c7ff/fade_matched vs ../lenafid/replay_fade/fade_matched: identical 33, differ 0, keys {}
+fbisect_415c7ff/fade_matched vs replay_fade/fade_matched: identical 21, differ 12, keys {'rep': 12, 'ue': 12, 'delay_ms': 12, 'tb_tx': 12, 'tb_fail': 12, 'tb_exh': 12, 'rv_tx': 12, 'rv_fail': 12, 'prb_win': 12}
+## 1f3c90d, fade_matched (CPU)
+fbisect_1f3c90d/fade_matched vs ../lenafid/replay_fade/fade_matched: identical 21, differ 12, keys {'rep': 12, 'ue': 12, 'delay_ms': 12, 'tb_tx': 12, 'tb_fail': 12, 'tb_exh': 12, 'rv_tx': 12, 'rv_fail': 12, 'prb_win': 12}
+fbisect_1f3c90d/fade_matched vs replay_fade/fade_matched: identical 33, differ 0, keys {}
+## 108657f (2026-09-30), L2-legacy graph
+bisect_108657f/legacy_graph vs ../lenafid/replay/legacy_graph: identical 0, differ 153, keys {'rep': 134, 'ue': 131, 'delay_ms': 153}
+bisect_108657f/legacy_graph vs replay/legacy_graph: identical 153, differ 0, keys {}

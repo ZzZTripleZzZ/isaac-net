@@ -2,6 +2,9 @@
 
 This page is the formal comparison between the NR engine (level `L2`, `isaac_net/core/nr_engine.py`) and ns-3.48 with 5G-LENA v5.1. It replays every run of the 5G-LENA sweep described in [validation-5g-lena.md](validation-5g-lena.md) with identical per-UE link budgets and identical offered traffic, compares delay, delivery, throughput, HARQ and PRB use per run and over the sweep, splits the one fitted parameter into a fit set and a hold-out set, ablates the alignment switches one at a time, adds the legacy slot-level engine (`L2-legacy`) and the 5G-LENA fading arm as separate rows, and reports simulation speed. It makes no claim about RL policies. Every number below is in a CSV under `benchmarks/fidelity/results/`, and `python benchmarks/fidelity/report.py` regenerates every table from those files.
 
+**Re-run 2026-10-05 after the MAC fixes of CHANGELOG "Fixed, L2 MAC and energy" (2026-10-04).** Every engine replay on this page was re-run on commit `1c29443` with the same inputs, seeds, replicas and process layout, and the 5G-LENA side unchanged. `benchmarks/fidelity/results/rerun_2026-10-05/` holds the tables before and after, the per-run differences and the bitwise check of every replay file against the old one. `lena_validation_v2()` (CPU reference and graph), v2 minus BSR (both buffer depths) and the held-out carrier of [fidelity-heldout.md](fidelity-heldout.md) are bitwise unchanged on every run. The 5G-LENA presets drop data on HARQ exhaustion and discard at PDCP arrival, so the HARQ-purge fix never acts, and v2 freezes the PF average of idle UEs, so the new PF floor never binds. The radio-RNG change does not apply, since the replay feeds each UE's SNR and no poses. `lena_validation()` changed in 6 of 153 runs (9 with the engine RNG), all N = 32–64 runs with 30 kB frames and mostly saturated. There a UE's decayed PF average could outrank an admitted retransmission before the lexicographic retransmission priority (commit `1f3c90d`, verified by replaying the commits before and after it), and every median on this page moves by at most 0.4 percentage points. Its ablation arms, the SR grid and the fading arm move the same way. `NRConfig()` changed in 32 and 35 runs (both the HARQ-purge and the priority fix act there): its light-load median delay error goes from −30.2% to −29.1%. The `L2-legacy` rows also changed, but not because of these fixes: the 2026-09-30 code (`108657f`) already gives today's legacy output bitwise, so the old legacy rows came from an earlier copy of the code. The tables below are the re-run's.
+
+
 ## Summary
 
 Over the 153 runs of the primary (no-fading) arm, with the SR-to-grant delay fitted on seeds 1 and 3 only:
@@ -12,9 +15,9 @@ Over the 153 runs of the primary (no-fading) arm, with the SR-to-grant delay fit
 - **PRB use.** The engine grants 9.7% fewer PRBs than 5G-LENA (median), 13% fewer at light load and the same at saturation.
 - **Where it fails.** The gap is concentrated in loaded cells. In runs where 5G-LENA drops 1–20% of frames (moderate) the engine's p50 is 27% low and it drops 4.1 pp fewer frames, and in saturated runs (5G-LENA drop ≥ 20%) the p50 is 35% low and the drop rate 6.9 pp low. The engine is optimistic in both cases.
 - **KS distance.** The median KS distance is 0.28 against an engine replica-to-replica floor of 0.007, so the two delay distributions remain statistically distinguishable even where quantiles agree to a few percent (see the KS note under Caveats).
-- **Legacy engine.** The slot-level engine that the scale results use (`L2-legacy`) has a median p95 error of −19% (absolute 36%) and a KS distance of 0.50 on the same runs, and in saturated runs it drops 32 pp fewer frames than 5G-LENA. The NR engine is the better LENA match on every delay metric and on saturation.
+- **Legacy engine.** The slot-level engine that the scale results use (`L2-legacy`) has a median p95 error of −18% (absolute 35%) and a KS distance of 0.50 on the same runs, and in saturated runs it drops 32 pp fewer frames than 5G-LENA. The NR engine is the better LENA match on every delay metric and on saturation.
 - **v2 (`lena_validation_v2()`).** With 5G-LENA's MAC behavior under load in the engine (per-RBG PF with frozen averages, TDMA UL retransmissions, the SR / BSR grant pipeline with the RLC tail stall, previous-PUSCH AMC; [fidelity-load-gap.md](fidelity-load-gap.md)) and no fitted parameter, the median p50 error is −1.2% in moderate and −0.1% in saturated cells (was −27% and −34%), light load stays at −0.2%, the drop gap in loaded cells shrinks to −1.4 and −1.7 pp, and over the sweep the median KS distance falls from 0.28 to 0.17 and the median absolute p95 error from 8.6% to 3.5%. See [v2](#v2-5g-lena-mac-behavior-under-load).
-- **Scale configurations.** The engine's defaults, `NRConfig()`, which the NR speed rows of config `ul` use, are not validated: median p50 error −30%, −44% and −76% at light, moderate and saturated load, KS 0.61–0.77. The closest configuration the `triton` kernel accepts, v2 without the SR / BSR grant pipeline (lumped 40-slot SR-to-grant delay), has a median p50 error of −3.5%, −5.7% and −0.8% (absolute 4.5%, 6.6%, 5.5%) and a KS distance of 0.24, 0.14 and 0.08, close to v2. See [Scale configurations](#scale-configurations).
+- **Scale configurations.** The engine's defaults, `NRConfig()`, which the NR speed rows of config `ul` use, are not validated: median p50 error −29%, −44% and −76% at light, moderate and saturated load, KS 0.61–0.77. The closest configuration the `triton` kernel accepts, v2 without the SR / BSR grant pipeline (lumped 40-slot SR-to-grant delay), has a median p50 error of −3.5%, −5.7% and −0.8% (absolute 4.5%, 6.6%, 5.5%) and a KS distance of 0.24, 0.14 and 0.08, close to v2. See [Scale configurations](#scale-configurations).
 - **Speed.** The NR engine's reference backend is not faster than 5G-LENA for one small cell: 0.47–0.81 s of wall time per simulated second on one CPU thread (E = 1) against 0.015–0.93 s for 5G-LENA, with break-even at N = 64. Batching 16 envs on one thread brings it to 0.03–0.17 s per env-second.
 
 ## Method
@@ -57,9 +60,9 @@ One engine parameter was fitted to 5G-LENA's outputs: the SR-to-first-PUSCH dela
 
 | SR→PUSCH slots | Fit objective | Fit p50 | Fit p95 | Fit KS | Hold-out p50 | Hold-out p95 | Hold-out \|p50\| | Hold-out \|p95\| | Hold-out KS | Hold-out W1 ms |
 |:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 3 (1.5 ms), engine default | 0.610 | -38.5% | -19.4% | 0.465 | -41.3% | -20.9% | 41.3% | 20.9% | 0.539 | 21.0 |
+| 3 (1.5 ms), engine default | 0.611 | -38.5% | -19.4% | 0.465 | -41.3% | -20.9% | 41.3% | 20.9% | 0.539 | 21.0 |
 | 8 (4.0 ms) | 0.572 | -35.4% | -18.2% | 0.462 | -37.6% | -20.2% | 37.6% | 20.2% | 0.505 | 18.6 |
-| 14 (7.0 ms), measured SR→PUSCH | 0.522 | -30.6% | -17.1% | 0.450 | -31.4% | -17.8% | 31.4% | 17.8% | 0.471 | 16.0 |
+| 14 (7.0 ms), measured SR→PUSCH | 0.522 | -30.7% | -17.1% | 0.450 | -31.4% | -17.8% | 31.4% | 17.8% | 0.471 | 16.0 |
 | 20 (10.0 ms) | 0.457 | -24.8% | -15.9% | 0.422 | -25.1% | -16.4% | 25.1% | 16.4% | 0.442 | 13.5 |
 | 26 (13.0 ms) | 0.388 | -21.1% | -14.4% | 0.393 | -18.9% | -16.0% | 18.9% | 16.0% | 0.425 | 11.0 |
 | 32 (16.0 ms) | 0.266 | -14.6% | -10.3% | 0.310 | -7.4% | -9.9% | 7.6% | 9.9% | 0.400 | 6.6 |
@@ -83,10 +86,10 @@ The refit on seeds 1 and 3 selects the same 40 slots, and the held-out errors (p
 | Wasserstein-1, delay (ms) | 153 | 12.8 | 12.8 | 172.7 |
 | p50 delay rel. error | 153 | -7.2% | 9.7% | 54.5% |
 | p95 delay rel. error | 153 | -7.8% | 9.2% | 35.8% |
-| p99 delay rel. error | 153 | -6.8% | 7.7% | 32.1% |
+| p99 delay rel. error | 153 | -6.7% | 7.7% | 32.1% |
 | drop rate NR − LENA | 153 | -0.63 pp | 0.63 pp | 8.12 pp |
 | cell goodput rel. error | 153 | +0.6% | 0.6% | 13.4% |
-| per-UE goodput \|rel. error\| (median over UEs) | 153 | 0.0% | 0.0% | 14.9% |
+| per-UE goodput \|rel. error\| (median over UEs) | 153 | 0.0% | 0.0% | 14.2% |
 | first-tx BLER NR − LENA | 153 | +0.12 pp | 0.50 pp | 1.92 pp |
 | retx TB fraction NR − LENA | 153 | +0.09 pp | 0.51 pp | 2.34 pp |
 | retx TB count rel. error (LENA ≥ 20 retx) | 111 | -35.5% | 87.5% | 146.3% |
@@ -100,22 +103,22 @@ KS is shown with the replica-to-replica floor in parentheses. Errors are signed 
 
 | Subset | Runs | KS (floor) | W1 ms | p50 err | p95 err | p99 err | Drop Δ | Goodput \|err\| | PRB err |
 |:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| all runs | 153 | 0.278 (0.007) | 12.8 | -7.2% | -7.8% | -6.8% | -0.63 pp | 0.6% | -9.7% |
+| all runs | 153 | 0.278 (0.007) | 12.8 | -7.2% | -7.8% | -6.7% | -0.63 pp | 0.6% | -9.7% |
 | light (LENA drop < 1%) | 79 | 0.257 (0.005) | 3.5 | -0.2% | -9.2% | -9.7% | +0.00 pp | 0.0% | -13.3% |
 | moderate (1–20%) | 36 | 0.316 (0.007) | 66.0 | -26.9% | -15.2% | -12.8% | -4.09 pp | 4.5% | -5.4% |
-| saturated (≥ 20%) | 38 | 0.379 (0.012) | 132.9 | -35.2% | -2.6% | +0.0% | -6.89 pp | 11.8% | +0.0% |
+| saturated (≥ 20%) | 38 | 0.379 (0.012) | 132.9 | -35.2% | -2.6% | -0.0% | -6.89 pp | 11.8% | +0.0% |
 | N = 1 | 9 | 1.000 (0.000) | 0.1 | -0.1% | -0.1% | -0.1% | +0.00 pp | 0.0% | -12.5% |
 | N = 2 | 12 | 0.498 (0.010) | 4.8 | -4.0% | -5.3% | -5.0% | +0.00 pp | 0.0% | -11.7% |
 | N = 4 | 21 | 0.364 (0.005) | 5.0 | -7.3% | -5.7% | -5.3% | +0.00 pp | 0.0% | -11.2% |
 | N = 8 | 24 | 0.266 (0.006) | 6.2 | -3.8% | -7.8% | -10.9% | +0.00 pp | 0.0% | -10.9% |
 | N = 16 | 27 | 0.252 (0.007) | 17.5 | -0.2% | -14.1% | -10.7% | -3.29 pp | 3.4% | -9.2% |
 | N = 32 | 30 | 0.231 (0.009) | 46.5 | -17.0% | -11.1% | -6.1% | -4.38 pp | 5.0% | -4.4% |
-| N = 64 | 30 | 0.247 (0.009) | 98.7 | -22.6% | -11.0% | -6.6% | -5.52 pp | 7.9% | -2.7% |
+| N = 64 | 30 | 0.247 (0.009) | 98.7 | -22.5% | -11.0% | -6.6% | -5.52 pp | 7.9% | -2.7% |
 | f = 0.1 | 42 | 0.226 (0.008) | 2.6 | -0.1% | -6.4% | -9.3% | +0.00 pp | 0.0% | -17.3% |
 | f = 0.3 | 36 | 0.167 (0.006) | 6.7 | -0.2% | -12.3% | -11.6% | +0.00 pp | 0.0% | -14.6% |
 | f = 0.6 | 30 | 0.329 (0.007) | 56.0 | -26.6% | -14.2% | -12.2% | -2.88 pp | 3.0% | -6.4% |
 | f = 0.9 | 24 | 0.385 (0.008) | 117.6 | -35.0% | -4.8% | -1.7% | -6.82 pp | 8.6% | +0.0% |
-| f = 1.2 | 21 | 0.356 (0.011) | 124.1 | -23.1% | -2.3% | +0.0% | -6.54 pp | 11.9% | +0.0% |
+| f = 1.2 | 21 | 0.356 (0.011) | 124.1 | -23.1% | -2.3% | -0.0% | -6.54 pp | 11.9% | +0.0% |
 | S = 4000 | 63 | 0.279 (0.005) | 5.8 | -0.2% | -10.8% | -11.5% | -0.11 pp | 0.1% | -23.5% |
 | S = 30000 | 90 | 0.274 (0.010) | 27.3 | -12.5% | -4.9% | -3.6% | -1.33 pp | 1.9% | -7.6% |
 
@@ -128,7 +131,7 @@ Small-N rows cover less of the load range, because p saturates at 1 (N = 1 with 
 | all hold-out runs | 51 | 0.351 (0.007) | 5.2 | -0.2% | -6.8% | -5.3% | +0.00 pp | 0.0% | -11.3% |
 | light | 34 | 0.266 (0.006) | 2.6 | -0.1% | -7.6% | -6.8% | +0.00 pp | 0.0% | -13.9% |
 | moderate | 8 | 0.357 (0.007) | 90.7 | -30.7% | -18.3% | -11.9% | -4.09 pp | 4.5% | -1.6% |
-| saturated | 9 | 0.396 (0.011) | 175.2 | -37.2% | -3.1% | -0.9% | -6.49 pp | 11.0% | +0.0% |
+| saturated | 9 | 0.397 (0.011) | 175.2 | -37.2% | -3.1% | -0.9% | -6.49 pp | 11.0% | +0.0% |
 
 Seed 2 has more light-load runs (34 of 51, against 45 of 102 on the fit seeds), which is why its all-run medians look better than the full sweep's. Within each regime the held-out errors match the full sweep's.
 
@@ -143,9 +146,9 @@ Per-UE errors are medians over UEs, and the pooled KS is the median over runs of
 
 | Class | UEs | snr1 median dB | UE p50 err | UE p95 err | UE \|p95 err\| | Pooled KS | UE goodput \|err\| 90th pct | retx TBs LENA / NR | TBs NR / LENA |
 |:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| edge | 1207 | 13.0 | -10.6% | -5.9% | 11.4% | 0.266 | 141.7% | 10824 / 3931 | 0.34 |
-| mid | 1203 | 19.5 | -12.6% | -7.4% | 14.1% | 0.364 | 31.1% | 2928 / 3133 | 0.33 |
-| centre | 1211 | 28.5 | -24.3% | -19.7% | 27.2% | 0.568 | 0.0% | 692 / 1268 | 0.41 |
+| edge | 1207 | 13.0 | -10.7% | -6.0% | 11.4% | 0.266 | 141.7% | 10824 / 3932 | 0.34 |
+| mid | 1203 | 19.5 | -12.6% | -7.4% | 14.1% | 0.364 | 31.1% | 2928 / 3136 | 0.33 |
+| centre | 1211 | 28.5 | -24.3% | -20.1% | 27.3% | 0.568 | 0.0% | 692 / 1268 | 0.41 |
 
 Delay error is largest at the cell centre, not at the edge. Centre UEs use high MCS, so the engine sends their frames in few large TBs, while 5G-LENA's delay for them is set by its grant pipeline rather than by the link, which the engine does not model. At the edge the delays agree better, but per-UE goodput spreads widely in loaded runs (90th percentile of the absolute error 142%), because the engine and 5G-LENA starve different weak UEs once the cell is full. 5G-LENA retransmits about 2.8× more edge TBs than the engine, which includes the AMC failure mode above, while the engine retransmits more at the centre. The total retransmission fractions agree within 0.1 pp.
 
@@ -161,7 +164,7 @@ Each arm changes one switch of `lena_validation()` and replays all 153 runs with
 | ul_power_alloc | `ul_power="allocated"` | 0.245 | 12.6 | -0.1% | 9.9% | -9.7% | 12.4% | 0.40 pp | 0.4% | +0.32 pp | -12.8% |
 | ul_power_alloc_phr | `ul_power="allocated"`, `phr_cap=True` | 0.240 | 18.3 | -0.2% | 9.4% | -15.9% | 16.9% | 0.40 pp | 0.4% | +0.38 pp | -16.8% |
 | harq1 | `n_harq=1` | 0.278 | 12.8 | -7.2% | 9.7% | -7.8% | 9.2% | 0.63 pp | 0.6% | +0.12 pp | -9.7% |
-| sr_default3 | `sr_grant_delay_slots=None` (3, pre-fit) | 0.499 | 28.2 | -39.2% | 40.0% | -20.6% | 21.1% | 0.63 pp | 0.6% | +0.08 pp | -9.7% |
+| sr_default3 | `sr_grant_delay_slots=None` (3, pre-fit) | 0.499 | 28.2 | -39.2% | 40.0% | -20.6% | 21.5% | 0.63 pp | 0.6% | +0.08 pp | -9.7% |
 | sr_measured14 | `sr_grant_delay_slots=14` | 0.461 | 23.2 | -30.9% | 30.9% | -17.8% | 19.3% | 0.63 pp | 0.6% | +0.10 pp | -9.7% |
 | bler_sionna | `bler_source="pdsch"` (Sionna tables) | 0.422 | 35.2 | -18.2% | 19.4% | -32.2% | 32.2% | 0.63 pp | 0.6% | +1.25 pp | -33.2% |
 
@@ -193,7 +196,7 @@ By load regime:
 |:---|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | primary_eng | light | 79 | -0.2% | 4.2% | -9.2% | 9.5% | +0.00 | 0.0% | -13.4% | 0.71 | 0.256 | 3.5 |
 | primary_eng | moderate | 36 | -26.9% | 26.9% | -15.4% | 16.9% | -4.05 | 4.4% | -5.4% | 0.38 | 0.316 | 66.8 |
-| primary_eng | saturated | 38 | -33.7% | 34.8% | -3.3% | 4.2% | -6.84 | 11.8% | +0.0% | 0.23 | 0.380 | 135.2 |
+| primary_eng | saturated | 38 | -33.7% | 34.8% | -3.3% | 4.5% | -6.84 | 11.8% | +0.0% | 0.23 | 0.380 | 135.2 |
 | v2 | light | 79 | -0.2% | 2.5% | -2.5% | 3.5% | +0.00 | 0.0% | -3.2% | 1.02 | 0.245 | 2.0 |
 | v2 | moderate | 36 | -1.2% | 4.8% | -6.1% | 8.7% | -1.42 | 1.7% | -4.9% | 1.00 | 0.128 | 17.4 |
 | v2 | saturated | 38 | -0.1% | 4.4% | +0.1% | 1.4% | -1.70 | 3.9% | -3.0% | 0.97 | 0.088 | 30.3 |
@@ -222,12 +225,12 @@ Medians over runs by load regime; |p50| is the median absolute error of the per-
 | v2 (`lena_validation_v2()`) | reference, CPU | light | 79 | -0.2% | 2.5% | -2.5% | +0.00 | 0.245 | -3.2% |
 | v2 (`lena_validation_v2()`) | reference, CPU | moderate | 36 | -1.2% | 4.8% | -6.1% | -1.42 | 0.128 | -4.9% |
 | v2 (`lena_validation_v2()`) | reference, CPU | saturated | 38 | -0.1% | 4.4% | +0.1% | -1.70 | 0.088 | -3.0% |
-| `NRConfig()` | triton | light | 79 | -30.2% | 30.2% | -47.1% | +0.00 | 0.607 | -37.4% |
-| `NRConfig()` | triton | moderate | 36 | -43.8% | 44.1% | -73.7% | -5.42 | 0.618 | -36.5% |
+| `NRConfig()` | triton | light | 79 | -29.1% | 29.1% | -47.1% | +0.00 | 0.607 | -37.4% |
+| `NRConfig()` | triton | moderate | 36 | -43.8% | 44.1% | -73.7% | -5.42 | 0.621 | -36.4% |
 | `NRConfig()` | triton | saturated | 38 | -76.3% | 76.9% | -75.8% | -37.92 | 0.768 | -8.1% |
 | `NRConfig(fading=False)` | triton | light | 79 | -38.9% | 38.9% | -54.6% | +0.00 | 0.650 | -46.0% |
 | `NRConfig(fading=False)` | triton | moderate | 36 | -45.1% | 45.1% | -69.0% | -5.42 | 0.520 | -38.2% |
-| `NRConfig(fading=False)` | triton | saturated | 38 | -8.5% | 61.7% | -2.1% | -31.12 | 0.413 | -0.2% |
+| `NRConfig(fading=False)` | triton | saturated | 38 | -8.6% | 61.7% | -2.2% | -31.10 | 0.410 | -0.2% |
 | v2 minus BSR | triton | light | 79 | -3.5% | 4.5% | -8.9% | +0.00 | 0.238 | -12.9% |
 | v2 minus BSR | triton | moderate | 36 | -5.7% | 6.6% | -14.5% | -2.44 | 0.137 | -6.3% |
 | v2 minus BSR | triton | saturated | 38 | -0.8% | 5.5% | -0.2% | -2.57 | 0.083 | -3.1% |
@@ -235,7 +238,7 @@ Medians over runs by load regime; |p50| is the median absolute error of the per-
 | v2 minus BSR, 16-frame buffer | triton | moderate | 36 | -5.7% | 6.6% | -14.5% | -2.49 | 0.137 | -6.3% |
 | v2 minus BSR, 16-frame buffer | triton | saturated | 38 | -0.8% | 5.5% | -0.0% | -2.94 | 0.083 | -3.1% |
 
-**`NRConfig()` is not a validated configuration.** Its median delay is 30%, 44% and 76% below 5G-LENA's at light, moderate and saturated load, its p95 delay 47–76% below, its KS distance 0.61–0.77, and at saturation it delivers 38 percentage points more frames than 5G-LENA. First-transmission BLER is 9.3 pp higher over the sweep (OLLA on the Sionna curves, against +0.5 pp for v2). Turning fading off does not close the gap at light and moderate load, so most of it comes from the MAC, PHY-table and overhead defaults, not from the channel. Speed numbers measured with `NRConfig()` are the cost of a slot-level NR uplink, not of a configuration that matches 5G-LENA.
+**`NRConfig()` is not a validated configuration.** Its median delay is 29%, 44% and 76% below 5G-LENA's at light, moderate and saturated load, its p95 delay 47–76% below, its KS distance 0.61–0.77, and at saturation it delivers 38 percentage points more frames than 5G-LENA. First-transmission BLER is 9.3 pp higher over the sweep (OLLA on the Sionna curves, against +0.5 pp for v2). Turning fading off does not close the gap at light and moderate load, so most of it comes from the MAC, PHY-table and overhead defaults, not from the channel. Speed numbers measured with `NRConfig()` are the cost of a slot-level NR uplink, not of a configuration that matches 5G-LENA.
 
 **v2 minus BSR stays close to v2.** Over the sweep its median p50 error is −3.3% (absolute 5.2%) against −0.2% (3.4%) for v2, its KS distance 0.163 against 0.169, and its drop difference −0.04 pp against 0.00 pp. By regime the median absolute p50 error is 4.5%, 6.6% and 5.5% (v2: 2.5%, 4.8%, 4.4%). What the grant pipeline adds is mostly in the tail and the light-load PRB use: without it the p95 error is −8.9% and −14.5% at light and moderate load (v2: −2.5%, −6.1%), the light-load PRB error returns to −12.9% (v2: −3.2%, v1: −13.4%), and the loaded-cell drop gap grows from −1.4 / −1.7 pp to −2.4 / −2.6 pp. It keeps the one fitted value of v1, the 40-slot SR-to-grant delay. A 16-frame buffer instead of 128 changes only the saturated drop difference (−2.9 against −2.6 pp). The six GPU arms took 6.3 min of stepping on the RTX 4090, compilation and input loading excluded (`replay_groups.csv`).
 
@@ -245,15 +248,15 @@ The legacy slot-level engine replays the same 153 runs through `make_engine("L2-
 
 | Subset | Runs | KS (floor) | W1 ms | p50 err | p95 err | p99 err | Drop Δ | Goodput \|err\| |
 |:---|---:|---:|---:|---:|---:|---:|---:|---:|
-| all runs | 153 | 0.498 (0.027) | 32.3 | -31.7% | -19.1% | -8.2% | -0.36 pp | 1.0% |
-| light | 79 | 0.438 (0.033) | 17.9 | -15.1% | -5.7% | +6.5% | +0.00 pp | 0.0% |
-| moderate | 36 | 0.464 (0.028) | 95.6 | -33.6% | -43.3% | -44.6% | -4.82 pp | 5.3% |
-| saturated | 38 | 0.627 (0.021) | 399.5 | -67.0% | -33.1% | -8.6% | -32.23 pp | 53.0% |
-| N = 1 | 9 | 0.875 (0.060) | 14.5 | +10.4% | +17.9% | +36.0% | +0.00 pp | 0.0% |
-| N = 8 | 24 | 0.418 (0.021) | 18.5 | -38.6% | -12.4% | +0.3% | +0.00 pp | 0.0% |
-| N = 64 | 30 | 0.631 (0.023) | 267.6 | -67.0% | -53.9% | -50.4% | -12.53 pp | 14.3% |
+| all runs | 153 | 0.500 (0.029) | 32.0 | -31.7% | -17.9% | -8.8% | -0.36 pp | 1.0% |
+| light | 79 | 0.439 (0.034) | 16.9 | -15.1% | -5.7% | +7.4% | +0.00 pp | 0.0% |
+| moderate | 36 | 0.468 (0.028) | 96.4 | -36.2% | -41.9% | -44.2% | -4.82 pp | 5.3% |
+| saturated | 38 | 0.626 (0.022) | 413.4 | -67.2% | -33.4% | -8.8% | -32.23 pp | 53.1% |
+| N = 1 | 9 | 0.878 (0.060) | 14.7 | +10.4% | +17.9% | +36.0% | +0.00 pp | 0.0% |
+| N = 8 | 24 | 0.422 (0.030) | 18.5 | -34.8% | -14.1% | -0.7% | +0.00 pp | 0.0% |
+| N = 64 | 30 | 0.633 (0.024) | 268.1 | -67.0% | -54.3% | -49.8% | -12.53 pp | 14.3% |
 
-The absolute p95 error is 36% (median over runs) for the legacy engine against 9.2% for the NR engine. The legacy engine drops 32 pp fewer frames than 5G-LENA once the cell saturates, likely because its logistic PHY is optimistic at high spectral efficiency ([validation-5g-lena.md](validation-5g-lena.md)), which gives it more capacity than 5G-LENA once the cell is full. Any result that relies on the legacy engine's delays or losses near saturation should be read with this gap in mind. The full tables are `summary_legacy_graph.csv` and `per_run_legacy_graph.csv`.
+The absolute p95 error is 35% (median over runs) for the legacy engine against 9.2% for the NR engine. The legacy engine drops 32 pp fewer frames than 5G-LENA once the cell saturates, likely because its logistic PHY is optimistic at high spectral efficiency ([validation-5g-lena.md](validation-5g-lena.md)), which gives it more capacity than 5G-LENA once the cell is full. Any result that relies on the legacy engine's delays or losses near saturation should be read with this gap in mind. The full tables are `summary_legacy_graph.csv` and `per_run_legacy_graph.csv`.
 
 ### Fading-on arm
 
@@ -261,9 +264,9 @@ The 33 fading runs of the sweep (N ∈ {4, 16, 64}, f ∈ {0.3, 0.9}, both frame
 
 | Engine arm | KS | W1 ms | p50 err | p95 err | Drop Δ | Goodput \|err\| | PRB err | NR drop / BLER (median) |
 |:---|---:|---:|---:|---:|---:|---:|---:|:---|
-| NR, LENA-matched (OLLA off), `fading=True, ue_speed_mps=3` | 0.244 | 105.2 | -18.8% | +0.9% | -17.5 pp | 82.3% | +11.2% | 0.56 / 0.40 |
-| NR, OLLA on | 0.196 | 105.1 | -2.1% | +10.0% | -35.8 pp | 158.3% | +12.7% | 0.32 / 0.11 |
-| legacy (`L2-legacy`, OLLA, fading always on) | 0.597 | 270.1 | -67.8% | -72.3% | -68.1 pp | 228.8% | – | 0.00 / – |
+| NR, LENA-matched (OLLA off), `fading=True, ue_speed_mps=3` | 0.244 | 105.2 | -18.5% | +1.2% | -17.5 pp | 82.3% | +11.3% | 0.56 / 0.40 |
+| NR, OLLA on | 0.196 | 105.1 | -2.1% | +10.0% | -35.8 pp | 158.4% | +12.7% | 0.32 / 0.11 |
+| legacy (`L2-legacy`, OLLA, fading always on) | 0.602 | 270.0 | -67.8% | -72.3% | -68.1 pp | 226.0% | – | 0.00 / – |
 
 5G-LENA's median drop is 0.70. With the same no-OLLA AMC, the NR engine reproduces the failure qualitatively (median drop 56%, BLER 40%), but not quantitatively, since the channel models differ. With OLLA the engine recovers most frames, and the legacy engine delivers all of them. The per-N and per-load tables are in `fade_summary_*.csv`. None of these numbers validates fading. That still needs a link-level check against 5G-LENA's EESM curves or a patched 5G-LENA with OLLA, as [validation-5g-lena.md](validation-5g-lena.md) notes.
 
