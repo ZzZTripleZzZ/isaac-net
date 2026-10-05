@@ -16,7 +16,10 @@ graph   NRGraphEngine. The reference engine's own step (NRNet.step / step_cells 
             addresses stay valid, partial resets are exact and nothing is reallocated;
           * no host syncs inside the step (PHY constants are device tables, counters are device tensors), fixed
             shapes; statistics (log_stats) are exported by the graph and appended on the host after the replay;
-          * submit, add_dl_frames and reset(env_ids) run eagerly between replays, as in the reference.
+          * submit, add_dl_frames and reset(env_ids) run eagerly between replays, as in the reference;
+          * traffic models (UL and DL): the step's messages are generated and enqueued eagerly before the replay;
+            their in-step arrival gates (hooks on net.ul / net.dl that open the queue streams slot by slot) read
+            static buffers that step() refills before each replay, so the captured hooks see this step's arrivals.
 triton  NRTritonEngine (see its docstring): the UL slots of a control step in one fused Triton kernel per step,
         the rest of the step as in the graph backend, everything captured in CUDA graphs. Equal to the reference to
         float rounding (identical decisions from an identical state; aggregates to rounding in free running).
@@ -31,7 +34,7 @@ import torch
 from .config import NRConfig
 from .engine import NREngine
 
-NOT_STATE = {"env", "_zero", "_tdev", "_acc", "_g0_dev", "_full_enq"}  # constants and scratch (never reassigned; not state)
+NOT_STATE = {"env", "_zero", "_tdev", "_acc", "_g0_dev", "_full_enq", "_dl_full_enq"}  # constants and scratch (never reassigned; not state)
 
 
 def state_owners(eng):
@@ -71,14 +74,51 @@ def state_dict(eng):
     return {f"{ok}.{n}" + ("" if k is None else f"[{k}]"): v for ok, n, k, v in state_items(eng)}
 
 
+class _EagerReplay:
+    """CPU stand-in for a captured step (NRGraphEngine._require_cuda = False, tests): replay() runs the captured region
+    again with the host inputs and host state of the capture (its control step T, its input kind, the static buffers,
+    net.last_g and the ioN counters, the gate tensors the hooks read). It checks the
+    static-buffer plumbing (inputs, gates, rebinding, outputs) on CPU, not that the region is free of host syncs."""
+
+    FROZEN = ("_gate", "_full_enq", "_dl_gate", "_dl_full_enq", "_g0")    # engine attributes the hooks read
+
+    def __init__(self, eng, T, kind, ins, host, frozen):
+        self.eng, self.T, self.kind, self.ins, self.host, self.frozen = eng, T, kind, ins, host, frozen
+
+    def replay(self):
+        eng = self.eng
+        cur = eng._host_state()
+        live = {n: getattr(eng, n, None) for n in self.FROZEN}
+        eng._set_host_state(self.host)             # host values a CUDA graph bakes in at capture (net.last_g, ...)
+        for n, v in self.frozen.items():           # and the tensors it reads: the objects of the capture (gates)
+            setattr(eng, n, v)
+        try:
+            eng._write_out(eng._region(self.T, self.kind, self.ins))
+        finally:
+            eng._set_host_state(cur)               # step() applies the host updates after the replay
+            for n, v in live.items():
+                setattr(eng, n, v)
+
+
+TRITON_NOT_IMPLEMENTED = ("several cells (n_cells > 1: A3 handover, rlf), the SR / BSR grant pipeline "
+                          "(ul_grant_model='bsr'), closed-loop UL power control (ul_tpc), the 38.214 CQI table, "
+                          "RACH / DRX (rach, drx), FDD (duplex='fdd'), DL traffic models, SINR hooks")
+
+
+class TritonUnsupported(NotImplementedError, ValueError):
+    """A config feature that the triton kernel does not implement (NRTritonEngine.refusals). Both a
+    NotImplementedError and a ValueError, the two types make_engine raised for these refusals before."""
+
+
 class NRGraphEngine(NREngine):
     """NREngine whose step() replays CUDA graphs of the reference step. Same API and outputs as NREngine."""
 
     backend = "graph"
+    _require_cuda = True       # False (tests only): on a CPU device, replays re-run the captured region eagerly
 
     def __init__(self, E, R, device, cfg: NRConfig, seed=None):
         device = torch.device(device)
-        if device.type != "cuda":
+        if device.type != "cuda" and self._require_cuda:
             raise ValueError("the graph backend of the NR engine needs a CUDA device (use backend='reference')")
         if cfg.rng != "engine":
             raise ValueError("the graph / triton backends of the NR engine need rng='engine' (the global torch RNG "
@@ -195,6 +235,9 @@ class NRGraphEngine(NREngine):
             n0 = net.ul.q.enq
             arr, gen_acc = self._inject(T, triggers)
             gen = (gen_acc, self._full_enq - n0)
+        gen_dl = None
+        if self.traffic_dl is not None:        # DL traffic models: this step's DL messages, eagerly (as NREngine.step)
+            gen_dl = self._inject_dl(T, triggers)
         ins = {"hid": self._buf("hid", cur_hid if legacy else self._last_hid)}
         if net.C > 1:
             if pathgain_db is None:
@@ -215,6 +258,7 @@ class NRGraphEngine(NREngine):
             if dl_snr_db is not None:
                 ins["dl"] = self._buf("dl", dl_snr_db)
         gate = self._static_gate()
+        dgate = self._static_dl_gate()
         N = cfg.slots_per_step
         g0 = T * N
         sched = net._schedule(g0)
@@ -223,7 +267,7 @@ class NRGraphEngine(NREngine):
         P = len(cfg.tdd_pattern)
         skey = g0 % math.lcm(P, cfg.sr_period_slots, cfg.cqi_period_slots)
         key = (skey, dt0, kind, tuple((k, tuple(v.shape), v.dtype) for k, v in ins.items()),   # dtype: own buffers
-               bool(self.log_stats), gate,
+               bool(self.log_stats), gate, dgate,
                bool(getattr(self, "_extras", False)),
                tuple(lk.sinr_hook for lk in (net.ul, net.dl) if lk is not None))   # a hook installed later recaptures
         self._tdev.fill_(T)
@@ -245,6 +289,8 @@ class NRGraphEngine(NREngine):
                 net.stats["delay"][-1] = self._out["delay"][dk].cpu()
         if gate is not None:          # host side of the gate hooks (NREngine traffic models), as in the capture
             self._gate, self._gate_seen, self._snap = None, True, None
+        if self.traffic_dl is not None:   # host side of the DL gate hooks (end_step closes the gate, _outputs_dl)
+            self._dl_gate, self._dl_snap = None, None
         self.T = T + 1
         o = self._out
         if legacy:
@@ -252,6 +298,8 @@ class NRGraphEngine(NREngine):
         res = {k: v.clone() for k, v in o.items()}
         if gen is not None:
             res["gen_accepted"], res["gen_bytes"] = gen
+        if gen_dl is not None:
+            res["gen_dl_accepted"], res["gen_dl_bytes"] = gen_dl
         if x is not None and x.dim() == 3:
             self._obstacle_outputs(res)            # eager radio state, after the replay (as the reference)
         return res
@@ -264,14 +312,32 @@ class NRGraphEngine(NREngine):
         gate = getattr(self, "_gate", None)
         if gate is None:
             return None
-        if not hasattr(self, "_g0_dev"):
-            self._g0_dev = torch.zeros((), dtype=torch.long, device=self.dev)
-        self._g0_dev.fill_(int(self._g0))
-        self._g0 = self._g0_dev            # the gate hooks compute rel = g - _g0 on the device
+        self._static_g0()
         self._gate = tuple(self._buf(f"gate{i}", x) for i, x in enumerate(gate))
         if getattr(self, "_full_enq", None) is not None:
             self._full_enq = self._buf("full_enq", self._full_enq)
         return tuple(tuple(x.shape) for x in self._gate)
+
+    def _static_dl_gate(self):
+        """The DL counterpart of _static_gate for the DL traffic models (NREngine._enable_dl_traffic): the hooks on
+        net.dl (slot / end_step / handover) read self._dl_gate / self._dl_full_enq, which _inject_dl makes each
+        step; they are copied into static buffers so the replayed hooks read this step's DL arrivals. Returns the
+        gate's shapes (part of the graph key) or None."""
+        gate = getattr(self, "_dl_gate", None)
+        if gate is None:
+            return None
+        self._static_g0()
+        self._dl_gate = tuple(self._buf(f"dlgate{i}", x) for i, x in enumerate(gate))
+        self._dl_full_enq = self._buf("dl_full_enq", self._dl_full_enq)
+        return tuple(tuple(x.shape) for x in self._dl_gate)
+
+    def _static_g0(self):
+        """The first slot of the step, which the UL and DL gate hooks subtract (rel = g - _g0), as a device scalar."""
+        if not hasattr(self, "_g0_dev"):
+            self._g0_dev = torch.zeros((), dtype=torch.long, device=self.dev)
+        if not torch.is_tensor(self._g0):  # a host int from this step's _inject / _inject_dl (already set: shared)
+            self._g0_dev.fill_(int(self._g0))
+        self._g0 = self._g0_dev
 
     def _region(self, T, kind, ins):
         """The reference NREngine.step body on static inputs, with t on the device. Returns the output dict."""
@@ -303,6 +369,11 @@ class NRGraphEngine(NREngine):
             finally:
                 net.log_stats = ls
             self._snap = None
+        if self.traffic_dl is not None:            # per-frame DL outputs from the snapshot end_step took (captured)
+            if self._dl_snap is None:
+                raise RuntimeError("the DL traffic hooks on net.dl were not reached: NRNet no longer calls "
+                                   "dl.end_step; DL traffic models need an update")
+            self._outputs_dl(out)
         out["newest"] = self._rel(out["newest"])
         out["cap"] = self._rel(out["cap"])
         if "dl_newest" in out:
@@ -326,6 +397,7 @@ class NRGraphEngine(NREngine):
         host = self._host_state()
         stash = {k: v.clone() for k, v in self._stash.items()}
         gate = (getattr(self, "_gate", None), getattr(self, "_full_enq", None), getattr(self, "_gate_seen", None))
+        dgate = (getattr(self, "_dl_gate", None), getattr(self, "_dl_full_enq", None))
 
         def restore():
             for (*_, b), v in zip(self._reg, snap):
@@ -333,9 +405,22 @@ class NRGraphEngine(NREngine):
             self._set_host_state(host)
             if gate[0] is not None:
                 self._gate, self._full_enq, self._gate_seen = gate
+            if dgate[0] is not None:
+                self._dl_gate, self._dl_full_enq = dgate
             for k, v in stash.items():
                 self._stash[k].copy_(v)
 
+        if self.dev.type != "cuda":    # CPU stand-in (_require_cuda = False, tests): every replay re-runs the region
+            before = dict(getattr(self.net, "ioN_n", {}))       # with the capture's host inputs and host state
+            out = self._region(T, kind, ins)
+            after = dict(getattr(self.net, "ioN_n", {}))
+            self._ion_delta[key] = {k: after[k] - before[k] for k in after}
+            restore()
+            self._extend_registry()
+            for k, v in out.items():
+                if k not in self._out:
+                    self._out[k] = torch.empty_like(v)
+            return _EagerReplay(self, T, kind, ins, host, {n: getattr(self, n, None) for n in _EagerReplay.FROZEN})
         s = torch.cuda.Stream(self.dev)
         s.wait_stream(torch.cuda.current_stream(self.dev))
         with torch.cuda.stream(s):
@@ -393,27 +478,47 @@ class NRTritonEngine(NRGraphEngine):
     size and BLER-table index of every (symbols, PRBs, MCS) are exact tables precomputed with phy.py; EESM, BLER
     interpolation and HARQ combining run in the kernel in float32 (float64 where phy.py uses it). Reduction order and
     fused multiply-adds differ from ATen, so the engine equals the reference to float rounding, not bitwise.
-    The 5G-LENA MAC switches pf_update, pf_avg_idle, ul_retx_sched and ul_amc_alloc run in the kernel;
-    ul_grant_model="bsr" (and so lena_match_v2), ul_tpc and cqi_table="38214" are refused for now (use graph).
-    Limits: one cell (n_cells = 1), no user SINR hook; robots are padded to a power of two (R up to about 256)."""
+    The 5G-LENA MAC switches pf_update, pf_avg_idle, ul_retx_sched and ul_amc_alloc run in the kernel.
+    What the kernel does not implement is refused here, in __init__, before anything is built (refusals(); the
+    backend table of docs/configurability.md lists the same features); SINR hooks, installed after construction,
+    are refused at the first step. Robots are padded to a power of two (R up to about 256)."""
 
     backend = "triton"
 
-    def __init__(self, E, R, device, cfg: NRConfig, seed=None):
+    @staticmethod
+    def refusals(cfg: NRConfig):
+        """[(feature, why)] of the config's features that the fused kernel does not implement (empty: it runs)."""
+        from .traffic import generates
+        out = []
         if cfg.n_cells != 1:
-            raise NotImplementedError("the triton backend of the NR engine is single-cell for now; use backend='graph' "
-                                      "for n_cells > 1")
+            out.append(("several cells (n_cells > 1), and with them A3 handover and radio link failure (rlf)",
+                        "the kernel holds one cell's scheduler and HARQ state per env"))
         if cfg.ul_grant_model != "lumped":
-            raise NotImplementedError(
-                f"the triton backend does not implement ul_grant_model={cfg.ul_grant_model!r} (the 5G-LENA SR / BSR "
-                "grant pipeline, which lena_match_v2 / lena_validation_v2 turn on) yet; use backend='graph' (bitwise "
-                "equal to the reference) or backend='reference'. The other 5G-LENA MAC switches (pf_update, "
-                "pf_avg_idle, ul_retx_sched, ul_amc_alloc) run on triton.")
-        if cfg.ul_tpc or cfg.cqi_table != "mcs":
-            raise NotImplementedError(
-                "the triton backend does not implement closed-loop UL power control (ul_tpc) or the 38.214 CQI table "
-                "(cqi_table='38214') yet: both change the per-slot loop of the fused kernel; use backend='graph' "
-                "(bitwise equal to the reference) or backend='reference'.")
+            out.append((f"ul_grant_model={cfg.ul_grant_model!r} (the 5G-LENA SR / BSR grant pipeline, which "
+                        "lena_match_v2 / lena_validation_v2 turn on)",
+                        "the other 5G-LENA MAC switches (pf_update, pf_avg_idle, ul_retx_sched, ul_amc_alloc) run"))
+        if cfg.ul_tpc:
+            out.append(("closed-loop UL power control (ul_tpc)", "it changes the per-slot loop of the kernel"))
+        if cfg.cqi_table != "mcs":
+            out.append(("the 38.214 CQI table (cqi_table='38214')", "it changes the per-slot loop of the kernel"))
+        if cfg.rach or cfg.drx:
+            out.append(("RACH / DRX (rach, drx)", "they block scheduling through MacLink.sched_ok, which the kernel "
+                        "does not read"))
+        if cfg.duplex == "fdd":
+            out.append(("FDD (duplex='fdd')", "the kernel assumes one TDD carrier for both directions (its PRB "
+                        "tables and slot schedule)"))
+        if generates(cfg.traffic, "dl"):
+            out.append(("DL traffic models (TrafficModel(..., direction='dl'))", "the kernel has no DL arrival gate"))
+        return out
+
+    def __init__(self, E, R, device, cfg: NRConfig, seed=None):
+        no = self.refusals(cfg)
+        if no:
+            raise TritonUnsupported(
+                "the triton backend of the NR engine does not implement "
+                + "; ".join(f"{f}: {why}" for f, why in no)
+                + ". Use backend='graph' (bitwise equal to the reference) or backend='reference'. Not implemented on "
+                "triton: " + TRITON_NOT_IMPLEMENTED + ".")
         super().__init__(E, R, device, cfg, seed=seed)
         from . import nr_triton
         from .nr_rng import STEP, salt

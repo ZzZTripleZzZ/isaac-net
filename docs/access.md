@@ -63,6 +63,8 @@ net.counters()["access"]   # rach_attempts, rach_collisions, rach_successes, rac
 
 **RACH.** UL data (a `submit()` before the step or a traffic-model message at its arrival slot) or DL data for an idle robot starts the procedure. The robot sends a preamble at the first RO at or after the arrival. Each robot draws one of `rach_preambles` preambles from the engine's counter RNG. Two or more robots of the same env and cell that draw the same preamble at the same RO collide. The counts per (env, cell, preamble) come from one `scatter_add` over `[E, C · preambles]`, with no loop over robots. A collision fails for every robot involved, since Msg3 capture is not modelled. A successful robot is served from RO + `rach_rar_window_slots` + `rach_msg3_slots` on. A colliding robot learns of the failure at the same time, backs off, and retries at the next RO after the backoff. For 32 robots that power on together on 64 preambles, the share whose first preamble succeeds matches (63/64)^31 = 0.614 (tested over 256 envs).
 
+**RLF re-establishment.** With `rach=True` and radio link failure on (`rlf=True`, several cells, [multicell.md](multicell.md#radio-link-failure)), re-establishment goes through this RACH model instead of the fixed `reest_delay_ms`. When the cell search of `CellAssociation` selects a suitable cell, after the RLF declaration or for a robot that went idle at T311 expiry, the robot enters RACH toward that cell and contends with that cell's robots. Contention resolution ends the outage: the robot is served, and attached to the new cell, from RO + `rach_rar_window_slots` + `rach_msg3_slots` on, so `out["rlf"]` covers the access delay, and collisions, backoff and failed procedures count as for any other attempt. The stage draws its ROs at the start of each control step, so a selection made during a step uses the first RO of the next step at the earliest. The interface is two calls on `CellAssociation`: `take_reest_requests()` returns the robots that selected a cell and the slot of the selection, and `rach_connected(mask, g)` reports the slot from which service starts. Both use fixed `[E, R]` masks and no host sync. With `rach=False` the fixed `reest_delay_ms` applies as before (tested bitwise against the engine before the change).
+
 **DRX.** A connected robot is awake (Active Time) while the inactivity timer runs, during the on-duration of its cycle, or, with `drx_ul_wake="sr"`, while it has UL data. The inactivity timer restarts in every slot in which the robot is awake and has data or a waiting HARQ process in that direction. This stands for the PDCCH of a new transmission, so the timer starts once the buffers have drained. On-durations follow the global slot clock (the SFN), so an env's resets do not move them. DL data for a dormant robot waits for the next on-duration.
 
 **Randomness and batching.** The preamble and backoff draws use the engine's counter RNG (sites 16 and 17 of `nr_rng.py`), keyed by seed, env, episode and step. An env's access process therefore does not depend on E, on other envs' resets, or on sharding (tested). All state is fixed-shape `[E, R]`, and nothing syncs with the host. The graph backend registers the stage's state with its other state and captures it. A partial reset returns the reset envs to `rach_initial` and clears their procedures.
@@ -73,7 +75,7 @@ net.counters()["access"]   # rach_attempts, rach_collisions, rach_successes, rac
 |:---|:---|
 | `reference` | yes |
 | `graph` | yes (same ops as the reference; GPU equivalence test `test_graph_backend_bitwise_equal_reference`) |
-| `triton` | refused with a `ValueError`: the fused kernel has no schedulable-mask input |
+| `triton` | refused in `NRTritonEngine.__init__` (`TritonUnsupported`, a `ValueError` and a `NotImplementedError`): the fused kernel has no schedulable-mask input; see [NR engine backends](configurability.md#nr-engine-backends) |
 
 Every level other than `L2` refuses `rach=True` or `drx=True` (`make_engine` raises), and `unused_fields("L2")` lists the RACH fields as unused while `rach` is False and the DRX fields while `drx` is False.
 
@@ -84,10 +86,10 @@ Every level other than `L2` refuses `rach=True` or `drx=True` (`make_engine` rai
 ## Limitations
 
 - No Msg3 capture: every collision fails for all robots involved. Preamble detection is otherwise perfect, and the RAR always fits.
-- No contention-free RACH and no RACH on handover. A handover keeps its own interruption model.
+- No contention-free RACH, also not at RLF re-establishment, and no RACH on handover. A handover keeps its own interruption model.
 - Paging is not modelled: DL data for an idle robot starts RACH at its arrival.
 - The RRC release is decided per control step from the step's first data arrival.
 - With several cells, a robot contends in the cell it was associated with at the end of the previous step.
 - DRX has no separate HARQ RTT or retransmission timers. A waiting HARQ process keeps an awake robot awake, and a dormant robot's retransmission waits for the next on-duration.
 - `access_sleep_frac` is sampled at the slots the engine runs, which is every slot with data symbols of an active direction. On an uplink-only config those are the UL slots.
-- Radio link failure re-establishment through RACH is not connected yet.
+- RLF re-establishment through RACH: T301 (the re-establishment timer) is not modelled, so a robot whose procedures keep failing retries until it connects instead of going idle; while the robot waits for its first RO, `access_state` still shows its state before the failure.

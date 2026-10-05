@@ -18,7 +18,8 @@ env's clock (control steps). EdgeLoop then runs, per env:
    shapes. The loop runs `max_events_per_step` iterations; an env with more events stops early and continues
    exactly where it stopped at the next step (`edge_lag`), so times stay exact and only their reporting is late.
 2. Return path. The newest result of each robot in a step becomes a command: "instant" (arrives at completion),
-   "delay" (fixed + uniform jitter + cmd_bytes over a rate from the robot's SINR), or "nr_dl" (a real downlink
+   "delay" (fixed + uniform jitter + cmd_bytes over a rate from the robot's SINR and the DL carrier's width:
+   NRConfig.dl_nprb, the paired carrier with duplex="fdd"), or "nr_dl" (a real downlink
    message of cmd_bytes through the NR engine's DL scheduler, reference backend only; the command is enqueued at
    the next control-step boundary, since the engine takes new messages per step).
 3. Loop accounting. Each robot keeps the newest command it received (highest capture step): its capture step,
@@ -98,7 +99,9 @@ class EdgeLoop:
         self.jidx = torch.arange(J, device=d)
         self.robot_of = torch.arange(R, device=d)[:, None].expand(R, F).reshape(-1)          # [R*F]
         if cfg.return_path == "delay":
-            bw_hz = ncfg.nprb * 12 * ncfg.scs_khz * 1e3
+            # the command goes down the DL carrier: NRConfig.dl_nprb (= nprb with TDD or one shared carrier, the
+            # paired DL carrier's width with duplex="fdd")
+            bw_hz = getattr(ncfg, "dl_nprb", ncfg.nprb) * 12 * ncfg.scs_khz * 1e3
             share = cfg.ret_share if cfg.ret_share is not None else 1.0 / R
             self.ret_rate_hz = cfg.ret_rate_eta * share * bw_hz
         z = lambda shape, dt, v: torch.full(shape, v, dtype=dt, device=d)
