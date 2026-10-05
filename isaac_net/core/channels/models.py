@@ -190,6 +190,10 @@ class RadioMapChannel:
         if getattr(cfg, "los_diffraction", False) and bool(self.map.meta.get("diffraction", False)):
             raise ValueError("los_diffraction with a radio map baked with --diffraction would count the lit-side "
                              "Fresnel loss twice; use a map baked without diffraction")
+        if getattr(cfg, "gnb_antenna", "isotropic") == "sector" and str(self.map.meta.get("gnb_antenna")) == "sector":
+            raise ValueError("gnb_antenna='sector' with a radio map baked with the sector pattern (bake.py "
+                             "--gnb-antenna sector, metadata gnb_antenna='sector') would apply the pattern twice; use "
+                             "gnb_antenna='isotropic' with this map, or a map baked with isotropic antennas")
 
     def reset(self, m):
         pass

@@ -1,14 +1,17 @@
 """Bake a radio map (NRConfig.channel="radio_map") from a USD stage or a Sionna RT scene with Sionna RT.
 
     python -m isaac_net.tools.scene.bake --usd scene.usd --tx 10 20 6 --tx 50 20 6 --fc 3.5 --cell 1.0 \\
-        --out map.pt [--los-map] [--obstacle-z] [--variant llvm]
+        --out map.pt [--los-map] [--obstacle-z] [--variant llvm] [--gnb-antenna sector --cell-azimuth 0 180]
 
 Steps: export the stage (usd_export: meshes, world transforms, ITU materials, map frame), run Sionna RT's
 RadioMapSolver for every transmitter on a horizontal grid at the robot antenna height, and write the file that
 channels.RadioMap loads:
 
     gain_db   [C, H, W]  path gain in dB between gNB c and a robot antenna at grid point (x_j, y_i), isotropic
-                         antennas (0 dBi), vertical polarization; row i along y, column j along x
+                         antennas (0 dBi), vertical polarization; row i along y, column j along x. With
+                         --gnb-antenna sector the TR 38.901 Table 7.3-1 element gain of each cell's sector antenna
+                         (boresight --cell-azimuth, downtilt --cell-tilt) toward the grid point is added (sector.py:
+                         exact along the direct path, approximate for reflection-dominated links)
     bounds    [4]        (x0, y0, x1, y1): the first and last grid points (cell centres), map frame, metres
     gnb_xy    [C, 2], gnb_z [C]
     los_prob  [C, H, W]  optional (--los-map): share of the cell (k x k points at the antenna height, --los-sub k)
@@ -20,7 +23,8 @@ channels.RadioMap loads:
                          (inside solid obstacles, or beyond max_depth interactions) are filled per gNB from their
                          neighbours (--no-fill keeps the floor value, -250 dB)
     metadata  fc_ghz, ue_height_m, cell_m, samples, max_depth, diffraction, scene_hash, bake_key, materials (JSON),
-              bake_s, source
+              bake_s, source; with --gnb-antenna sector also gnb_antenna = "sector", cell_azimuth_deg, cell_tilt_deg,
+              gnb_antenna_gain_dbi (the engine then refuses NRConfig(gnb_antenna="sector"): the pattern is in the map)
 
 A .pt output holds torch tensors (torch is then needed, and RadioMap.load reads it with weights_only); any other
 suffix writes an .npz, which needs numpy only.
@@ -44,13 +48,15 @@ from typing import Optional, Sequence
 
 import numpy as np
 
+from .sector import add_sector_args, apply_sector_pattern, sector_from_args
+
 BAKE_VERSION = 2          # bump when the bake's output for identical inputs changes
 
 
 def bake_key(scene_hash: str, tx, fc_ghz, bounds, cell, ue_h, samples, depth, refraction=True, diffraction=False,
-             los_map=False, los_sub=3, seed=42, obstacle_z=False) -> str:
-    """Cache key of a bake: the scene hash and every parameter that changes the map (obstacle_z enters only when
-    set, so the keys of earlier bakes are unchanged)."""
+             los_map=False, los_sub=3, seed=42, obstacle_z=False, sector=None) -> str:
+    """Cache key of a bake: the scene hash and every parameter that changes the map (obstacle_z and sector =
+    (azimuths, tilts, g_max) enter only when set, so the keys of earlier bakes are unchanged)."""
     d = dict(v=BAKE_VERSION, scene=scene_hash, tx=[[round(float(x), 4) for x in t] for t in tx],
              fc=round(float(fc_ghz), 6), bounds=None if bounds is None else [round(float(b), 4) for b in bounds],
              cell=round(float(cell), 4), ue_h=round(float(ue_h), 4), samples=int(samples), depth=int(depth),
@@ -58,6 +64,9 @@ def bake_key(scene_hash: str, tx, fc_ghz, bounds, cell, ue_h, samples, depth, re
              seed=int(seed))
     if obstacle_z:
         d["obstacle_z"] = True
+    if sector is not None:
+        az, tl, gmax = sector
+        d["sector"] = [[round(float(x), 4) for x in az], [round(float(x), 4) for x in tl], round(float(gmax), 4)]
     return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
 
 
@@ -281,6 +290,7 @@ def build_parser():
     g.add_argument("--up-axis", default=None, choices=("Y", "Z"), help="override the stage's up axis")
     g.add_argument("--scene-dir", default=None, help="keep the exported scene here (default: a temp dir)")
     g.add_argument("--export-only", action="store_true", help="export the scene and stop (no Sionna needed)")
+    add_sector_args(ap)
     return ap
 
 
@@ -324,15 +334,18 @@ def main(argv=None):
         return
     if not a.out or not a.tx:
         raise SystemExit("--out and at least one --tx are needed to bake")
+    sector = sector_from_args(a, len(a.tx))
     bounds = a.bounds or footprint
     if bounds is None:
         raise SystemExit("--bounds is needed with --scene-xml without a manifest.json")
     m = bake_scene(xml, a.tx, a.fc, bounds, a.cell, a.ue_height, int(a.samples), a.depth,
                    refraction=not a.no_refraction, diffraction=a.diffraction, los_map=a.los_map, los_sub=a.los_sub,
                    seed=a.seed, variant=a.variant, fill=not a.no_fill, obstacle_z=a.obstacle_z)
+    if sector is not None:          # the sector pattern on the isotropic trace (sector.py)
+        m = apply_sector_pattern(m, *sector)
     m["scene_hash"] = scene_hash
     m["bake_key"] = bake_key(scene_hash, a.tx, a.fc, bounds, a.cell, a.ue_height, int(a.samples), a.depth,
-                             not a.no_refraction, a.diffraction, a.los_map, a.los_sub, a.seed, a.obstacle_z)
+                             not a.no_refraction, a.diffraction, a.los_map, a.los_sub, a.seed, a.obstacle_z, sector)
     m["source"] = "sionna-rt RadioMapSolver, " + os.path.basename(a.usd or a.scene_xml)
     if manifest is not None:
         m["materials"] = json.dumps(manifest)

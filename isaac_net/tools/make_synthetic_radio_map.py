@@ -11,13 +11,21 @@ or Sionna:
 
     python -m isaac_net.tools.make_synthetic_radio_map [out.npz]
     python -m isaac_net.tools.make_synthetic_radio_map --obstacles out.npz
+
+--gnb-antenna sector [--cell-azimuth A ...] [--cell-tilt T ...] adds the TR 38.901 sector pattern at "bake" time, as
+tools/scene/bake.py does on a Sionna map (tools/scene/sector.py); the file then carries gnb_antenna = "sector" and is
+used with NRConfig(gnb_antenna="isotropic"):
+
+    python -m isaac_net.tools.make_synthetic_radio_map sector.npz --gnb-antenna sector --cell-azimuth 0 180
 """
+import argparse
 import sys
 
 import numpy as np
 
 from isaac_net.core.channels.radio_map import SYNTHETIC_MAP, RadioMap, make_synthetic_map, synthetic_gnb_xy
 from isaac_net.tools.scene.heightmap import box_triangles, height_map
+from isaac_net.tools.scene.sector import add_sector_args, sector_from_args, sector_radio_map
 
 # hall 40 x 24 m: four rows of racks (1 m deep, 2.5 m tall) with aisles, gNBs on the short walls at 6 m
 OBSTACLE_GNBS = ((2.0, 12.0, 6.0), (38.0, 12.0, 6.0))
@@ -72,19 +80,27 @@ def make_obstacle_map(gnbs=OBSTACLE_GNBS, racks=OBSTACLE_RACKS, bounds=(0.0, 0.0
 
 
 def main(*argv):
-    args = list(argv)
-    obstacles = "--obstacles" in args
-    args = [a for a in args if a != "--obstacles"]
-    if obstacles:
-        if not args:
+    ap = argparse.ArgumentParser(prog="python -m isaac_net.tools.make_synthetic_radio_map", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("out", nargs="?", help="output .npz (default: the shipped core/data/radio_map_synthetic.npz)")
+    ap.add_argument("--obstacles", action="store_true", help="the warehouse hall with racks, los_prob, obstacle_z")
+    add_sector_args(ap)
+    a = ap.parse_args(list(argv))
+    if a.obstacles:
+        if not a.out:
             raise SystemExit("--obstacles needs an output path")
         m = make_obstacle_map()
-        out = args[0]
     else:
         m = make_synthetic_map(synthetic_gnb_xy())
-        out = args[0] if args else SYNTHETIC_MAP
+    sector = sector_from_args(a, m.C)
+    if sector is not None:
+        if not a.out:
+            raise SystemExit("--gnb-antenna sector needs an output path (the shipped map stays isotropic)")
+        m = sector_radio_map(m, *sector)
+    out = a.out or SYNTHETIC_MAP
     m.save(out)
-    print(f"wrote {out}: {m.C} cells, {m.H} x {m.W}, bounds {m.bounds}")
+    print(f"wrote {out}: {m.C} cells, {m.H} x {m.W}, bounds {m.bounds}"
+          + (f", sector pattern (azimuths {sector[0]})" if sector is not None else ""))
 
 
 if __name__ == "__main__":
