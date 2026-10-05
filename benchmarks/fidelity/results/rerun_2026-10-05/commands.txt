@@ -1,0 +1,31 @@
+Lab box command log, 2026-10-05 (RTX 4090, 32 cores, WSL Ubuntu-20.04, conda env i5g, torch 2.14.0+cu126)
+Working directory: /home/zzhang66/experiments/lenafid_rerun1005 (data -> ../lenafid/data, data_fade -> ../lenafid/data_fade,
+heldout/data -> ../../loaded/heldout/data). ISAAC_NET_LENA_TABLES=/home/zzhang66/experiments/loadfix/lena_eesm_tables.npz.
+5G-LENA side: the extracted data of the original campaigns, unchanged (no ns-3 run). Scripts: scripts/*.sh, logs: lab_logs.txt.
+"Before" = the replays behind the committed tables: lenafid/replay (v1 primary, ablations, SR grid, legacy, fading arm),
+loadfix2/replay (primary_eng, v2, v2_global, proto_all), scalecfg/replay_scalecfg, loaded/heldout/replay.
+
+time      command                                                              wall
+13:14     git fetch; git checkout main; git reset --hard origin/main (1c29443); pip install -e .      2 s
+13:16     chain.sh = cpu_jobs.sh || gpu_jobs.sh                                                      968 s
+            cpu_jobs.sh: nr_replay.py, reference backend, CPU, 14 processes x 2 threads, 4 replicas, seed 12345+N
+              primary (lena_validation, rng=global), primary_eng (lena_validation), v2, v2_global (rng=global),
+              held-out v2 (bandwidth_mhz=10 n_prb=20, N=8/16/32)                N=64 groups 955-967 s, N=1 groups 50-55 s
+            gpu_jobs.sh: run_scalecfg.sh (6 arms, triton/graph)                  845 s (shared with the CPU jobs)
+                         legacy_replay.py data / data_fade, graph, cuda           30 s / 14 s
+13:33     compare.py data replay_head res_head (primary, primary_eng, v2, v2_global, legacy_graph)   99 s
+          compare.py data replay_scalecfg res_scalecfg                                                117 s
+          compare.py heldout/data heldout/replay heldout/results; heldout/summarize.py                 5 s
+13:35     legacy_replay.py at 108657f (2026-09-30), graph, cuda                                       27 s
+13:36     bisect.sh: v1 N=64 (rng=global and engine) at 2bb77f8 / 415c7ff / 1f3c90d on CPU,
+            triton arms v1_triton, nrconfig, nrconfig_nofade at 2bb77f8 / 415c7ff / 1f3c90d / d153c37 / a002df8  2585 s
+13:34     abl_jobs.sh: 8 ablation arms + 7 SR-grid arms (rng=global) on data, fade_matched / fade_olla on
+            data_fade, 10 processes x 2 threads (contended by bisect.sh until 14:17)                  4440 s
+14:22     compare.py data replay_v2 res_v2 (with old proto_all); loadfix/report_loadfix.py                42 s
+          scalecfg/report_scalecfg.py (old inputs reproduce the committed scalecfg_by_regime.csv bitwise)  1 s
+14:49     fadebisect.sh: fade_matched N=4/16/64 at 415c7ff / 1f3c90d                                   179 s
+14:50     compare.py data replay_full res_full; compare.py data_fade replay_fade res_full fade_        90 s
+          report.py res_full > report_after.md; report.py ../lenafid/results > report_before.md        2 s
+14:55     npzcmp.py (bitwise check, npz_bitwise.txt); diffcsv.py (before_after_per_run.md)            ~60 s
+Total lab-box compute about 2 h 10 min wall (chain 16 min, ablations 74 min, bisects 43 + 3 min, compares ~8 min).
+No detached jobs: every step ran inside a kept-alive ssh session.
