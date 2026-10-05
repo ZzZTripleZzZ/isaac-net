@@ -37,6 +37,7 @@ One `NRConfig` dataclass (`isaac_net/core/config.py`) configures every module, a
 | Fast fading | `proto/netsim.py:35`, `config.py`, `channels/doppler.py` | AR(1) Rayleigh per subband, 0.93 per 2.5 ms (3 m/s at 3.5 GHz) | `fading`, `fading_rho_per_ms`, `ue_speed_mps`, `carrier_ghz`, and per-robot Doppler from each robot's speed (`fading_doppler="per_robot"`) for `L2`; legacy fixed | constexpr (`RHO`) |
 | DL SNR from UL SNR | `config.py` `dl_snr_offset_db` | UL + 10 dB when no DL SNR is given | yes, `L2` | n/a |
 | LOS blockage | `isaac/netmodule.py:84`, `channels/blockage.py` | 20 dB when the ray is blocked | Isaac `ParamRanges`; robot bodies as spheres in `RadioMC` (`blockage`, `blockage_radius_m`, `blockage_loss_db`, off by default) | fixed-shape `[E,R,R,C]` test |
+| gNB antenna pattern | `channels/antenna.py`, `radio.py` (`RadioMC.rx_dbm`) | isotropic (0 dBi) at every gNB | `gnb_antenna="sector"`: TR 38.901 Table 7.3-1 element with `cell_azimuth_deg`, `cell_tilt_deg`, `gnb_antenna_gain_dbi` (`L2`, `NetSlotMC`); the UE stays isotropic | input side only (path gain), so every backend, `triton` included |
 
 ### PHY and link adaptation
 
@@ -61,9 +62,9 @@ One `NRConfig` dataclass (`isaac_net/core/config.py`) configures every module, a
 | SR to grant delay (legacy) | `proto/netsim.py:31` | 2 UL slots | NR: `sr_period_slots`, `sr_grant_delay_slots`; legacy fixed | constexpr |
 | HARQ RTT, max transmissions, RLC retry (legacy) | `proto/netsim.py:32-34` | 4 UL slots, 4 tx, +10 UL slots | NR: `ul_harq_rtt_slots`, `max_harq_tx`, `n_harq`, `harq_fail`, `rlc_retx_slots`; legacy fixed | constexpr |
 | Power-headroom cap | `proto/netsim.py:38` | 3 dB per subband | NR `phr_cap`, `phr_min_db`; legacy fixed | constexpr (`PHR`) |
-| UL power control | `mac_ul.py` (`pc_backoff`), `proto/netsim_mc.py:222-224` | fractional, on by default with more than one cell | `ul_pc*` (`L2` and multi-cell legacy) | reference only |
+| UL power control | `mac_ul.py` (`pc_backoff`, `_pc`), `proto/netsim_mc.py:222-224` | fractional open loop, on by default with more than one cell; closed-loop TPC off | `ul_pc*` (`L2` and multi-cell legacy); closed loop `ul_tpc*` (`L2`, see [below](#closed-loop-power-control-cqi-table-and-sector-antennas)) | open loop: every backend; `ul_tpc`: reference and graph (`triton` refuses it) |
 | Retransmission priority | `mac.py:243-290` | admitted retransmissions win RBGs before new data (`retx_priority`); off: they compete on the PF metric and RBGs of short ones are released | `retx_priority` on/off | same rule in the `triton` kernel |
-| DL CQI | `mac_dl.py:16-20` | best MCS per subband, mapped back to its threshold, reported every 10 slots | `cqi_period_slots`; the quantization rule is fixed (not the 38.214 CQI table) | n/a |
+| DL CQI | `mac_dl.py` (`cqi_report`), `phy.py` (`CQI_T1`, `CQI_T2`, `cqi_tables`) | best MCS per subband, mapped back to its threshold, reported every 10 slots | `cqi_period_slots`; `cqi_table="38214"` quantizes to the 4-bit CQI of TS 38.214 Table 5.2.2.1-2 / -3 instead | `"mcs"`: every backend; `"38214"`: reference and graph (`triton` refuses it) |
 
 ### Fidelity levels, surrogates and bounds
 
@@ -99,8 +100,9 @@ The comparison was checked line by line against the official documentation of ns
 | Schedulers | PF (subband or wideband) | PF, RR, MR in TDMA and OFDMA, QoS-aware, random, RL-based | PF (SU-MIMO) | Max C/I (and variants), PF, DRR, QoS-aware PF | **partial**: RR and max-C/I are one line each in `mac.py` |
 | HARQ | multi-process, chase or IR, max tx | IR and CC, multi-process, max retx | ACK/NACK feedback to link adaptation, no retransmissions | yes (processes, max retx) | **have** (`L2`) |
 | RLC | AM retry or UM loss, PDCP discard | UM, AM, TM | none | UM, AM, TM | **partial**: no RLC segmentation timers or status reports |
-| Link adaptation | BLER target, OLLA, MCS caps | AMC, error-model or Shannon based | inner and outer loop | CQI-based AMC | **have**; OLLA clamp and legacy steps fixed |
-| Power control | UL fractional (`L2` and legacy multi-cell) | UL open and closed loop; DL uniform power allocation only | UL open loop, DL fair power | none documented (fixed transmit powers) | **partial**: no DL power control |
+| Link adaptation | BLER target, OLLA, MCS caps; DL CQI per MCS or on the 38.214 4-bit CQI table (`cqi_table`) | AMC, error-model or Shannon based | inner and outer loop | CQI-based AMC | **have**; OLLA clamp and legacy steps fixed |
+| Power control | UL fractional open loop (`L2` and legacy multi-cell) and closed-loop TPC, accumulated or absolute (`ul_tpc`, `L2`) | UL open and closed loop; DL uniform power allocation only | UL open loop, DL fair power | none documented (fixed transmit powers) | **partial**: no DL power control; TPC on PUSCH only (no PUCCH / SRS loops), not on the `triton` backend |
+| Antenna patterns | gNB sector element of TR 38.901 Table 7.3-1 per cell, boresight and downtilt (`gnb_antenna`); UE isotropic | 3GPP UPAs, dual polarization, multi-panel, isotropic / cosine / parabolic | antenna arrays and patterns via Sionna PHY | isotropic or directional per node | **partial**: one element per cell, no arrays or beamforming, not in the Sionna RT bake |
 | MIMO / beamforming | none (one layer) | SU-MIMO up to rank 4, analog beamforming | SU-MIMO streams; precoding via Sionna PHY | none (incomplete MIMO removed in v1.4.3) | **missing**: layers could scale TBS and SINR (moderate); beamforming is large |
 | Channel model | log-distance with correlated and white shadowing; TR 38.901 RMa, UMa, UMi, InH, InF-SL/DL/SH/DH path loss with spatially consistent LOS state and O2I; precomputed radio maps (Sionna RT baking tool); robot-body blockage; AR(1) Rayleigh with per-robot Doppler | 3GPP TR 38.901 (RMa, UMa, UMi, InH, V2V, NTN), NYUSIM (incl. InF), FTR, Sionna RT | TR 38.901 via Sionna PHY (UMi, UMa, RMa, InH, InF); ray tracing via Sionna RT | 3GPP TR 36.814, 36.873, 38.901 path loss, shadowing, Rayleigh or Jakes fading | **have** large-scale models ([channels.md](channels.md)); **missing**: 38.901 fast fading (clusters, K-factor), online ray tracing |
 | Mobility | from the simulator's poses | ns-3 mobility models | random UT velocities in the topology generators; trajectories user-coded | INET mobility models, Veins | **have**: poses come from Isaac Lab, which is the point of the package |
@@ -156,6 +158,29 @@ Every constructor also takes `tag` (default: 1 + the model's position in the lis
 
 Example: [`isaac_net/examples/traffic_models.py`](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/isaac_net/examples/traffic_models.py).
 
+## Closed-loop power control, CQI table and sector antennas
+
+Three switches added after the feature-gap analysis against 5G-LENA. Each defaults to the earlier engine bit for bit (`tests/test_tpc_cqi_antenna.py` T1), and its other fields count as read only while it is on (`unused_fields`).
+
+**Closed-loop uplink power control** (`ul_tpc=True`, TS 38.213 Sec. 7.1.1, `mac_ul.UlMac`, level `L2`). It corrects the open-loop power `P0 + alpha PL`, so it needs `ul_pc` on (automatic with several cells, `ul_pc=True` at one cell). The UE transmits at `P0 + alpha PL + f`, where `f` is a per-robot offset. After every PUSCH the gNB measures that transmission's SINR, the per-PRB SINR at its transmit PSD averaged in linear scale over every RBG of the carrier (an SRS-like wideband measurement against the gNB's latest noise-plus-interference estimate). If none of the robot's commands is in flight, the gNB sends the step of the command set closest to the error, and the command takes effect `ul_tpc_delay_slots` after the PUSCH (default `k2`). Keeping one command in flight stops the loop from reacting to its own delay.
+
+| Field | Default | Meaning |
+|:---|:---|:---|
+| `ul_tpc` | `False` | closed loop on (NR engine only; `NetSlotMC` lists it as unused) |
+| `ul_tpc_mode` | `"accumulate"` | `"accumulate"`: `f += step`; `"absolute"`: `f = ` the step closest to `f + error` |
+| `ul_tpc_target_db` | `None` | target PUSCH SINR per PRB; `None` = the 10% BLER SINR of the middle MCS (MCS 14) of `mcs_table` on one 10-PRB RBG: 6.3 dB for table 1 and 12.8 dB for table 2 with the default `bler_source="pdsch"` |
+| `ul_tpc_steps_db` | `None` | command set; `None` = (−1, 0, 1, 3) dB for accumulation, (−4, −1, 1, 4) dB for absolute (38.213 Table 7.1.1-1) |
+| `ul_tpc_delay_slots` | `None` | slots from the PUSCH to the slot the command applies; `None` = `k2` |
+| `ul_tpc_range_db` | 20 | the offset is clamped to ±this value |
+
+The offset enters wherever the open-loop backoff `pc_backoff` already did (`UlMac._pc`): the scheduler's estimate, the power split of `_split`, the other cells' interference (`NRNet._ul_ici` calls `_split`) and the energy tap. The power-headroom cap is unchanged. In accumulation mode a positive step is dropped while the robot transmitted at full power (the 38.213 rule against wind-up). A handover resets the offset and drops a command in flight. The state (`tpc_f`, `tpc_cmd`, `tpc_at`, and the last measured SINR `tpc_sinr`) is per robot, fixed-shape and reset with its env. With fading off, a 10 dB path-loss step is corrected in four commands (3, 3, 3 and 1 dB), and absolute mode jumps to the set value with one command.
+
+**38.214 CQI table** (`cqi_table="38214"`, `mac_dl.DlMac.cqi_report`, `phy.cqi_tables`, needs `dl=True`). With the default `"mcs"`, the UE reports the highest MCS that meets the BLER target on each RBG. With `"38214"`, it reports the 4-bit CQI of TS 38.214 Table 5.2.2.1-2 (Table 5.2.2.1-3 with `mcs_table=2`). CQI k is reported from the 10% BLER SINR of its (Qm, R), which is the threshold of the MCS with the same spectral efficiency. CQI 1 (QPSK, R = 78/1024) has no MCS row, so its threshold is MCS 0's shifted by the Shannon-gap difference, as `build_bler_table` fills missing curves. CQI 0 means out of range. The gNB maps the CQI to the highest MCS (up to `dl_mcs_max`) whose spectral efficiency does not exceed the CQI's, and keeps that MCS's threshold as its estimate. The report period, delay and per-RBG reporting are unchanged, so only the quantization grid differs: 15 levels instead of 29 (or 28) MCSs, and the estimate is never above the per-MCS one.
+
+**gNB sector antenna** (`gnb_antenna="sector"`, `channels/antenna.py`, applied in `RadioMC.rx_dbm`): see [channels.md](channels.md#antenna-patterns). Fields: `cell_azimuth_deg` (one boresight per cell; `None` = 30, 150 and 270 degrees cycled over the cells), `cell_tilt_deg` (one downtilt or one per cell, degrees below the horizon) and `gnb_antenna_gain_dbi` (8 dBi).
+
+**Backends.** The antenna changes only the path gain the engine receives, so it runs on every backend. `ul_tpc` and `cqi_table="38214"` change the per-slot loop. They run on the reference and on the `graph` backend, which captures the reference step, and the `triton` backend refuses them with `NotImplementedError` until the fused kernel mirrors them (the kernel recomputes the power split from a per-step `pc` input and the CQI from the MCS thresholds).
+
 ## Proposed modes and switches
 
 Every proposal keeps today's behavior as the default, so existing results and the bitwise backend tests stay valid. A field that a level cannot honor must appear in `unused_fields(level)`, or the level must refuse it, never ignore it silently.
@@ -167,7 +192,7 @@ Every proposal keeps today's behavior as the default, so existing results and th
 | L0 delay and loss, L0DR ranges | `NRConfig(l0_delay_median_steps=..., dr_delay_median_steps=(lo, hi), ...)` | **done** on this branch; all backends |
 | L1 goodput factor | `NRConfig(l1_eta=0.8)` | **done**; reference, graph, compile, triton |
 | Fading from speed | `NRConfig(ue_speed_mps=1.5, carrier_ghz=3.5)` | **done**; `L2` (legacy keeps its constexpr `RHO`); rho = 0 from the first zero of J0 (about 13.1 m/s at 3.5 GHz) |
-| Ignored-field check | `cfg.unused_fields(level)`, `make_engine(..., strict=True)` | **done**; every level; switch-aware: fields gated by a switch (`dl`, `n_cells`, `noise_model`, `channel`, `blockage`, `fading`, `fading_doppler`, `ul_pc`, `tbs_mode`) count as read only when the switch makes the engine read them |
+| Ignored-field check | `cfg.unused_fields(level)`, `make_engine(..., strict=True)` | **done**; every level; switch-aware: fields gated by a switch (`dl`, `n_cells`, `noise_model`, `channel`, `blockage`, `fading`, `fading_doppler`, `ul_pc`, `ul_tpc`, `gnb_antenna`, `tbs_mode`) count as read only when the switch makes the engine read them |
 | Scheduler metric | `NRConfig(scheduler="pf" \| "rr" \| "maxci")`: the metric in `mac.py:150` becomes `rate / avg`, `1 / (slots since served)` or `rate` | `L2`; deferred until the NR multi-cell merge, which edits `mac.py` (now in) |
 | OLLA clamp, PF initial average | `NRConfig(olla_max_db=10.0, pf_avg_init=100.0)` | `L2`; same deferral |
 | Shadowing correlation distance | `NRConfig(shadow_dcorr_m=30.0, shadow_acf="exp", shadow_white_frac=0.5)` | **done** on `feat/channel` (`L2`, `NetSlotMC`); the default field is bitwise unchanged |
