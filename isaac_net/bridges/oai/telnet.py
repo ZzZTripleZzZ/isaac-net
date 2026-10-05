@@ -15,6 +15,11 @@ Commands used (OAI 2026.w39, common/utils/telnetsrv and radio/rfsimulator):
 
 The gNB is the rfsim server: its model ``rfsimu_channel_ue<k>`` is applied to the uplink of the k-th UE that
 connected. Each UE is a client and applies ``rfsimu_channel_enB0`` to its downlink.
+
+Reply framing: the server prints its prompt (``softmodem_<function>> ``) after every command, so cmd() reads up to
+that prompt and nothing an earlier command printed can be taken for this command's reply. ``rfsimu vtime`` answers
+from a worker thread after the prompt; a vtime query that times out drains the late reply before it raises, and a
+query takes the newest vtime line it sees. set_ploss / set_noise raise if the reply reports an error.
 """
 from __future__ import annotations
 
@@ -25,6 +30,8 @@ import time
 
 _VTIME = re.compile(rb"TS (\d+) sample_rate ([\d.]+)")
 _MODEL = re.compile(r"model (\d+) (\S+) type (\S+):")
+_PROMPT = re.compile(rb"softmodem\S*> ")
+_ERROR = re.compile(r"error|unknown|not found|invalid|out of range|usage", re.IGNORECASE)
 
 
 class OaiTelnet:
@@ -52,12 +59,13 @@ class OaiTelnet:
         out, self._buf = self._buf, b""
         return out
 
-    def _read_until(self, pat, timeout):
+    def _read_until(self, pat, timeout, keep=False):
         t_end = time.monotonic() + timeout
         while True:
             m = pat.search(self._buf)
             if m:
-                self._buf = self._buf[m.end():]
+                if not keep:
+                    self._buf = self._buf[m.end():]
                 return m
             left = t_end - time.monotonic()
             if left <= 0:
@@ -69,11 +77,21 @@ class OaiTelnet:
             self._buf += d
 
     def cmd(self, line, wait=0.2):
-        """Send one command and return what the server printed within `wait` seconds."""
+        """Send one command and return what the server printed before its next prompt (at most `wait` seconds;
+        without a prompt, whatever arrived within `wait`)."""
         with self.lock:
             self._drain(0.0)
             self.sock.sendall(line.encode() + b"\n")
-            return self._drain(wait).decode(errors="replace")
+            try:
+                self._read_until(_PROMPT, wait, keep=True)
+            except TimeoutError:
+                pass
+            m = _PROMPT.search(self._buf)
+            if m:
+                out, self._buf = self._buf[:m.start()], self._buf[m.end():]
+            else:
+                out, self._buf = self._buf, b""
+            return out.decode(errors="replace")
 
     def vtime(self):
         """(virtual time in s, wall time in ns at the middle of the query, query round trip in ns)."""
@@ -81,8 +99,17 @@ class OaiTelnet:
             self._drain(0.0)
             t0 = time.time_ns()
             self.sock.sendall(b"rfsimu vtime\n")
-            m = self._read_until(_VTIME, self.timeout)
+            try:
+                m = self._read_until(_VTIME, self.timeout)
+            except TimeoutError:
+                self._drain(self.timeout)       # swallow the late reply so the next query cannot match it
+                raise
             t1 = time.time_ns()
+            last = None
+            for last in _VTIME.finditer(self._buf):   # more replies already here: the newest is this query's
+                pass
+            if last is not None:
+                m, self._buf = last, self._buf[last.end():]
         return int(m.group(1)) / float(m.group(2)), (t0 + t1) // 2, t1 - t0
 
     def models(self):
@@ -94,12 +121,19 @@ class OaiTelnet:
                 out += self._drain(0.2).decode(errors="replace")
         return {name: int(i) for i, name, _ in _MODEL.findall(out)}
 
+    def _checked(self, line):
+        out = self.cmd(line, wait=max(0.05, min(self.timeout, 0.2)))   # returns at the prompt
+        if _ERROR.search(out):
+            raise RuntimeError(f"{self.host}:{self.port}: {line!r} failed: {out.strip()!r}")
+        return out
+
     def set_ploss(self, model_id, db):
-        """Raw ploss (a gain in dB, see the module docstring)."""
-        self.cmd(f"channelmod modify {int(model_id)} ploss {float(db):.2f}", wait=0.05)
+        """Raw ploss (a gain in dB, see the module docstring). Raises RuntimeError if the server reports an error."""
+        return self._checked(f"channelmod modify {int(model_id)} ploss {float(db):.2f}")
 
     def set_noise(self, model_id, db):
-        self.cmd(f"channelmod modify {int(model_id)} noise_power_dB {int(round(db))}", wait=0.05)
+        """Noise power of model_id in dB. Raises RuntimeError if the server reports an error."""
+        return self._checked(f"channelmod modify {int(model_id)} noise_power_dB {int(round(db))}")
 
     def close(self):
         try:

@@ -102,18 +102,24 @@ class OaiBridge:
         self._logs[("rx",)] = (f, w)
 
     def _write_virtual_logs(self):
-        """tx_ue<k>_vt.csv and rx_vt.csv from the wall logs and the complete clock record."""
+        """tx_ue<k>_vt.csv and rx_vt.csv from the wall logs and the complete clock record. Every timestamp column is
+        mapped (rx.csv: both t_tx_ns, from the probe header, and t_rx_ns), so OWDs from the _vt files alone are in
+        virtual time. A negative t_tx_ns (local send error, see agent.py) stays negative: |t| is mapped."""
         d = self.log_dir
-        jobs = [(f"tx_ue{k + 1}", TX_COLS, "t_tx_ns") for k in range(self.stack.n_ue)] + [("rx", RX_COLS, "t_rx_ns")]
-        for name, cols, tcol in jobs:
+        jobs = [(f"tx_ue{k + 1}", TX_COLS, ("t_tx_ns",)) for k in range(self.stack.n_ue)] + \
+               [("rx", RX_COLS, ("t_tx_ns", "t_rx_ns"))]
+        for name, cols, tcols in jobs:
             with open(os.path.join(d, f"{name}.csv"), newline="") as f:
                 rows = list(csv.DictReader(f))
-            tv = self.vc.to_virtual_ns([abs(int(r[tcol])) for r in rows]) if rows else []
+            for tcol in tcols:
+                raw = [int(r[tcol]) for r in rows]
+                tv = self.vc.to_virtual_ns([abs(x) for x in raw]) if rows else []
+                for r, x, v in zip(rows, raw, tv):
+                    r[tcol] = -int(v) if x < 0 else int(v)
             with open(os.path.join(d, f"{name}_vt.csv"), "w", newline="") as f:
                 w = csv.writer(f)
                 w.writerow(cols)
-                for r, v in zip(rows, tv):
-                    r[tcol] = int(v)
+                for r in rows:
                     w.writerow([r[c] for c in cols])
 
     def _now(self):
