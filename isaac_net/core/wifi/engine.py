@@ -51,7 +51,7 @@ from ..proto import netsim as _ns
 from ..proto.rng import STEP
 from . import meanfield as mf
 from .config import AC_NAMES, EDCA, WifiConfig
-from .phy import AccessTiming, mcs_table
+from .phy import AccessTiming, mcs_numbers, mcs_table
 
 
 def poisson_icdf(lam, u, n_max):
@@ -125,6 +125,8 @@ class WifiNet(LevelNet):
         rates, thr = mcs_table(wc.standard, wc.bandwidth_mhz, wc.n_ss, wc.gi_us)
         self.rates = torch.tensor(rates, dtype=f, device=d)
         self.thr = torch.tensor(thr, dtype=f, device=d) + wc.ra_margin_db
+        ids = mcs_numbers(wc.standard, wc.bandwidth_mhz, wc.n_ss)          # table entry -> MCS number
+        self.mcs_ids = torch.tensor(ids, dtype=torch.long, device=d)
         self.timing = AccessTiming(wc)
         # upper bound of a robot's successful accesses per sub-step: one access needs at least the channel time Ts
         # of a 1-byte frame at the top MCS after the shortest AIFS, so lam = mu dt <= dt / Ts_min
@@ -144,7 +146,7 @@ class WifiNet(LevelNet):
         self.per_class_ac = len(set(per_cls[1:])) > 1    # robots' AC changes with the head-of-line message
         # saturated background stations, one entry per AP with weight bg_stations
         bg_ac = AC_NAMES.index(wc.bg_ac)
-        bg_rate = self.rates[min(wc.bg_mcs, len(rates) - 1)]
+        bg_rate = self.rates[max(i for i, m in enumerate(ids) if m <= wc.bg_mcs)]      # highest valid MCS <= bg_mcs
         self.bg_w = torch.full((E, A), float(wc.bg_stations), device=d)
         self.bg_rate = bg_rate.expand(E, A).clone()
         self.bg_B = torch.full((E, A), float(wc.bg_frame_bytes), device=d)
@@ -384,7 +386,7 @@ class WifiNet(LevelNet):
         self._o_access.copy_(torch.where(acc_n > 0, acc_sum / acc_n.clamp(min=1) / 1000.0, nan))
         self._o_pfail.copy_(torch.where(acc_n > 0, p_sum / acc_n.clamp(min=1), nan))
         self._o_busy.copy_(busy_sum / K)
-        self._o_mcs.copy_(torch.where(link, mcs, torch.full_like(mcs, -1)))
+        self._o_mcs.copy_(torch.where(link, self.mcs_ids[mcs], torch.full_like(mcs, -1)))
         self._o_rate.copy_(torch.where(link, rate, torch.zeros_like(rate)))
         return fin_t
 

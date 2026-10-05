@@ -7,7 +7,11 @@ the OFDM symbol including the guard interval:
     VHT (ac)  N_SD = 52 / 108 / 234 / 468,                           T_sym = 3.2 us + GI (0.8 or 0.4 us)
     non-HT (a) 48 data subcarriers, T_sym = 4 us, 6 ... 54 Mb/s
 so HE 20 MHz, 1 SS, 0.8 us GI gives 8.6 ... 143.4 Mb/s for MCS 0 ... 11, and VHT 20 MHz gives 6.5 ... 78 Mb/s for
-MCS 0 ... 8 (VHT MCS 9 is not defined at 20 MHz for 1, 2 or 4 streams, so it is left out there).
+MCS 0 ... 8. The VHT-MCS / N_SS / bandwidth combinations that IEEE Std 802.11-2016 Sec. 21.5 (Tables 21-30 to
+21-61) marks as not valid are left out: MCS 9 at 20 MHz for 1, 2, 4, 5, 7, 8 streams, MCS 6 at 80 MHz for 3 and 7
+streams, MCS 9 at 80 MHz for 6 streams, and MCS 9 at 160 MHz for 3 streams (n_ss <= 4 here, so 20 MHz MCS 9 with
+1, 2, 4 streams, 80 MHz MCS 6 with 3 and 160 MHz MCS 9 with 3 apply). HE (802.11ax) has no such exclusions.
+mcs_numbers() gives the MCS number of every entry of the table.
 
 SNR thresholds. The receiver minimum input sensitivity of the standard at 20 MHz (HT / VHT / HE MCS 0 ... 11:
 -82, -79, -77, -74, -70, -66, -65, -64, -59, -57, -54, -52 dBm; non-HT 6 ... 54 Mb/s: -82, -81, -79, -77, -74,
@@ -52,17 +56,27 @@ def preamble_us(std, n_ss=1):
     return 36.0 + 8.0 * N_LTF[n_ss]
 
 
+# (bandwidth MHz, VHT-MCS, N_SS) marked "not valid" in IEEE Std 802.11-2016 Tables 21-30 to 21-61
+VHT_INVALID = frozenset({(20, 9, n) for n in (1, 2, 4, 5, 7, 8)} | {(80, 6, 3), (80, 6, 7), (80, 9, 6), (160, 9, 3)})
+
+
+def mcs_numbers(std, bandwidth_mhz=20, n_ss=1):
+    """MCS number of every entry of mcs_table (the index into the non-HT rate list for "a")."""
+    if std == "a":
+        return list(range(len(LEGACY_RATES)))
+    n_mcs = 12 if std == "ax" else 10
+    return [m for m in range(n_mcs) if not (std == "ac" and (bandwidth_mhz, m, n_ss) in VHT_INVALID)]
+
+
 def mcs_table(std, bandwidth_mhz=20, n_ss=1, gi_us=0.8):
-    """(rates in Mb/s, SNR thresholds in dB) of the valid MCS of this PHY, lowest first."""
+    """(rates in Mb/s, SNR thresholds in dB) of the valid MCS of this PHY, lowest first (mcs_numbers gives their
+    MCS numbers)."""
     if std == "a":
         return [float(r) for r in LEGACY_RATES], [s - SENS_NOISE_DBM for s in LEGACY_SENS]
     tsym = symbol_us(std, gi_us)
     nsd = N_SD[std][bandwidth_mhz]
-    n_mcs = 12 if std == "ax" else 10
     rates, thr = [], []
-    for m in range(n_mcs):
-        if std == "ac" and m == 9 and bandwidth_mhz == 20 and n_ss in (1, 2, 4):
-            continue
+    for m in mcs_numbers(std, bandwidth_mhz, n_ss):
         bits, code = MOD[m]
         rates.append(nsd * bits * code * n_ss / tsym)
         thr.append(SENS_20MHZ[m] - SENS_NOISE_DBM)
