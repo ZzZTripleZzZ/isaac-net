@@ -26,6 +26,11 @@ def _csv(s, cast=str):
     return [cast(x) for x in s.split(",") if x.strip()]
 
 
+def _num(v, spec: str) -> str:
+    """A metric for the progress line: summarize() gives None when no evaluation row had a finite value."""
+    return "n/a" if v is None else format(v, spec)
+
+
 def _cfg(a, task, seed) -> TaskConfig:
     return TaskConfig(task=task, variant=a.variant, level=a.level, backend=a.backend, sim=a.sim, preset=a.preset,
                       traffic=a.traffic, num_envs=a.envs, num_robots=a.robots, episode_steps=a.episode_steps,
@@ -117,8 +122,8 @@ def main(argv=None):
                 path = write_result(res, a.out)
                 m = res["eval"]["metrics"]
                 key = res["task_spec"]["metric"]["key"]
-                print(f"{t} {a.variant} {a.level}/{a.backend} {b} seed {s}: {key} {m[key]:.4g} "
-                      f"return {m['return']:.3g} delay_p95 {m['delay_p95_ms']} ms  "
+                print(f"{t} {a.variant} {a.level}/{a.backend} {b} seed {s}: {key} {_num(m.get(key), '.4g')} "
+                      f"return {_num(m.get('return'), '.3g')} delay_p95 {_num(m.get('delay_p95_ms'), '.4g')} ms  "
                       f"[{time.time() - t0:.0f}s] -> {path}", flush=True)
     return 0
 

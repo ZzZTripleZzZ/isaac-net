@@ -1,7 +1,8 @@
 """Run one baseline on one task configuration and write a result file (format: docs/benchmark-suite.md).
 
     res = run(TaskConfig(task="coop_map", level="L0", backend="graph", seed=0), "heuristic", device="cuda")
-    write_result(res, "results/")          # results/<task>__<variant>__<level>__<backend>__<baseline>__s<seed>.json
+    write_result(res, "results/")          # results/<task>__<variant>__<sim>__<preset>__<traffic>__<level>__<backend>__
+                                           #   <baseline>__s<seed>__<config hash>[__<label>].json
 
 Seeds. A run with seed s trains (PPO) on TaskConfig.seed = s and evaluates on the same configuration with seed
 s + EVAL_SEED_OFFSET, for every baseline, so all baselines of one seed see the same evaluation episodes up to the
@@ -118,11 +119,33 @@ def run(cfg: TaskConfig, baseline: str, device="cpu", *, eval_episodes: int = 1,
     return res
 
 
+_NAME_KEYS = ("task", "variant", "sim", "preset", "traffic", "level", "backend", "baseline", "seed")
+_TRAIN_KEYS = ("arch", "iters", "horizon", "lr", "hidden")
+
+
+def config_hash(res: dict) -> str:
+    """8 hex digits over what defines a run besides the named fields: the rest of the TaskConfig (envs, robots,
+    episode length, observation features, fit file, overrides), the evaluation envs and episodes, and the PPO
+    budget. Stable across Python sessions (sha1 of sorted JSON)."""
+    import hashlib
+    rest = {k: v for k, v in (res.get("config") or {}).items() if k not in _NAME_KEYS}
+    ev = res.get("eval") or {}
+    rest["eval"] = {k: ev.get(k) for k in ("envs", "episodes")}
+    tr = res.get("train") or {}
+    rest["train"] = {k: tr.get(k) for k in _TRAIN_KEYS} if tr else None
+    blob = json.dumps(rest, sort_keys=True, default=repr)
+    return hashlib.sha1(blob.encode()).hexdigest()[:8]
+
+
 def result_name(res: dict) -> str:
-    parts = [res["task"], res["variant"], res["level"], res["backend"], res["baseline"], f"s{res['seed']}"]
+    """<task>__<variant>__<sim>__<preset>__<traffic>__<level>__<backend>__<baseline>__s<seed>__<hash>[__<label>].json
+    (hash: config_hash). Runs that differ in any setting get different files."""
+    parts = [res["task"], res["variant"], res.get("sim", "torch"), res.get("preset", "default"),
+             res.get("traffic", "policy"), res["level"], res["backend"], res["baseline"], f"s{res['seed']}",
+             config_hash(res)]
     if res.get("label"):
         parts.append(res["label"])
-    return "__".join(p.replace("/", "-") for p in parts) + ".json"
+    return "__".join(str(p).replace("/", "-") for p in parts) + ".json"
 
 
 def write_result(res: dict, out_dir: str) -> str:
