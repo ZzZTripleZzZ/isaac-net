@@ -11,6 +11,7 @@ unchanged, so the engine's outputs stay bitwise the same. Per control step it ac
                     and fractional power control (UlMac._split) times the PUSCH duration, i.e. the slot duration
                     scaled by the slot's UL data symbols / 14 (cfg.ul_data_symbols in a U slot, the special slot's
                     UL symbols in an S slot with special_ul_data; MacLink.slot_nsym, the nsym of MacLink.slot)
+  ul_tx_s  [E,R]    PUSCH time of those transmissions (s): per TB the slot duration times slot_nsym / 14
   dl_slots [E,R]    DL data slots in which the robot was scheduled (it receives a transport block)
 
 One tap serves every wrapper of an engine (SlotTap.of). begin() zeroes the counters before a step. A user hook set
@@ -34,6 +35,7 @@ class SlotTap:
         self.ue_tx_dbm = c.ue_tx_dbm
         z = lambda: torch.zeros(self.E, self.R, device=self.dev)     # noqa: E731
         self.ul_slots, self.ul_prb, self.ul_tx_j, self.dl_slots = z(), z(), z(), z()
+        self.ul_tx_s = z()                                          # PUSCH time (s) of the robot's transmissions
         self.install()
 
     @staticmethod
@@ -68,6 +70,7 @@ class SlotTap:
                 p_dbm = self.ue_tx_dbm - self.ref_db - link._split(n_prb) + 10 * torch.log10(n)
                 dur = self.slot_s * link.slot_nsym / 14.0                # PUSCH symbols of this slot
                 self.ul_tx_j += torch.where(tx, 10 ** ((p_dbm - 30.0) / 10.0) * dur, torch.zeros_like(n))
+                self.ul_tx_s += txf * dur
             else:
                 self.dl_slots += txf
             return act if prev is None else prev(g, d, won, n_prb, act)
@@ -76,5 +79,5 @@ class SlotTap:
         return hook
 
     def begin(self):
-        for x in (self.ul_slots, self.ul_prb, self.ul_tx_j, self.dl_slots):
+        for x in (self.ul_slots, self.ul_prb, self.ul_tx_j, self.ul_tx_s, self.dl_slots):
             x.zero_()

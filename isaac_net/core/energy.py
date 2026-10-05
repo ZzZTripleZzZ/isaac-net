@@ -24,7 +24,8 @@ EnergyLoop keeps the engine API and adds keys to the step dict, like EdgeLoop. P
               bit/s/Hz in a slot, and 1 / (1 - bler_target) transmissions per TB. Transmit power is tx_power_dbm, or
               the config's ue_tx_dbm. Airtime is attributed to the step in which the message is delivered, and the
               bytes of messages that time out are not counted.
-  tx_time     slots transmitted times the slot duration (NRConfig.slot_ms)
+  tx_time     PUSCH time on L2 (slot duration times the slot's data symbols / 14 per TB); slots times the slot
+              duration on the legacy levels
   rx_time     level "L2" with a downlink (NRConfig.dl): DL data slots in which the robot was scheduled, times the slot
               duration; 0 elsewhere
   messages    messages the robot handed to the network and that were accepted: submit() plus, on L2, the messages
@@ -245,11 +246,12 @@ class EnergyLoop:
         if self.tap is not None:
             tap = self.tap
             tx_slots = tap.ul_slots[:, :R]
+            tx_s = tap.ul_tx_s[:, :R]                                   # PUSCH time: slot x data symbols / 14
             if self.cfg.tx_power_dbm is None:
                 tx_j = tap.ul_tx_j[:, :R]
             else:
-                tx_j = tx_slots * (self.p_tx_w * self.slot_s)
-            return self._core(tx_j.clone(), tx_slots.clone(), tap.dl_slots[:, :R].clone())
+                tx_j = tx_s * self.p_tx_w
+            return self._core(tx_j.clone(), tx_slots.clone(), tap.dl_slots[:, :R].clone(), tx_s.clone())
         ins = (out["delivered"], self._frame_bytes(out),
                out.get("sinr_db", torch.zeros(self.E, R, device=self.dev)).to(torch.float32))
         if not self.graph:
@@ -267,9 +269,10 @@ class EnergyLoop:
         tx_j = tx_slots * (self.p_tx_w * self.slot_s)
         return self._core(tx_j, tx_slots, torch.zeros_like(tx_slots))
 
-    def _core(self, tx_j, tx_slots, rx_slots):
+    def _core(self, tx_j, tx_slots, rx_slots, tx_s=None):
         c, s = self.cfg, self.state
-        e_tx = tx_j / c.pa_efficiency + c.tx_circuit_w * tx_slots * self.slot_s
+        tx_time = tx_slots * self.slot_s if tx_s is None else tx_s      # legacy levels: whole slots
+        e_tx = tx_j / c.pa_efficiency + c.tx_circuit_w * tx_time
         e = e_tx + c.rx_power_w * rx_slots * self.slot_s + c.idle_power_w * self.step_s + c.msg_energy_j * s["nmsg"]
         s["nmsg"].zero_()
         s["cum"].add_(e)

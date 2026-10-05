@@ -61,8 +61,9 @@ def test_l2_deterministic_accounting():
         o = net.step(None, 25 * torch.rand(E, R, generator=g) - 5)
         tb1 = float(net.ul.ctr["tb_new"] + net.ul.ctr["tb_retx"])
         assert float(o["tx_slots"].sum()) == tb1 - tb0             # every transport block counted once
-        rad = o["tx_slots"] * P23 * slot_s                          # allocated power, no power control: 23 dBm
-        e_tx = rad / 0.5 + 0.3 * o["tx_slots"] * slot_s
+        tx_s = o["tx_slots"] * slot_s * 12 / 14                    # PUSCH time: 12 data symbols per U slot
+        rad = tx_s * P23                                            # allocated power, no power control: 23 dBm
+        e_tx = rad / 0.5 + 0.3 * tx_s
         assert torch.allclose(o["energy_tx_j"], e_tx, rtol=1e-5, atol=1e-12)
         e = e_tx + 0.05 * 0.1 + 0.002 * acc.float()
         assert torch.allclose(o["energy_j"], e, rtol=1e-5)
@@ -76,7 +77,7 @@ def test_l2_fixed_tx_power_and_power_control():
     net = make_engine("L2", E, R, "cpu", NRConfig(energy=EnergyConfig(tx_power_dbm=10.0)), seed=2)
     torch.manual_seed(0)
     o = _drive(net, steps=3)[-1]
-    assert torch.allclose(o["energy_tx_j"], o["tx_slots"] * 0.01 * 5e-4, rtol=1e-5)
+    assert torch.allclose(o["energy_tx_j"], o["tx_slots"] * 0.01 * 5e-4 * 12 / 14, rtol=1e-5)   # 12 PUSCH symbols
     pc = make_engine("L2", E, R, "cpu", multicell(3, energy=EnergyConfig()), seed=2)
     torch.manual_seed(0)
     slot_s = pc.config.slot_ms * 1e-3
