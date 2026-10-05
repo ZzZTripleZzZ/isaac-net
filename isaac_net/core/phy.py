@@ -77,10 +77,13 @@ def n_re_per_prb(nsym, dmrs, oh):
 def tbs_38214(qm, r, n_prb, nsym, dmrs=12, oh=0, layers=1):
     """Exact TBS in bits, 38.214 Sec. 5.1.3.2. All tensor args broadcast; returns int64.
     qm: modulation order, r: target code rate (float, R/1024 already divided), n_prb: allocated PRBs,
-    nsym: allocated OFDM symbols (incl. DMRS symbols). Zero PRBs give TBS 0."""
+    nsym: allocated OFDM symbols (incl. DMRS symbols), layers: number of layers v (an int, or an integer tensor that
+    broadcasts, e.g. a per-robot rank [..., 1]); N_info = N_RE R Qm v (step 2). Zero PRBs give TBS 0."""
     dev = n_prb.device if torch.is_tensor(n_prb) else (qm.device if torch.is_tensor(qm) else None)
     f64 = lambda x: _f64(x, dev)
     qm, r, n_prb, nsym = f64(qm), f64(r), f64(n_prb), f64(nsym)
+    if torch.is_tensor(layers):
+        layers = f64(layers)
     n_re = n_re_per_prb(nsym, f64(dmrs), f64(oh)) * n_prb
     n_info = n_re * r * qm * layers
     # step 3: N_info <= 3824
@@ -136,12 +139,15 @@ def _db(lin):
     return (10 * torch.log10(lin.clamp(min=1e-6))).nan_to_num(nan=-30.0, posinf=60.0, neginf=-30.0)
 
 
-def tbs_lena(qm, r, n_prb, nsym, ref_sc=1):
+def tbs_lena(qm, r, n_prb, nsym, ref_sc=1, layers=1):
     """5G-LENA v5.1 TB size in bits (NrAmc::CalculateTbSize behaviour, reimplemented): payload bytes
     P = floor((12 - ref_sc) * n_prb * nsym * Qm * R / 8), minus a 3-byte CRC, minus 3 bytes per code
-    block when the TB exceeds the largest code block (1056 B for BG1, 480 B for BG2)."""
+    block when the TB exceeds the largest code block (1056 B for BG1, 480 B for BG2). layers (int or broadcasting
+    integer tensor) multiplies the resource elements inside the floor, the rank factor of 5G-LENA's payload size."""
     f64 = lambda x: _f64(x, n_prb.device)
     qm, r, n_prb = f64(qm), f64(r), f64(n_prb)
+    if not (isinstance(layers, int) and layers == 1):
+        n_prb = n_prb * f64(layers)
     p = torch.floor((12 - ref_sc) * n_prb * nsym * qm * r / 8)
     tb = torch.where(p >= 3, p - 3, p)
     bits = p * 8
@@ -186,7 +192,7 @@ class PHY:
         self.dev, self.source, self.tbs_mode, self.lena_ref_sc = device, source, tbs_mode, lena_ref_sc
         self.qm = torch.tensor([q for q, _ in mcs], dtype=torch.float32, device=device)
         self.r = torch.tensor([c / 1024 for _, c in mcs], dtype=torch.float32, device=device)
-        self.se = self.qm * self.r
+        self.se = self.qm * self.r             # spectral efficiency per layer (bits per RE and layer)
         key = (source, direction if source == "sionna_label" else "-", mcs_table, str(device))
         if key not in _TAB_CACHE:
             if source == "lena":
@@ -237,12 +243,14 @@ class PHY:
         self.thr_ref = self.thr_lookup(k.float(), bg)
 
     # -------- TBS and code blocks --------
-    def tbs_all(self, n_prb, nsym, dmrs=12, oh=0):
-        """TBS (bits) of every MCS for n_prb [...] -> [..., M]."""
+    def tbs_all(self, n_prb, nsym, dmrs=12, oh=0, layers=1):
+        """TBS (bits) of every MCS for n_prb [...] -> [..., M]; layers: 1, or a rank tensor shaped like n_prb."""
         n = n_prb[..., None] if n_prb.dim() else n_prb
+        if torch.is_tensor(layers):
+            layers = layers[..., None] if layers.dim() else layers
         if self.tbs_mode == "lena":
-            return tbs_lena(self.qm, self.r, n, nsym, self.lena_ref_sc)
-        return tbs_38214(self.qm, self.r, n, nsym, dmrs, oh)
+            return tbs_lena(self.qm, self.r, n, nsym, self.lena_ref_sc, layers)
+        return tbs_38214(self.qm, self.r, n, nsym, dmrs, oh, layers)
 
     def cb(self, tbs, r):
         """(code-block size used for the BLER lookup, number of CBs, base graph index)."""
@@ -328,17 +336,26 @@ class PHY:
         return _db(-self.beta[mcs.long()] * (lse - lnw))
 
     # -------- link adaptation --------
-    def select_mcs(self, est_db, mask, offset_db, n_prb, nsym, dmrs, oh=0, mode="eesm", w=None):
+    def select_mcs(self, est_db, mask, offset_db, n_prb, nsym, dmrs, oh=0, mode="eesm", w=None, layers=1):
         """Highest MCS whose TB error probability at the (offset) effective SINR of the allocated
-        subbands is <= the BLER target (5G-LENA ErrorModel AMC rule). Returns (mcs, tbs)."""
+        subbands is <= the BLER target (5G-LENA ErrorModel AMC rule). Returns (mcs, tbs). With layers (a rank
+        tensor [...]) est_db is the per-layer SINR and the TBS spans the layers (one TB over both layers)."""
         eff = self.eff_sinr_all(est_db, mask, mode, w) + offset_db[..., None]      # [..., M]
-        tbs = self.tbs_all(n_prb, nsym, dmrs, oh)                                  # [..., M]
+        tbs = self.tbs_all(n_prb, nsym, dmrs, oh, layers)                          # [..., M]
         cbs, c, bg = self.cb(tbs, self.r)
         m_all = torch.arange(self.M, device=self.dev).expand_as(tbs)
         tbler = 1 - (1 - self.bler_lookup(m_all, eff, cbs.float(), bg)) ** c.float()
         ok = (tbler <= self.target) & (tbs > 0) & (m_all <= self.mcs_max)
         m = (ok.long() * torch.arange(1, self.M + 1, device=self.dev)).max(-1).values.clamp(min=1) - 1
         return m, tbs.gather(-1, m[..., None]).squeeze(-1)
+
+    @staticmethod
+    def layer_sinr_db(sinr_db, rank, penalty_db):
+        """Per-layer SINR (dB) of a rank-`rank` transmission: sinr_db - 10 log10(rank) - penalty_db where rank > 1
+        (the transmit power split over the layers, plus a fixed inter-layer interference penalty), unchanged at rank
+        1. rank broadcasts against sinr_db (e.g. [..., 1] against per-subband [..., S])."""
+        loss = torch.where(rank > 1, 10 * torch.log10(rank.float()) + penalty_db, torch.zeros_like(rank, dtype=sinr_db.dtype))
+        return sinr_db - loss
 
     def tb_error_prob(self, mcs, sinr_eff_db, tbs, mcs_eq=None):
         cbs, c, bg = self.cb(tbs, self.r[mcs.long()])

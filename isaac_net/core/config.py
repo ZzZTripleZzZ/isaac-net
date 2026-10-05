@@ -73,6 +73,8 @@ FIELD_GROUPS = {
            "n_harq", "max_harq_tx", "harq_combining", "harq_fail", "rlc_retx_slots", "discard", "mcs_table",
            "eff_sinr", "bler_source", "tbs_mode", "lena_ref_sc_per_rb", "bler_target", "ul_mcs_max", "dl_mcs_max",
            "olla", "olla_up_db", "scheduler", "pf_metric", "pf_window", "retx_priority", "ul_power", "phr_cap",
+           "n_layers_max", "rank_rule", "rank_sinr_min_db", "rank_k_max_db", "rank_layer_penalty_db", "ul_mimo",
+           "dl_mimo",
            "qos_classes", "qos_priority", "qos_pdb_ms", "qos_gamma",
            "pf_update", "pf_avg_idle", "ul_retx_sched", "ul_amc_alloc", "ul_grant_model", "sr_boot_slots",
            "sr_boot_bytes", "bsr_delay_slots", "bsr_hdr_bytes", "bsr_est_hdr_bytes", "rlc_tail_bytes", "rlc_tail_timer_ms",
@@ -124,7 +126,7 @@ TR38901_SHORT = {"tr38901_rma": "RMa", "tr38901_uma": "UMa", "tr38901_umi": "UMi
 
 # fields read only under some switches (fields_read_by drops them when the switch is off)
 DL_ONLY_FIELDS = ("k1", "cqi_period_slots", "dl_mcs_max", "dl_snr_offset_db", "dl_interference", "gnb_tx_dbm",
-                  "ue_nf_db", "dl_n_prb", "dl_bandwidth_mhz", "cqi_table")   # NR engine downlink (dl=True)
+                  "ue_nf_db", "dl_n_prb", "dl_bandwidth_mhz", "cqi_table", "dl_mimo")   # NR engine downlink (dl=True)
 TDD_PATTERN_FIELDS = ("tdd_pattern", "special_split", "special_dl_data", "special_ul_data")   # duplex="tdd" only
 DUPLEX = ("tdd", "fdd")
 HANDOVER_FIELDS = ("a3_offset_db", "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc",
@@ -136,6 +138,8 @@ INTERFERENCE_FIELDS = ("ul_interference", "dl_interference", "li_alpha")    # n_
 UL_PC_FIELDS = ("ul_pc_p0_dbm", "ul_pc_alpha")               # ul_pc_on
 UL_TPC_FIELDS = ("ul_tpc_mode", "ul_tpc_target_db", "ul_tpc_steps_db", "ul_tpc_delay_slots",
                  "ul_tpc_range_db")                         # ul_tpc (NR engine only)
+MIMO_RULE_FIELDS = ("rank_rule", "rank_sinr_min_db", "rank_k_max_db", "rank_layer_penalty_db")   # a rank-2 direction
+MIMO_FIELDS = MIMO_RULE_FIELDS + ("ul_mimo", "dl_mimo")      # n_layers_max > 1 (NR engine only)
 QOS_FIELDS = ("qos_classes", "qos_priority", "qos_pdb_ms", "qos_gamma")      # scheduler="qos" (NR engine only)
 ANTENNA_FIELDS = ("cell_azimuth_deg", "cell_tilt_deg", "gnb_antenna_gain_dbi")      # gnb_antenna="sector"
 TR38901_FIELDS = ("tr38901_scenario", "tr38901_los", "o2i_indoor_frac", "o2i_model", "inf_clutter_density",
@@ -208,6 +212,17 @@ def _switch_unread(cfg, nr):
             off |= set(UL_TPC_FIELDS)
         if cfg.scheduler != "qos":
             off |= set(QOS_FIELDS)
+        if cfg.n_layers_max == 1:
+            off |= set(MIMO_FIELDS)
+        else:
+            if not cfg.ul:
+                off.add("ul_mimo")
+            if not cfg.mimo_dirs:                             # no direction may use rank 2: the rule is unread
+                off |= set(MIMO_RULE_FIELDS)
+            elif cfg.rank_rule == "sinr":
+                off.add("rank_k_max_db")
+            elif cfg.rank_rule == "los":
+                off.add("rank_sinr_min_db")
         if not cfg.fading:
             off |= set(FADING_FIELDS) | {"fading_rician"} | set(RICIAN_FIELDS) | {"fading_freq_corr"}
         elif cfg.fading_doppler != "per_robot":
@@ -412,6 +427,15 @@ class NRConfig:
     pf_metric: str = "subband"           # "subband" (frequency-selective) or "wideband" (5G-LENA OFDMA PF)
     pf_window: float = 100.0             # EWMA window in scheduled slots of that direction
     retx_priority: bool = True
+    # ---- SU-MIMO rank model (NR engine; docs/configurability.md "MIMO rank"); n_layers_max = 1 = one layer, bitwise ----
+    n_layers_max: int = 1                # 1 or 2: largest rank of a TB; the rank is chosen per new TB at link adaptation
+    rank_rule: str = "sinr_los"          # rank 2 when "sinr": wideband SINR >= rank_sinr_min_db; "los": Rician K of the
+                                         # link < rank_k_max_db (NLOS = K 0, rich scattering); "sinr_los": both
+    rank_sinr_min_db: float = 10.0       # wideband link-adaptation SINR (per PRB, linear mean over the RBGs) for rank 2
+    rank_k_max_db: float = 3.0           # K (dB) below which a link counts as rich scattering (no Rician K: K = 0)
+    rank_layer_penalty_db: float = 3.0   # per-layer SINR = SINR - 10 log10(rank) - this (inter-layer interference)
+    ul_mimo: bool = False                # rank 2 in the UL (needs two UE antennas)
+    dl_mimo: bool = True                 # rank 2 in the DL (needs dl=True)
     # ---- scheduler="qos" (read only then): message class c = clamp(priority, 0, qos_classes - 1) per message ----
     qos_classes: int = 2                 # Q message classes (class 0 = highest priority)
     qos_priority: tuple = (10, 70)       # 3GPP priority level P per class (1..99, lower = more important); the
@@ -741,6 +765,9 @@ class NRConfig:
             assert self.ul_pc_on, ("ul_tpc corrects the open-loop power P0 + alpha PL: set ul_pc=True (it is on by "
                                    "default only with several cells)")
             assert len(self.ul_tpc_set) >= 1 and self.ul_tpc_delay >= 0 and self.ul_tpc_range_db > 0
+        assert self.n_layers_max in (1, 2), "n_layers_max: 1 or 2 (rank-1/2 SU-MIMO model)"
+        assert self.rank_rule in ("sinr", "los", "sinr_los"), "rank_rule: 'sinr', 'los' or 'sinr_los'"
+        assert self.rank_layer_penalty_db >= 0, "rank_layer_penalty_db must be >= 0"
         assert self.gnb_antenna in ("isotropic", "sector"), "gnb_antenna: 'isotropic' or 'sector'"
         if self.cell_azimuth_deg is not None:
             assert len(self.cell_azimuth_deg) == self.n_cells, "cell_azimuth_deg needs one azimuth per cell"
@@ -763,6 +790,14 @@ class NRConfig:
         if self.rician_k_db is not None:
             return "fixed"
         return "los" if self.rician_k_from_los else None
+
+    @property
+    def mimo_dirs(self):
+        """Directions that may send rank-2 TBs: () with n_layers_max = 1, else "ul" if ul and ul_mimo, "dl" if dl and
+        dl_mimo."""
+        if self.n_layers_max == 1:
+            return ()
+        return tuple(d for d, on in (("ul", self.ul and self.ul_mimo), ("dl", self.dl and self.dl_mimo)) if on)
 
     @property
     def freq_corr_mode(self):

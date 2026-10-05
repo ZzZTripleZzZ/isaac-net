@@ -107,11 +107,16 @@ CFGS = {
                                       traffic=[TM.periodic(600, 10, jitter_ms=2), TM.policy(),
                                                TM.periodic(1200, 5, jitter_ms=2).downlink(),
                                                TM.bursty(900, 30, 2, (0.4, 0.4)).downlink()]),
+    # rank-2 SU-MIMO (docs/configurability.md "MIMO rank"): UL and DL, rank from the wideband SINR and the Rician K of
+    # the radio's LOS state (graph only: triton refuses n_layers_max=2)
+    "ul_dl_mimo2": lambda: NRConfig(dl=True, n_layers_max=2, ul_mimo=True, rank_sinr_min_db=8.0, fading_rician=True,
+                                    channel="tr38901_inf_sh", rician_k_ramp_slots=4),
 }
 ACCESS_FDD_DL_CFGS = ("ul_access", "ul_fdd", "ul_dl_fdd", "ul_dl_traffic")    # graph and triton
 RICIAN_CFGS = ("ul_rician", "ul_rician_los", "cells3_rician", "ul_dl_pf_rician")
 FCORR_CFGS = ("ul_fcorr", "ul_fcorr_rician")                 # both run on graph and triton
 RICIAN_TRITON_CFGS = ("ul_rician", "ul_rician_los")          # one cell, lumped grants
+MIMO_CFGS = ("ul_dl_mimo2",)                                # graph only (G1, G7)
 
 
 class Workload:

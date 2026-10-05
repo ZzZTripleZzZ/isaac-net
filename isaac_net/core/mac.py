@@ -31,6 +31,14 @@ ul_amc_alloc="previous" picks the UL MCS for the PRB count of the robot's previo
 current grant; ul_grant_model="bsr" (mac_ul.py) replaces the lumped SR delay by the SR / BSR pipeline, whose payload
 rule enters through _tb_payload.
 
+SU-MIMO rank (NRConfig.n_layers_max = 2, the directions of cfg.mimo_dirs; docs/configurability.md "MIMO rank"): link
+adaptation picks the rank of every new TB (_rank: wideband SINR and / or the link's Rician K), selects the MCS on the
+per-layer SINR (PHY.layer_sinr_db: SINR - 10 log10(rank) - rank_layer_penalty_db) and sizes the TB over the layers
+(tbs_38214 layers=rank). The HARQ process keeps the rank (h_rank) for its retransmissions, and decoding uses the
+per-layer SINR of that rank: the layers form one TB (one codeword, one CRC) decoded jointly through the same EESM /
+BLER lookup. CQI, OLLA and the scheduler's single-layer rate estimate are unchanged. Off (n_layers_max = 1), no rank
+state exists and none of this code runs.
+
 Time: g (slot) and frac (completion time) are Python numbers in the reference, or 0-dim device tensors (long,
 float64) when the graph backend captures the step (nr_fast.py); gh is always the host slot index, used only for
 decisions that are fixed by the TDD pattern. Random draws: torch.rand_like (cfg.rng="global") or the engine's
@@ -50,6 +58,8 @@ from .queues import FrameQueue, env_mask, onehot, reset_where
 BIG = 2 ** 62
 AVG_MIN = 1e-9             # floor of the PF average (bytes per slot), as 5G-LENA's PF metric max(1e-9, avg)
 BSR_DEPTH = 4              # ul_grant_model="bsr": buffer status reports in flight per robot ("K" state dims)
+# rank-2 SU-MIMO (a direction in cfg.mimo_dirs): rank of the TB of each HARQ process, rank of the robot's last new TB
+MIMO_STATE = {"h_rank": (("P",), torch.long, 1), "last_rank": ((), torch.long, 1)}
 
 
 class MacLink:
@@ -74,6 +84,10 @@ class MacLink:
     def __init__(self, cfg: NRConfig, E, R, device, meta=()):
         self.cfg, self.E, self.R, self.dev = cfg, E, R, device
         self.dir = self.direction
+        self.mimo = self.dir in cfg.mimo_dirs          # rank-2 SU-MIMO in this direction (n_layers_max = 2)
+        if self.mimo:
+            self.STATE = {**self.STATE, **MIMO_STATE}
+        self.rank_k = None         # callable -> Rician K (linear) [E,R] of the serving link, or None (set by NRNet)
         self.P = cfg.n_harq
         self.S = cfg.n_subbands
         self.sb_prb = torch.tensor(cfg.subband_prbs, dtype=torch.float32, device=device)
@@ -368,17 +382,22 @@ class MacLink:
         # ---- link adaptation for new TBs ----
         est_tx = self._la_estimate(sinr_ref_db, n_prb, est)
         off = self.olla if cfg.olla else torch.zeros_like(self.olla)
+        lay = 1
+        if self.mimo:           # rank of the new TB, then the MCS on the per-layer SINR and the TBS over the layers
+            rank_new = self._rank(est_tx)
+            est_tx = phy.layer_sinr_db(est_tx, rank_new[..., None], cfg.rank_layer_penalty_db)
+            lay = rank_new
         amc_prev = self.dir == "ul" and cfg.ul_amc_alloc == "previous"
         if amc_prev:            # 5G-LENA UL AMC: MCS for the PRBs of the previous PUSCH, TB for this allocation
             ref_prb = torch.where(self.last_nprb > 0, self.last_nprb, n_prb)
             ref_won = torch.ones_like(won) if cfg.ul_power == "whole_band" else won
             mcs_new, _ = phy.select_mcs(est_tx, ref_won, off, ref_prb, nsym, cfg.dmrs_re_per_prb,
-                                        cfg.overhead_re_per_prb, cfg.eff_sinr, w)
-            tbs_new = phy.tbs_all(n_prb, nsym, cfg.dmrs_re_per_prb, cfg.overhead_re_per_prb).gather(
+                                        cfg.overhead_re_per_prb, cfg.eff_sinr, w, layers=lay)
+            tbs_new = phy.tbs_all(n_prb, nsym, cfg.dmrs_re_per_prb, cfg.overhead_re_per_prb, lay).gather(
                 -1, mcs_new[..., None]).squeeze(-1)
         else:
             mcs_new, tbs_new = phy.select_mcs(est_tx, won, off, n_prb, nsym, cfg.dmrs_re_per_prb,
-                                              cfg.overhead_re_per_prb, cfg.eff_sinr, w)
+                                              cfg.overhead_re_per_prb, cfg.eff_sinr, w, layers=lay)
         cap_b = (tbs_new // 8 - cfg.tb_overhead_bytes).clamp(min=1)
         byt_new = self._tb_payload(cap_b, unsent, tx_new, g)
         # ---- bind TBs to processes ----
@@ -395,6 +414,9 @@ class MacLink:
         self.h_lexp = torch.where(ohn, torch.full_like(self.h_lexp, -float("inf")), self.h_lexp)
         self.h_nrb = torch.where(ohn, torch.zeros_like(self.h_nrb), self.h_nrb)
         self.h_state = torch.where(ohn, torch.ones_like(self.h_state), self.h_state)
+        if self.mimo:           # the process keeps the rank of its TB for every retransmission
+            self.h_rank = torch.where(ohn, rank_new[..., None], self.h_rank)
+            self.last_rank = torch.where(tx_new, rank_new, self.last_rank)
         self.sent = self.sent + byt_new * tx_new
         g1 = lambda x: x.gather(-1, p_tx[..., None]).squeeze(-1)
         mcs, tbs = g1(self.h_mcs), g1(self.h_tbs)
@@ -405,6 +427,8 @@ class MacLink:
             # same-slot inter-cell interference given this slot's transmissions (won [E,R,S] of the robots
             # that transmit, n_prb [E,R]); returns the per-subband SINR used for decoding
             act = self.sinr_hook(g, self.dir, won & tx[..., None], n_prb, act)
+        if self.mimo:           # per-layer SINR of the TB's rank (both layers decoded jointly as one TB)
+            act = phy.layer_sinr_db(act, g1(self.h_rank)[..., None], cfg.rank_layer_penalty_db)
         mcs_eq = None
         if cfg.harq_combining == "ir_lena":
             lse, _ = phy.eesm_lse(act, won, mcs, w)
@@ -474,6 +498,22 @@ class MacLink:
         q = self.q
         done = (q.cap >= 0) & (q.end <= ack[..., None]) & ~q.lost & torch.isinf(q.fin)
         q.fin = torch.where(done, frac + cfg.proc_offset_ms / cfg.control_step_ms, q.fin)
+
+    def _rank(self, est):
+        """Rank (1 or 2) of a new TB per robot [E,R] from the link-adaptation estimate est [E,R,S] (per-PRB SINR at
+        this grant's PSD, before OLLA and before the layer split) and the link's Rician K (rank_k, None or absent
+        = K 0: Rayleigh, NLOS). rank_rule "sinr": wideband SINR (linear mean over the RBGs, PRB-weighted) >=
+        rank_sinr_min_db; "los": K < rank_k_max_db (rich scattering); "sinr_los": both."""
+        cfg = self.cfg
+        two = torch.ones(self.E, self.R, dtype=torch.bool, device=self.dev)
+        if cfg.rank_rule != "los":
+            lin = (10 ** (est.clamp(-30, 60) / 10) * self.sb_prb).sum(-1) / self._w_sum
+            two = two & (10 * torch.log10(lin) >= cfg.rank_sinr_min_db)
+        if cfg.rank_rule != "sinr":
+            k = None if self.rank_k is None else self.rank_k()
+            if k is not None:
+                two = two & (k < 10 ** (cfg.rank_k_max_db / 10))
+        return 1 + two.long()
 
     def _rbg_metric(self, s, rate_sb, base, wwin, got):
         """pf_update="rbg": metric of RBG s with the average moved by the bytes granted so far in this slot (qos: the

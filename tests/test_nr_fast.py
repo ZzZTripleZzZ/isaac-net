@@ -15,7 +15,7 @@ GPU (marker gpu; tests/nr_equiv.py is the harness, its CLI runs the 300-step ver
      K, K from the LOS state, three cells), frequency-correlated fading (fixed delay spread, per-link delay spread
      with Rician from the LOS state), the QoS scheduler (two and three classes, per-RBG PF), closed-loop UL TPC
      (accumulate, absolute) and the 38.214 CQI table, RACH + DRX, FDD (UL only, UL + a wider DL carrier), UL + DL
-     traffic models, with random partial resets; statistics and counters at the end
+     traffic models, rank-2 SU-MIMO (UL + DL, rank from SINR and K), with random partial resets; statistics and counters at the end
   G2 triton, teacher forced: identical decisions from an identical state (UL, UL+DL, LENA-like UL, and the 5G-LENA
      MAC switches the kernel implements: per-RBG PF with frozen averages, TDMA UL retx, previous-PUSCH AMC; Rician
      fading with fixed K and with K from the LOS state; frequency-correlated fading, FCORR = 1 and 2; the QoS scheduler;
@@ -137,7 +137,7 @@ def test_r4_fast_backends_need_engine_rng_and_cuda():
                                  "traffic_c3", "ul_rician", "ul_rician_los", "cells3_rician",
                                  "ul_fcorr", "ul_fcorr_rician", "qos", "qos_rbg",
                                  "ul_tpc", "ul_tpc_abs", "ul_dl_cqi38214", "ul_tpc_cqi",
-                                 "ul_access", "ul_fdd", "ul_dl_fdd", "ul_dl_traffic"])
+                                 "ul_access", "ul_fdd", "ul_dl_fdd", "ul_dl_traffic", "ul_dl_mimo2"])
 def test_g1_graph_bitwise(cfg):
     # steps 25..64 of the cycle: 25 medium steps (p = 0.4), then 15 all-large burst steps (p = 0.9). The reference
     # delivers 228 (ul_maxci_pc) to 12399 (traffic_c3) frames here, against 3 to 3800 for the old 12 idle steps.
@@ -162,7 +162,7 @@ def test_g2_triton_teacher_forced(cfg):
 @pytest.mark.gpu
 @pytest.mark.parametrize("cfg", ["ul_lena_v2", "ul_dl_pf_rbg", "cells3_v2", "ul_lena_sched", "ul_dl_pf",
                                  "ul_dl_pf_rician", "ul_fcorr", "ul_tpc", "ul_tpc_abs", "ul_dl_cqi38214",
-                                 "ul_tpc_cqi", "ul_access", "ul_fdd", "ul_dl_fdd", "ul_dl_traffic"])
+                                 "ul_tpc_cqi", "ul_access", "ul_fdd", "ul_dl_fdd", "ul_dl_traffic", "ul_dl_mimo2"])
 def test_g7_graph_bitwise_lena_mac_switches(cfg):
     """graph == reference bitwise with the 5G-LENA MAC switches on (BSR pipeline state, per-RBG PF, TDMA retx)."""
     r = nr_equiv.run("graph", cfg, E=8, R=6, steps=40, seed=3, p_reset=0.2, phase_offset=25)

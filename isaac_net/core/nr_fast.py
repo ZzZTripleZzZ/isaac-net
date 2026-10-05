@@ -101,7 +101,7 @@ class _EagerReplay:
 
 
 TRITON_NOT_IMPLEMENTED = ("several cells (n_cells > 1: A3 handover, rlf), the SR / BSR grant pipeline "
-                          "(ul_grant_model='bsr'), SINR hooks")
+                          "(ul_grant_model='bsr'), SINR hooks, rank-2 MIMO (n_layers_max=2)")
 
 
 class TritonUnsupported(NotImplementedError, ValueError):
@@ -501,6 +501,8 @@ class NRTritonEngine(NRGraphEngine):
             out.append((f"ul_grant_model={cfg.ul_grant_model!r} (the 5G-LENA SR / BSR grant pipeline, which "
                         "lena_match_v2 / lena_validation_v2 turn on)",
                         "the other 5G-LENA MAC switches (pf_update, pf_avg_idle, ul_retx_sched, ul_amc_alloc) run"))
+        if cfg.mimo_dirs:
+            out.append(("rank-2 MIMO (n_layers_max=2)", "the kernel has no per-process rank or per-layer SINR"))
         return out
 
     def __init__(self, E, R, device, cfg: NRConfig, seed=None):
