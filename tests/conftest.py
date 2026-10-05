@@ -35,9 +35,11 @@ def pytest_collection_modifyitems(config, items):
     skip_gpu = pytest.mark.skip(reason="CUDA not available")
     skip_isaac = pytest.mark.skip(reason="Isaac Lab not installed")
     for item in items:
-        if "isaac" in item.keywords and not has_isaac:
+        # get_closest_marker, not `"gpu" in item.keywords`: keywords also hold the names of the directories on the
+        # path, so a checkout inside a directory called `isaac` or `gpu` would otherwise skip every test.
+        if item.get_closest_marker("isaac") is not None and not has_isaac:
             item.add_marker(skip_isaac)
-        elif "gpu" in item.keywords and not torch.cuda.is_available():
+        elif item.get_closest_marker("gpu") is not None and not torch.cuda.is_available():
             item.add_marker(skip_gpu)
 
 
