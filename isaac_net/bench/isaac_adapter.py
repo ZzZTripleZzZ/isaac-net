@@ -68,16 +68,15 @@ class IsaacFleetAlert:
         act = torch.cat([cont.clamp(-1, 1), self._send_val[send][..., None]], -1).reshape(E, R * 3)
         self.metrics.add_send(send)
         env = self.env
-        h_on, h_pos, radius = env.h_on.clone(), env.h_pos.clone(), None
         obs, rew, term, trunc, _ = env.step(act)
         out = env.net_out
         if out is not None:
             self.metrics.add_submit(send, None)
             self.metrics.add_net_step(out)
             self.queue_len = out["queue_len"]
-        pos = env._pos_radio()
-        radius = ((self.t - env.h_start + 1).float() * FleetAlert.H_GROW).clamp(max=FleetAlert.H_R) * h_on.float()
-        inside = h_on[:, None] & ((pos - h_pos[:, None, :]).norm(dim=-1) < radius[:, None])
+        # the env's own per-step indicator, computed in _get_dones from this step's hazard state and END-of-step
+        # poses before any reset: the torch FleetAlert definition (share of robots inside the active hazard)
+        inside = env.last_inside
         rew_r = rew[:, None].expand(E, R)
         self.metrics.add_task_step(rew_r, inside.float().mean(-1))
         self.t += 1

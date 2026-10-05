@@ -189,6 +189,9 @@ class NetFleetEnv(NetEnvMixin, DirectRLEnv):
         self._pos0 = torch.zeros(E, R, 2, device=dev)
         self._rew = torch.zeros(E, device=dev)
         self.ep_stats = {k: torch.zeros(E, device=dev) for k in ("expo", "goals", "s1", "s2", "dlv")}
+        # [E,R] robots inside the active hazard in the last step (post-physics pose, pre-reset hazard state);
+        # not cleared by _reset_idx, so it can be read after env.step (bench/isaac_adapter.py hazard_exposure)
+        self.last_inside = torch.zeros(E, R, dtype=torch.bool, device=dev)
 
     # ---------------------------------------------------------------- pose adapter
     def _pos_radio(self) -> torch.Tensor:
@@ -256,6 +259,7 @@ class NetFleetEnv(NetEnvMixin, DirectRLEnv):
         self.goal = torch.where(reached[..., None], torch.rand(E, R, 2, device=dev) * ARENA, self.goal)
         st = self.ep_stats
         st["expo"] += inside.float().mean(-1)
+        self.last_inside = inside
         st["goals"] += reached.float().mean(-1)
         st["s1"] += (send == 1).float().mean(-1)
         st["s2"] += (send == 2).float().mean(-1)

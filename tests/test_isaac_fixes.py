@@ -103,3 +103,34 @@ def test_report_groups_by_sim_and_reads_old_files(tmp_path):
 def test_cli_progress_line_formats_missing_metric():
     from isaac_net.bench.cli import _num
     assert _num(None, ".4g") == "n/a" and _num(0.123456, ".3g") == "0.123"
+
+
+def test_isaac_adapter_reads_env_inside_indicator():
+    # the adapter must report the env's own per-step indicator, not recompute it from post-reset state
+    from isaac_net.bench.isaac_adapter import IsaacFleetAlert
+    from isaac_net.bench.metrics import EpisodeMetrics
+    from isaac_net.bench.tasks.fleet_alert import FleetAlert
+    E, R = 2, 4
+
+    class FakeEnv:
+        net_out = None
+
+        def step(self, act):
+            self.last_inside = torch.tensor([[True, True, False, False], [False] * 4])
+            # post-step state that the old code mixed in: a reset env with zeroed hazard and moved robots
+            self.h_on, self.h_start = torch.tensor([False, True]), torch.zeros(E, dtype=torch.long)
+            z = torch.zeros(E, R * 3)
+            return {"policy": z}, torch.zeros(E), torch.zeros(E, dtype=torch.bool), torch.tensor([True, False]), {}
+
+        def _pos_radio(self):
+            raise AssertionError("the adapter must not recompute exposure from post-step poses")
+
+    task = IsaacFleetAlert.__new__(IsaacFleetAlert)
+    task.E, task.R, task.T, task.env, task.dev = E, R, 300, FakeEnv(), torch.device("cpu")
+    task.metrics = EpisodeMetrics(E, R, 3, "cpu", 0.1, FleetAlert.MSG_SIZES)
+    task.metrics.reset(torch.ones(E, dtype=torch.bool))
+    task.t = torch.zeros(E, dtype=torch.long)
+    task._send_val = torch.tensor([-1.0, 0.0, 1.0])
+    _, _, done, info = task.step(torch.zeros(E, R, 2), torch.zeros(E, R, dtype=torch.long))
+    assert bool(done[0]) and len(info["episodes"]) == 1
+    assert info["episodes"][0][FleetAlert.METRIC.key] == pytest.approx(0.5)
