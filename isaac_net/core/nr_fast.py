@@ -384,8 +384,9 @@ class NRTritonEngine(NRGraphEngine):
     """backend="triton": every scheduled slot of a control step (fading, SR, UL data slots, and DL data slots and
     CQI reports when the config has a downlink) in one fused Triton kernel, one program per env with the robot x
     {HARQ process, frame, RBG, MCS} state in registers (nr_triton.nr_step_kernel). The step's prologue (input SINR,
-    power control) and epilogue (NRNet._finish: deadlines, compaction, outputs, statistics) are the reference's
-    torch code; the whole step is captured in CUDA graphs as in NRGraphEngine.
+    power control, and with scheduler="qos" the class reorder of the queues and the per-robot class weights of
+    MacLink.qos_prepare, which the kernel reads as qw [E,R]) and epilogue (NRNet._finish: deadlines, compaction,
+    outputs, statistics) are the reference's torch code; the whole step is captured in CUDA graphs as in NRGraphEngine.
 
     Same semantics as the reference MAC (mac.py, mac_ul.py, mac_dl.py) at one cell, with the same engine RNG draws
     (the kernel inlines the hash of nr_rng.py: uniforms bitwise equal, normals to float rounding). TBS, code-block
@@ -467,7 +468,7 @@ class NRTritonEngine(NRGraphEngine):
         w = [float(x) for x in cfg.subband_prbs]
         wb_db = 10 * math.log10(cfg.nprb / cfg.snr_ref_prbs)
         comb = {"none": 0, "cc": 1, "ir_lena": 2}[cfg.harq_combining]
-        sched = {"pf": 0, "pf_wideband": 0, "maxci": 1, "rr": 2}[cfg.scheduler]
+        sched = {"pf": 0, "pf_wideband": 0, "maxci": 1, "rr": 2, "qos": 3}[cfg.scheduler]
         self._const = dict(
             RB=RB, S_=S, SB=triton.next_power_of_2(S), P=P, PB=triton.next_power_of_2(P), F=F,
             FB=triton.next_power_of_2(F), M=M, MB=MB, HB=HB, C=phy.C, G=phy.G, NL=len(LIFTING),
@@ -484,7 +485,7 @@ class NRTritonEngine(NRGraphEngine):
             PF_A=1 - 1 / cfg.pf_window, PF_B=1 / cfg.pf_window,
             PF_RBG=cfg.pf_update == "rbg", PF_FREEZE=cfg.pf_avg_idle == "freeze",
             RETX_TDMA=cfg.ul_retx_sched == "tdma", AMC_PREV=cfg.ul_amc_alloc == "previous",
-            LENA_CTR=bool(net.ul._lena_mac))
+            LENA_CTR=bool(net.ul._lena_mac), QOS_G=float(cfg.qos_gamma))
         self._num_warps = 16 if RB >= 128 else (8 if RB >= 64 else 4)
 
     def _sched_table(self, g0, sched, dt0):
@@ -530,7 +531,8 @@ class NRTritonEngine(NRGraphEngine):
         net, cfg = self.net, self.config
         N, S = cfg.slots_per_step, cfg.n_subbands
         g0 = t * N
-        tv, _ = net._times(t)
+        tv, tf = net._times(t)
+        net._qos_prepare(tf)           # scheduler="qos": class order and class weights qw for the kernel (as NRNet.step)
         if net.rician:                 # Rician K ramp state for this step (as NRNet.step); the kernel evaluates K(g)
             net._rician_update(tv * N)
         ul_ref = snr_db if snr_db.dim() == 3 else snr_db[..., None].expand(-1, -1, S)

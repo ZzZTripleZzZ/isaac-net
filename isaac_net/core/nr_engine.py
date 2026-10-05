@@ -485,6 +485,12 @@ class NRNet:
         if self.log_stats:
             self.stats["overflow_dl"] = self.stats.get("overflow_dl", 0) + int(((nbytes > 0) & ~acc).sum())
 
+    def _qos_prepare(self, tf):
+        """scheduler="qos": class-ordered queues and class weights of both links for this step (MacLink.qos_prepare)."""
+        for lk in (self.ul, self.dl):
+            if lk is not None and getattr(lk, "qos", False):
+                lk.qos_prepare(tf)
+
     # ---- slot schedule ----
     def _schedule(self, g0):
         cfg = self.cfg
@@ -582,6 +588,7 @@ class NRNet:
         assert self.C == 1, "several cells: use step_cells(t, pathgain [E,R,C]) (or poses through NREngine)"
         tv, tf = self._times(t)
         g0v = tv * N
+        self._qos_prepare(tf)
         ul_ref = snr_db if snr_db.dim() == 3 else snr_db[..., None].expand(-1, -1, self.S)
         if cfg.ul_pc_on:           # one cell with ul_pc=True: path loss from the input SNR
             self.ul.pc_backoff = self._pc_backoff(ul_ref.mean(-1) + cfg.subband_noise_dbm)
@@ -662,6 +669,7 @@ class NRNet:
         g0 = t * N
         tv, tf = self._times(t)
         g0v = tv * N
+        self._qos_prepare(tf)
         self._pg = pathgain_db
         rx = pathgain_db + cfg.ue_tx_dbm                      # RSRP up to a constant: full UE power, no fading
         asc = self.assoc

@@ -59,7 +59,7 @@ One `NRConfig` dataclass (`isaac_net/core/config.py`) configures every module, a
 
 | Choice | Where | Value | In NRConfig | Fast backends |
 |:---|:---|:---|:---|:---|
-| Scheduler | `mac.py:142-150`, `proto/netsim.py:522-529` | proportional fair only | `pf_metric` subband / wideband, `pf_window`, `retx_priority` (NR) | constexpr (`PF_A`, `PF_B`) |
+| Scheduler | `mac.py` (`MacLink.slot`), `proto/netsim.py:522-529` | proportional fair (NR default); legacy engine PF only | NR `scheduler` = `"pf"`, `"pf_wideband"`, `"maxci"`, `"rr"`, `"qos"` ([QoS scheduling](#qos-scheduling)), `pf_metric` subband / wideband, `pf_window`, `retx_priority` | constexpr (`SCHED`, `PF_A`, `PF_B`, `QOS_G`); `qos` reads per-robot weights `qw` |
 | PF average initial value and floor | `mac.py:48, 56`, `proto/netsim.py:37, 475`, `netsim_mc.py:142` | 100 B/slot; floor 1 B/slot on the legacy engine, 1e-9 B/slot on the NR engine (`AVG_MIN`, as 5G-LENA) | no | constexpr (`PF_MIN`, `AVG_MIN`) |
 | SR to grant delay (legacy) | `proto/netsim.py:31` | 2 UL slots | NR: `sr_period_slots`, `sr_grant_delay_slots`; legacy fixed | constexpr |
 | HARQ RTT, max transmissions, RLC retry (legacy) | `proto/netsim.py:32-34` | 4 UL slots, 4 tx, +10 UL slots | NR: `ul_harq_rtt_slots`, `max_harq_tx`, `n_harq`, `harq_fail`, `rlc_retx_slots`; legacy fixed | constexpr |
@@ -114,7 +114,7 @@ The comparison was checked line by line against the official documentation of ns
 | Mobility | from the simulator's poses | ns-3 mobility models | random UT velocities in the topology generators; trajectories user-coded | INET mobility models, Veins | **have**: poses come from Isaac Lab, which is the point of the package |
 | Traffic | policy messages (one per robot per step, size classes), periodic / bursty / video / event generators in the uplink or the downlink (`L2`); DL bytes | NGMN, 3GPP XR, FTP Model 1, HTTP generators | none (scheduler takes rates only) | any INET application | **partial**: periodic, bursty, video and event generators on `L2` only; DL generators (`direction="dl"`) on the reference backend only ([Downlink models](#downlink-models)) |
 | UL / DL / sidelink | UL, DL (`L2`) | UL, DL; sidelink only in a separate v3.1-based branch | UL, DL | UL, DL, network-assisted D2D (prototype) | **partial**: sidelink out of scope for now |
-| QoS / slicing | none | 5QI QoS schedulers, BWP-based slicing | none | 5QI QoS flows, SDAP, QoS-aware PF; no slicing | **missing** |
+| QoS / slicing | `scheduler="qos"`: per-message class from `priority`, 5G-LENA QoS metric with 3GPP priority level and packet delay budget per class, class-ordered byte assignment (`L2`) | 5QI QoS schedulers, BWP-based slicing | none | 5QI QoS flows, SDAP, QoS-aware PF; no slicing | **partial**: QoS scheduling on every `L2` backend; one queue per robot (no pre-emption of bytes already sent), no GBR rate guarantee, no slicing |
 | Multi-cell / handover | 1–7 cells, per-cell PF and HARQ, A3 handover with interruption (`L2` and legacy) | multi-cell, X2 handover, hex wraparound | multi-cell hex layouts, wraparound; no handover | multi-cell, X2 handover, background cells | **partial**: no wraparound, no X2 data forwarding model |
 | Radio link failure | N310/N311/T310/T311 on the serving-link SINR, re-establishment at the best suitable cell after a fixed delay, queue carry or flush; A3 target admission `a3_min_target_rsrp_dbm` (`L2`, several cells; [multicell.md](multicell.md#radio-link-failure)) | *unverified*: RLF via the ns-3 LTE RRC; A3 `MinTargetRsrpDbm` | not assessed | not assessed | **have** (`rlf`, `L2` with several cells, reference and `graph`): uplink SINR once per control step, no RACH contention or handover-failure model |
 | Interference | same-slot UL and DL per RBG (`L2`), UL (legacy) | all co-channel transmitters, incl. DL–UL cross-link | inter-cell, in the post-equalization SINR | inter-cell DL and UL (configurable), background cells | **partial** |
@@ -163,7 +163,7 @@ Every constructor also takes `tag` (default: 1 + the model's position in the lis
 
 **Levels.** Only `L2` runs traffic models. Every other level (`L0` to `L1`, `L2-legacy`, the surrogates and the bounds) raises a `ValueError` that names the models it would ignore, whether or not `strict` is set, and `NRConfig.unused_fields(level)` lists `traffic`. A config with only `policy()` works everywhere. Traffic models, `submit()` extras and the extra outputs cost nothing when unused: without them the engine runs exactly its earlier ops.
 
-**Limits.** `priority` is carried and reported, but the MAC serves each robot's queue in FIFO order. `deadline_ms` is reported as `deadline_miss` and does not drop messages. Traffic models work with one cell and with several NR cells (`n_cells > 1`). The engine gates arrivals through four hooks on its `UlMac` instance (`sr_step`, `slot`, `end_step`, and `handover`, so that a `ho_rlc="flush"` handover spares messages that arrive later in the step). If a future `NRNet` stops calling the first three, `step()` raises instead of silently mis-timing.
+**Limits.** `priority` is carried and reported. With the default schedulers the MAC serves each robot's queue in FIFO order. With `scheduler="qos"` the priority selects the message class, which sets the robot's scheduling weight and the order in which its queued messages get bytes ([QoS scheduling](#qos-scheduling)). `deadline_ms` is reported as `deadline_miss` and does not drop messages. Traffic models work with one cell and with several NR cells (`n_cells > 1`). The engine gates arrivals through four hooks on its `UlMac` instance (`sr_step`, `slot`, `end_step`, and `handover`, so that a `ho_rlc="flush"` handover spares messages that arrive later in the step). If a future `NRNet` stops calling the first three, `step()` raises instead of silently mis-timing.
 
 ### Downlink models
 
@@ -222,6 +222,34 @@ The offset enters wherever the open-loop backoff `pc_backoff` already did (`UlMa
 
 **Backends.** The antenna changes only the path gain the engine receives, so it runs on every backend. `ul_tpc` and `cqi_table="38214"` change the per-slot loop. They run on the reference and on the `graph` backend, which captures the reference step, and the `triton` backend refuses them with `NotImplementedError` until the fused kernel mirrors them (the kernel recomputes the power split from a per-step `pc` input and the CQI from the MCS thresholds).
 
+## QoS scheduling
+
+`scheduler="qos"` (level `L2`, every backend) is modelled on 5G-LENA's `NrMacSchedulerOfdmaQos`, with the weights of `NrMacSchedulerUeInfoQos` and the logical-channel byte assignment of `NrMacSchedulerLcQos` (5G-LENA `v5.1`). Each message gets a class from its `priority` (from `submit(..., priority=)` or a traffic model's `priority`), clamped to `0 .. qos_classes - 1`. A class plays the role of a 5QI flow on its own logical channel. Messages without a priority are class 0. The default is off, and with any other scheduler the engine runs exactly its earlier ops (`tests/test_qos.py` Q1 compares it with the frozen engine bit for bit).
+
+| Field | Default | Meaning |
+|:---|:---|:---|
+| `scheduler` | `"pf"` | `"qos"` turns the QoS scheduler on |
+| `qos_classes` | 2 | number of message classes Q |
+| `qos_priority` | (10, 70) | 3GPP priority level P per class (1 to 99, lower is more important); the default pairs 5QI 5 (IMS signalling) with 5QI 7 (voice, video, interactive gaming) |
+| `qos_pdb_ms` | (inf, inf) | packet delay budget per class in ms; a finite value makes the class delay-critical (the delay-budget factor below), inf keeps the factor at 1 |
+| `qos_gamma` | 1.0 | rate exponent of the metric (5G-LENA `m_alpha`) |
+
+**Metric.** On RBG s the scheduler ranks robot u by
+
+    w(u, s) = qw(u) * r(u, s)^gamma / R(u)
+
+where r is the achievable rate on the RBG, R is the PF average (the same `avg` as `"pf"`, floored at `AVG_MIN`) and qw is the robot's class weight. With `pf_update="rbg"` the average moves after every RBG, as for `"pf"`. The classes that count are those with unsent bytes in the robot's queue. In the downlink qw is the sum over these classes of (100 − P_c) · D_c (5G-LENA `CalculateDlWeight`). In the uplink the gNB knows the classes from the buffer status report, and qw is (100 − P_c) · D_c of the class with the lowest priority level (5G-LENA `CompareUeWeightsUl`). A robot with no such class, which happens only with padding grants of the BSR pipeline, gets the weight of the least important class.
+
+**Delay-budget factor.** D_c follows 5G-LENA's `CalculateDelayBudgetFactor`. Let HOL be the age of the class's oldest message with unsent bytes, in ms. Then D_c = PDB / (PDB − HOL) while HOL < PDB, and D_c = PDB / 0.1 once HOL ≥ PDB. So D_c is 1 for a fresh message, grows as the message nears its budget, and is very large after it, which serves an expired message first. 5G-LENA applies D only to delay-critical GBR flows. Here a finite `qos_pdb_ms` marks the class as such, and the uplink gets the same factor (5G-LENA has none in the uplink, so `qos_pdb_ms=inf` there reproduces it). Example with the default priorities and a 30 ms budget on class 1: a class-1 message beats a fresh class-0 message on the same channel once 30 · 30 / (30 − HOL) > 90, that is, once it has waited more than 20 ms (Q3).
+
+**Byte assignment by class.** When a robot gets a transport block, its bytes come from the most important class first, and each class stays in arrival order (as `NrMacSchedulerLcQos` serves logical channels by priority). The robot keeps one queue, a byte stream with in-order RLC delivery (`FrameQueue`). Once per control step, before its slots, `MacLink.qos_prepare` stably reorders the messages whose bytes are all unsent and already arrived, so that their bytes are laid out in class order (`FrameQueue.reorder`). Messages that already have bytes in a HARQ process keep their place, and so do messages behind the arrival gate of the traffic models.
+
+The alternative was one queue per class, `[E, R, Q]` with a stream pointer per class. It would let a new class-0 message pre-empt the rest of a partly sent class-1 message. We chose the single reordered queue because it keeps the MAC state `[E, R]`, every HARQ and RLC rule, and the fused Triton kernel unchanged. Its limit: a new class-0 message waits for the partly sent message ahead of it, at most one message, and a message that arrives inside a step is reordered at the start of the next step. The class weights are also computed once per step, from the queue at the step start.
+
+**Backends.** The reorder and the weights qw [E, R] are torch code that runs before the slot loop, so the `graph` backend captures them and the `triton` kernel reads qw as a per-robot input and multiplies its PF metric by it (constexpr `SCHED=3`, `QOS_G`). The retransmission rules are unchanged: admitted retransmissions still win RBGs first (`retx_priority`), and among themselves they are ranked by the weighted metric.
+
+**Limits.** No guaranteed bit rate (5G-LENA's GBR resource type only selects the delay factor here), no per-class PRB quota, no slicing. The PDCP discard of `discard="pdcp_arrival"` checks the message at the head of the byte stream, which is the most important class after a reorder, not necessarily the oldest message. A message purged by `discard="purge"` from the middle of the stream leaves a gap that is skipped at the next step start.
+
 ## Proposed modes and switches
 
 Every proposal keeps today's behavior as the default, so existing results and the bitwise backend tests stay valid. A field that a level cannot honor must appear in `unused_fields(level)`, or the level must refuse it, never ignore it silently.
@@ -266,7 +294,7 @@ Every proposal keeps today's behavior as the default, so existing results and th
 | Feature | Why it needs design |
 |:---|:---|
 | `graph` / `triton` backends for `L2` | every NR feature is reference-only, so none of them is usable at the scale the package is for |
-| QoS classes and slicing | priority queues per robot, a QoS-aware scheduler and per-class PRB quotas change the FIFO and the MAC state layout |
+| Slicing | per-slice PRB quotas or BWPs change the MAC state layout (QoS classes are done: [QoS scheduling](#qos-scheduling)) |
 | Beamforming | per-beam gains and beam management interact with the scheduler and the interference model |
 | RLC segmentation with status reports | the byte-stream queue would need per-SDU RLC state |
 

@@ -73,6 +73,16 @@ CFGS = {
                                  pf_avg_idle="freeze"),
     "ul_fcorr_rician": lambda: NRConfig(fading_freq_corr=True, fading_rician=True, channel="tr38901_inf_sh",
                                         rician_k_ramp_slots=4),
+    # scheduler="qos" (docs/configurability.md "QoS scheduling"): message classes from traffic-model priorities (the
+    # policy's messages are class 0), a delay budget on class 1; with per-RBG PF and gamma != 1 on UL + DL
+    "qos": lambda: NRConfig(scheduler="qos", qos_pdb_ms=(math.inf, 30.0), dl=True, frame_buffer=64,
+                            traffic=[TM.periodic(600, 10, jitter_ms=2, priority=1),
+                                     TM.bursty(1400, 30, 2, (0.3, 0.3), priority=1).on([0]), TM.policy()]),
+    "qos_rbg": lambda: NRConfig(scheduler="qos", qos_classes=3, qos_priority=(10, 40, 70),
+                                qos_pdb_ms=(20.0, math.inf, 60.0), qos_gamma=0.8, pf_update="rbg", pf_avg_idle="freeze",
+                                dl=True, frame_buffer=64,
+                                traffic=[TM.periodic(600, 10, jitter_ms=2, priority=2),
+                                         TM.bursty(1400, 30, 2, (0.3, 0.3), priority=1), TM.policy()]),
 }
 RICIAN_CFGS = ("ul_rician", "ul_rician_los", "cells3_rician", "ul_dl_pf_rician")
 FCORR_CFGS = ("ul_fcorr", "ul_fcorr_rician")                 # both run on graph and triton

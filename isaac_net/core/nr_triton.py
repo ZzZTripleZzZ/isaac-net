@@ -163,8 +163,8 @@ def _gather_p(x, pidx, p):
 
 @triton.jit
 def _mac_slot(
-        # per-robot state [RB] (lnp: PRBs of the last PUSCH, ul_amc_alloc="previous")
-        sent, floor, olla, avg, bsr, sr_t, last_tx, enq, lnp,
+        # per-robot state [RB] (lnp: PRBs of the last PUSCH, ul_amc_alloc="previous"; qw: class weight, scheduler="qos")
+        sent, floor, olla, avg, bsr, sr_t, last_tx, enq, lnp, qw,
         # per-subband state / inputs [RB, SB]
         csi, ref, gain, pc,
         # HARQ [RB, PB]
@@ -192,7 +192,7 @@ def _mac_slot(
         REF_PRBS: tl.constexpr, PHR_MIN: tl.constexpr, WB_DB: tl.constexpr, W0: tl.constexpr,
         OLLA_UP: tl.constexpr, OLLA_DN: tl.constexpr, PF_A: tl.constexpr, PF_B: tl.constexpr,
         PF_RBG: tl.constexpr, PF_FREEZE: tl.constexpr, RETX_TDMA: tl.constexpr, AMC_PREV: tl.constexpr,
-        LENA_CTR: tl.constexpr):
+        LENA_CTR: tl.constexpr, QOS_G: tl.constexpr):
     BIG: tl.constexpr = 2 ** 62
     unsent = enq - sent
     # DL processes whose ACK has reached the gNB become free
@@ -256,10 +256,15 @@ def _mac_slot(
             if m <= MCS_MAX:
                 mi = tl.where(est_o >= tl.load(thr_ptr + m), m, mi)
         rate = tl.load(se_ptr + mi) * re_prb * w[None, :] / 8.0
+    rate_q = rate
     if SCHED == 1:
         metric = rate
     elif SCHED == 2:
         metric = (g - last_tx).to(tl.float32)[:, None] + 0.0 * rate
+    elif SCHED == 3:       # scheduler="qos": r^gamma / avg times the class weight (MacLink.slot, qos_prepare)
+        if QOS_G != 1.0:
+            rate_q = libdevice.pow(rate, QOS_G)
+        metric = rate_q / tl.maximum(avg, AVG_MIN)[:, None] * qw[:, None]
     else:
         metric = rate / tl.maximum(avg, AVG_MIN)[:, None]
     metric = tl.where(sm[None, :], metric, 0.0)
@@ -293,7 +298,10 @@ def _mac_slot(
     for s in tl.static_range(S_):
         want = (cnt < want_cnt) & (has_rx | (left > 0)) & rm
         if PF_RBG:
-            msc = _col(rate, sidx, s) / tl.maximum(PF_A * avg + PF_B * got, 1e-9)
+            if SCHED == 3:     # MacLink._rbg_metric
+                msc = _col(rate_q, sidx, s) / tl.maximum(PF_A * avg + PF_B * got, 1e-9) * qw
+            else:
+                msc = _col(rate, sidx, s) / tl.maximum(PF_A * avg + PF_B * got, 1e-9)
         else:
             msc = _col(metric, sidx, s)
         ms = tl.where(want, msc + prio, -1.0)
@@ -317,7 +325,10 @@ def _mac_slot(
             avs = tl.max(_col(rel_f, sidx, s), axis=0) > 0.0
             want = (cnt < want_cnt) & new_el & (left > 0) & rm
             if PF_RBG:
-                msc = _col(rate, sidx, s) / tl.maximum(PF_A * avg + PF_B * got, 1e-9)
+                if SCHED == 3:     # MacLink._rbg_metric
+                    msc = _col(rate_q, sidx, s) / tl.maximum(PF_A * avg + PF_B * got, 1e-9) * qw
+                else:
+                    msc = _col(rate, sidx, s) / tl.maximum(PF_A * avg + PF_B * got, 1e-9)
             else:
                 msc = _col(metric, sidx, s)
             ms = tl.where(want, msc, -1.0)
@@ -604,6 +615,8 @@ def nr_step_kernel(
         gate_e_ptr, gate_s_ptr, gate_b_ptr, NMSG,
         # per-env accumulators [E, 8 HB]: UL counters, hist ok / tx / fail, then the same for the DL
         acc_ptr,
+        # scheduler="qos": per-robot class weights of this step [E,R], UL and DL (MacLink.qos_prepare; else unread)
+        u_qw, d_qw,
         # schedule of this step: itab [K, 10] int64, ftab [K, 7] float64; per-robot fading rho per ms [E,R]
         itab_ptr, ftab_ptr, K, rho_ptr,
         # Rician fading (RICIAN): K target, ramp start K and slot [E,R], unit phasor of the specular term [E,R,2]
@@ -629,7 +642,7 @@ def nr_step_kernel(
         GNB_PROC: tl.constexpr, REF_PRBS: tl.constexpr, PHR_MIN: tl.constexpr, WB_DB: tl.constexpr,
         W0: tl.constexpr, OLLA_UP: tl.constexpr, OLLA_DN: tl.constexpr, PF_A: tl.constexpr, PF_B: tl.constexpr,
         PF_RBG: tl.constexpr, PF_FREEZE: tl.constexpr, RETX_TDMA: tl.constexpr, AMC_PREV: tl.constexpr,
-        LENA_CTR: tl.constexpr):
+        LENA_CTR: tl.constexpr, QOS_G: tl.constexpr):
     e = tl.program_id(0).to(tl.int64)
     ridx = tl.arange(0, RB)
     rm = ridx < R
@@ -687,6 +700,10 @@ def nr_step_kernel(
             pc = tl.load(pc_ptr + er, mask=rm, other=0.0)
         else:
             pc = tl.zeros([RB], tl.float32)
+        if SCHED == 3:
+            u_s_qw = tl.load(u_qw + er, mask=rm, other=0.0)
+        else:
+            u_s_qw = tl.zeros([RB], tl.float32)
         u_cnt = tl.zeros([HB], tl.float32)
         u_hok = tl.zeros([HB], tl.float32)
         u_htx = tl.zeros([HB], tl.float32)
@@ -706,6 +723,10 @@ def nr_step_kernel(
             d_hntx, d_hmcs, d_htbs, d_hnsb, d_hcomb, d_hlexp, d_hnrb, d_cap, d_qs, d_qe, d_lost, d_fin,
             ridx, rm, sidx, sm, pidx, pm, fidx, fm, S_, P, F)
         dref = tl.load(dref_ptr + o_rs, mask=m_rs, other=0.0)
+        if SCHED == 3:
+            d_s_qw = tl.load(d_qw + er, mask=rm, other=0.0)
+        else:
+            d_s_qw = tl.zeros([RB], tl.float32)
         d_cnt = tl.zeros([HB], tl.float32)
         d_hok = tl.zeros([HB], tl.float32)
         d_htx = tl.zeros([HB], tl.float32)
@@ -780,7 +801,7 @@ def nr_step_kernel(
                  d_s_hrdy, d_s_hntx, d_s_hmcs, d_s_htbs, d_s_hnsb, d_s_hcomb, d_s_hlexp, d_s_hnrb, d_s_lost,
                  d_s_fin, d_cnt, d_hok, d_htx, d_hfl) = _mac_slot(
                     d_s_sent, d_s_floor, d_s_olla, d_s_avg, d_s_bsr, d_s_srt, d_s_ltx, d_s_enq,
-                    tl.zeros([RB], tl.float32), d_s_csi, dref,
+                    tl.zeros([RB], tl.float32), d_s_qw, d_s_csi, dref,
                     gain, tl.zeros([RB], tl.float32), d_s_hst, d_s_hlo, d_s_hhi, d_s_hrdy, d_s_hntx, d_s_hmcs,
                     d_s_htbs, d_s_hnsb, d_s_hcomb, d_s_hlexp, d_s_hnrb, d_s_cap, d_s_qs, d_s_qe, d_s_lost, d_s_fin,
                     d_cnt, d_hok, d_htx, d_hfl,
@@ -791,7 +812,7 @@ def nr_step_kernel(
                     1, S_, SB, M, MB, C, G, NL, EQW, NPRB, MODE, COMB, SCHED, WIDEBAND, HARQ_DROP, OLLA,
                     PHR_CAP, WHOLE_BAND, False, STEP, RETX_PRIO, MCS_MAX_DL, MAX_TX, TARGET, TB_OH, SR_DELAY,
                     UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B,
-                    PF_RBG, PF_FREEZE, False, False, LENA_CTR)
+                    PF_RBG, PF_FREEZE, False, False, LENA_CTR, QOS_G)
         if UL:
             if GATE:
                 if (srf != 0) | (uls != 0):
@@ -805,7 +826,8 @@ def nr_step_kernel(
                 (u_s_sent, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_lnp, u_s_csi, u_s_hst, u_s_hlo, u_s_hhi,
                  u_s_hrdy, u_s_hntx, u_s_hmcs, u_s_htbs, u_s_hnsb, u_s_hcomb, u_s_hlexp, u_s_hnrb, u_s_lost,
                  u_s_fin, u_cnt, u_hok, u_htx, u_hfl) = _mac_slot(
-                    u_s_sent, u_s_floor, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_enq, u_s_lnp, u_s_csi,
+                    u_s_sent, u_s_floor, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_enq, u_s_lnp, u_s_qw,
+                    u_s_csi,
                     uref,
                     gain, pc, u_s_hst, u_s_hlo, u_s_hhi, u_s_hrdy, u_s_hntx, u_s_hmcs,
                     u_s_htbs, u_s_hnsb, u_s_hcomb, u_s_hlexp, u_s_hnrb, u_s_cap, u_s_qs, u_s_qe, u_s_lost, u_s_fin,
@@ -817,7 +839,7 @@ def nr_step_kernel(
                     0, S_, SB, M, MB, C, G, NL, EQW, NPRB, MODE, COMB, SCHED, WIDEBAND, HARQ_DROP, OLLA,
                     PHR_CAP, WHOLE_BAND, PC, STEP, RETX_PRIO, MCS_MAX_UL, MAX_TX, TARGET, TB_OH, SR_DELAY,
                     UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B,
-                    PF_RBG, PF_FREEZE, RETX_TDMA, AMC_PREV, LENA_CTR)
+                    PF_RBG, PF_FREEZE, RETX_TDMA, AMC_PREV, LENA_CTR, QOS_G)
     if FADING and STORE_H:
         tl.store(h_ptr + o_h, hr, mask=m_rs)
         tl.store(h_ptr + o_h + 1, hi, mask=m_rs)
@@ -893,7 +915,8 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
             net.h, uref if uref is not None else dref, dref if dref is not None else dummy,
             pc if pc is not None else dummy, eng._tdev, net.rng.env, net.rng.episode, net.rng.ctr[STEP], net.rng.s0, eng._chs,
             *(gate if gate is not None else (dummy, dummy, dummy)), gate[0].shape[-1] if gate is not None else 1,
-            eng._acc, itab, ftab, K, net.fading_rho_ms if net.fading_rho_ms is not None else net.h,
+            eng._acc, getattr(U, "qw", U.avg), getattr(D, "qw", D.avg),
+            itab, ftab, K, net.fading_rho_ms if net.fading_rho_ms is not None else net.h,
             *((net.k_lin, net.k_from, net.k_g0, net.spec) if rc else (net.h,) * 4),
             *fc_args,
             tu["tab"], tu["thr"], tu["se"], tu["beta"], tu["rate"], tu["eq"], tu["tbs"], tu["cbs"], tu["ncb"], tu["bg"],

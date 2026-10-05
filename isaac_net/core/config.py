@@ -73,6 +73,7 @@ FIELD_GROUPS = {
            "n_harq", "max_harq_tx", "harq_combining", "harq_fail", "rlc_retx_slots", "discard", "mcs_table",
            "eff_sinr", "bler_source", "tbs_mode", "lena_ref_sc_per_rb", "bler_target", "ul_mcs_max", "dl_mcs_max",
            "olla", "olla_up_db", "scheduler", "pf_metric", "pf_window", "retx_priority", "ul_power", "phr_cap",
+           "qos_classes", "qos_priority", "qos_pdb_ms", "qos_gamma",
            "pf_update", "pf_avg_idle", "ul_retx_sched", "ul_amc_alloc", "ul_grant_model", "sr_boot_slots",
            "sr_boot_bytes", "bsr_delay_slots", "bsr_hdr_bytes", "bsr_est_hdr_bytes", "rlc_tail_bytes", "rlc_tail_timer_ms",
            "phr_min_db", "fading", "fading_rho_per_ms", "ue_speed_mps", "carrier_ghz", "fading_doppler",
@@ -135,6 +136,7 @@ INTERFERENCE_FIELDS = ("ul_interference", "dl_interference", "li_alpha")    # n_
 UL_PC_FIELDS = ("ul_pc_p0_dbm", "ul_pc_alpha")               # ul_pc_on
 UL_TPC_FIELDS = ("ul_tpc_mode", "ul_tpc_target_db", "ul_tpc_steps_db", "ul_tpc_delay_slots",
                  "ul_tpc_range_db")                         # ul_tpc (NR engine only)
+QOS_FIELDS = ("qos_classes", "qos_priority", "qos_pdb_ms", "qos_gamma")      # scheduler="qos" (NR engine only)
 ANTENNA_FIELDS = ("cell_azimuth_deg", "cell_tilt_deg", "gnb_antenna_gain_dbi")      # gnb_antenna="sector"
 TR38901_FIELDS = ("tr38901_scenario", "tr38901_los", "o2i_indoor_frac", "o2i_model", "inf_clutter_density",
                   "inf_clutter_size_m", "inf_clutter_height_m")             # channel="tr38901"
@@ -204,6 +206,8 @@ def _switch_unread(cfg, nr):
     if nr:
         if not cfg.ul_tpc:
             off |= set(UL_TPC_FIELDS)
+        if cfg.scheduler != "qos":
+            off |= set(QOS_FIELDS)
         if not cfg.fading:
             off |= set(FADING_FIELDS) | {"fading_rician"} | set(RICIAN_FIELDS) | {"fading_freq_corr"}
         elif cfg.fading_doppler != "per_robot":
@@ -401,10 +405,19 @@ class NRConfig:
     olla_up_db: float = 0.05             # down step = up * (1 - target) / target
     scheduler: str = "pf"                # "pf" proportional fair (metric from pf_metric), "pf_wideband" (= pf with
                                          # pf_metric="wideband"), "maxci" (max rate, no fairness), "rr" (round robin:
-                                         # the robot served longest ago first, channel-blind)
+                                         # the robot served longest ago first, channel-blind), "qos" (5G-LENA
+                                         # NrMacSchedulerOfdmaQos: PF weighted by the 5QI priority and the delay
+                                         # budget of the queued message classes, docs/configurability.md)
     pf_metric: str = "subband"           # "subband" (frequency-selective) or "wideband" (5G-LENA OFDMA PF)
     pf_window: float = 100.0             # EWMA window in scheduled slots of that direction
     retx_priority: bool = True
+    # ---- scheduler="qos" (read only then): message class c = clamp(priority, 0, qos_classes - 1) per message ----
+    qos_classes: int = 2                 # Q message classes (class 0 = highest priority)
+    qos_priority: tuple = (10, 70)       # 3GPP priority level P per class (1..99, lower = more important); the
+                                         # default is 5QI 5 (IMS signalling) vs 5QI 7 (voice / video / gaming)
+    qos_pdb_ms: tuple = (math.inf, math.inf)   # packet delay budget per class (ms); finite = delay-critical class
+                                         # (5G-LENA DC-GBR) with the delay-budget factor, inf = factor 1
+    qos_gamma: float = 1.0               # rate exponent of the QoS metric (5G-LENA m_alpha)
     # ---- 5G-LENA MAC behavior under load (docs/fidelity-load-gap.md); defaults = the engine before these switches ----
     pf_update: str = "slot"              # "slot": PF metric fixed within a slot, average updated with the served
                                          # bytes; "rbg": 5G-LENA OFDMA PF, the winner's average is updated with its
@@ -624,14 +637,21 @@ class NRConfig:
         assert set(self.tdd_pattern) <= set("DSU") and self.tdd_pattern
         assert self.harq_combining in ("cc", "ir_lena", "none") and self.harq_fail in ("rlc_am", "drop")
         assert self.eff_sinr in ("eesm", "mean_db") and self.pf_metric in ("subband", "wideband")
-        assert self.scheduler in ("pf", "pf_wideband", "maxci", "rr"), "scheduler: pf, pf_wideband, maxci or rr"
+        assert self.scheduler in ("pf", "pf_wideband", "maxci", "rr", "qos"), "scheduler: pf, pf_wideband, maxci, rr or qos"
         assert self.discard in ("purge", "none", "pdcp_arrival") and self.tbs_mode in ("38214", "lena")
         assert self.bler_source in ("pdsch", "lena", "sionna_label") and self.noise_model in ("fixed", "thermal")
         assert not (self.harq_combining == "ir_lena" and self.eff_sinr != "eesm")
         assert self.ul_power in ("allocated", "whole_band")
         assert self.proactive_grant in ("off", "every_ul_slot", "per_period")
         assert self.pf_update in ("slot", "rbg") and self.pf_avg_idle in ("decay", "freeze")
-        assert self.pf_update == "slot" or self.scheduler in ("pf", "pf_wideband"), "pf_update='rbg' needs a PF scheduler"
+        assert self.pf_update == "slot" or self.scheduler in ("pf", "pf_wideband", "qos"), \
+            "pf_update='rbg' needs a PF scheduler (pf, pf_wideband or qos)"
+        self.qos_priority = tuple(int(p) for p in self.qos_priority)
+        self.qos_pdb_ms = tuple(float(x) for x in self.qos_pdb_ms)
+        assert self.qos_classes >= 1 and len(self.qos_priority) == len(self.qos_pdb_ms) == self.qos_classes, \
+            "qos_priority and qos_pdb_ms need one value per class (qos_classes)"
+        assert all(0 < p < 100 for p in self.qos_priority), "qos_priority: 3GPP priority levels in 1..99"
+        assert all(x > 0 for x in self.qos_pdb_ms) and self.qos_gamma > 0
         assert self.ul_retx_sched in ("ofdma", "tdma") and self.ul_amc_alloc in ("current", "previous")
         assert self.ul_grant_model in ("lumped", "bsr")
         assert self.sr_boot_slots >= 1 and self.bsr_delay_slots >= 1 and self.sr_boot_bytes >= 1

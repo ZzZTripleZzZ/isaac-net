@@ -13,10 +13,10 @@ GPU (marker gpu; tests/nr_equiv.py is the harness, its CLI runs the 300-step ver
   G1 graph == reference bitwise: every output and every state tensor at every step, UL, UL+DL, three cells, per-robot
      Doppler, round robin / max C/I, traffic models with sub-step arrivals (one and three cells), Rician fading (fixed
      K, K from the LOS state, three cells), frequency-correlated fading (fixed delay spread, per-link delay spread
-     with Rician from the LOS state), with random partial resets; statistics and counters at the end
+     with Rician from the LOS state), the QoS scheduler (two and three classes, per-RBG PF), with random partial resets; statistics and counters at the end
   G2 triton, teacher forced: identical decisions from an identical state (UL, UL+DL, LENA-like UL, and the 5G-LENA
      MAC switches the kernel implements: per-RBG PF with frozen averages, TDMA UL retx, previous-PUSCH AMC; Rician
-     fading with fixed K and with K from the LOS state; frequency-correlated fading, FCORR = 1 and 2)
+     fading with fixed K and with K from the LOS state; frequency-correlated fading, FCORR = 1 and 2; the QoS scheduler)
   G3 triton, free running: aggregates within a few percent of the reference
   G4 the CUDA (Triton) draws equal the torch path (uniforms bitwise, normals to rounding)
   G5 make_engine("L2", backend="graph" / "triton") through the Isaac NetModule
@@ -130,7 +130,7 @@ def test_r4_fast_backends_need_engine_rng_and_cuda():
 @pytest.mark.gpu
 @pytest.mark.parametrize("cfg", ["ul", "ul_dl", "cells3", "ul_doppler", "ul_maxci_pc", "ul_lena", "traffic",
                                  "traffic_c3", "ul_rician", "ul_rician_los", "cells3_rician",
-                                 "ul_fcorr", "ul_fcorr_rician"])
+                                 "ul_fcorr", "ul_fcorr_rician", "qos", "qos_rbg"])
 def test_g1_graph_bitwise(cfg):
     # steps 25..64 of the cycle: 25 medium steps (p = 0.4), then 15 all-large burst steps (p = 0.9). The reference
     # delivers 228 (ul_maxci_pc) to 12399 (traffic_c3) frames here, against 3 to 3800 for the old 12 idle steps.
@@ -142,7 +142,7 @@ def test_g1_graph_bitwise(cfg):
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("cfg", ["ul", "ul_dl", "ul_lena", "ul_compat", "traffic", "ul_lena_sched", "ul_dl_pf",
-                                 "ul_rician", "ul_rician_los", "ul_fcorr", "ul_fcorr_rician"])
+                                 "ul_rician", "ul_rician_los", "ul_fcorr", "ul_fcorr_rician", "qos", "qos_rbg"])
 def test_g2_triton_teacher_forced(cfg):
     # steps 40..59 of the cycle: 10 medium, then 10 burst steps (about 2000 active robot-steps instead of about 100)
     r = nr_equiv.run("triton", cfg, E=16, R=8, steps=20, seed=3, mode="teacher", p_reset=0.3, phase_offset=40)
