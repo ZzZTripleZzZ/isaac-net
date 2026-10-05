@@ -512,7 +512,7 @@ class NREngine:
         req = requests if isinstance(requests, Requests) else Requests(send=requests)
         det = req.det if req.det is not None else torch.zeros_like(req.send, dtype=torch.bool)
         hid = req.hid if req.hid is not None else torch.zeros(self.E, dtype=torch.long, device=self.dev)
-        self._last_hid = hid
+        self._last_hid = hid.clone()        # a copy: the caller may reuse its buffer (as the fast backends copy)
         extras = tag is not None or priority is not None or deadline_ms is not None
         if extras:
             self._enable_extras()
@@ -608,7 +608,7 @@ class NREngine:
         else:
             out = self.net.step(T, snr_db, hid, dl_snr_db, full=True)
             snr = snr_db if snr_db.dim() == 2 else snr_db.mean(-1)
-        self._last_snr = snr
+        self._last_snr = snr.clone()        # a copy: snr may be the caller's x / snr_db buffer
         if self.traffic is not None and not getattr(self, "_gate_seen", True):
             raise RuntimeError("the traffic gate hooks on net.ul were not reached: NRNet no longer calls "
                                "ul.sr_step / ul.slot / ul.end_step; traffic models need an update")
