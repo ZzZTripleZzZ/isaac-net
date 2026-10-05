@@ -71,13 +71,27 @@ def poisson_cap(lam_max):
     return int(math.ceil(lam_max + 6.0 * math.sqrt(lam_max) + 1.0))
 
 
+_PL_CONST_DEFAULT = NRConfig.__dataclass_fields__["pl_const_db"].default
+
+
+def free_space_1m_db(carrier_ghz):
+    """Free-space path loss at 1 m, 20 log10(4 pi f / c), in dB."""
+    return 20 * math.log10(4 * math.pi * carrier_ghz * 1e9 / 299_792_458.0)
+
+
 def radio_config(cfg: NRConfig, wc: WifiConfig):
     """The NRConfig that RadioMC reads for the APs: same channel model, AP positions as cells, the Wi-Fi carrier and
-    the robot transmit power. Copied without __post_init__ so that more than 7 APs are allowed."""
+    the robot transmit power. Copied without __post_init__ so that more than 7 APs are allowed.
+
+    log_distance: NRConfig.pl_const_db left at its default (40 dB, calibrated for the 3.5 GHz NR carrier) becomes
+    the free-space loss at 1 m at the Wi-Fi carrier (46.8 dB at 5.2 GHz), the same 1 m loss as the robot-robot
+    model of WifiConfig.sta_pl_1m; a pl_const_db set away from the default is kept as given."""
     c = copy.copy(cfg)
     xy = wc.ap_xy(cfg)
     c.n_cells, c.cell_layout, c.cell_positions_m = len(xy), "custom", tuple(tuple(p) for p in xy)
     c.carrier_ghz, c.ue_tx_dbm = wc.carrier_ghz, wc.sta_tx_dbm
+    if cfg.channel == "log_distance" and cfg.pl_const_db == _PL_CONST_DEFAULT:
+        c.pl_const_db = free_space_1m_db(wc.carrier_ghz)
     if wc.ap_height_m is not None:
         c.gnb_height_m = wc.ap_height_m
     return c
