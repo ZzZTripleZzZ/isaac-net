@@ -9,6 +9,16 @@ Sources (TR 38.901 V17.0.0, 2022-04):
                   heights (BS 1.5 m for SL / DL, 8 m for SH / DH, UT 1.5 m)
   Table 7.5-6     shadow-fading correlation distances; Table 7.6.3.1-2 LOS-state correlation distances
 
+Applicability (Table 7.4.1-1, enforced by check_heights, which breakpoint_m and inf_k_subsce call):
+  * UMa and UMi: 1.5 m <= h_UT <= 22.5 m. Below h_UT = 1 m (h_E) the breakpoint distance d'_BP = 4 (h_BS - 1)
+    (h_UT - 1) fc / c is not positive, every link takes the far-field PL2 branch and the path loss comes out
+    13-23 dB optimistic, so out-of-range heights raise instead of extrapolating. h_BS must exceed h_E = 1 m.
+  * RMa: 1 m <= h_UT <= 10 m.
+  * InF-SH and InF-DH: h_UT < h_c < h_BS (UT below the clutter, BS above it); otherwise k_subsce is negative or
+    infinite and Pr_LOS leaves [0, 1].
+  Ground robots with antennas below 1.5 m: use an InF scenario (InF-SL / InF-DL have no UT-height term; InF-SH /
+  InF-DH need h_UT < h_c), channel="log_distance" calibrated to the site, or a radio map.
+
 Simplifications (documented in docs/channels.md):
   * UMa uses h_E = 1 m (exact for h_UT < 13 m, which covers ground robots); the stochastic h_E is not drawn.
   * Distances below the applicability range (10 m outdoor, 1 m indoor) extrapolate the formulas; d_2D >= 1 m.
@@ -101,8 +111,41 @@ def _exp(x):
     return torch.exp(x) if isinstance(x, torch.Tensor) else math.exp(x)
 
 
+# h_UT applicability range (m) of the outdoor path-loss models, Table 7.4.1-1
+UT_HEIGHT_RANGE = {"UMa": (1.5, 22.5), "UMi": (1.5, 22.5), "RMa": (1.0, 10.0)}
+_ALT = ("use an InF scenario (e.g. channel='tr38901_inf_sl'), channel='log_distance' calibrated to the site, or a "
+        "radio map instead")
+
+
+def check_heights(scn, h_bs, h_ut, h_c=None):
+    """Raise ValueError when the antenna heights are outside the applicability range of scenario scn (Table
+    7.4.1-1 for UMa / UMi / RMa; h_UT < h_c < h_BS for InF-SH / InF-DH, with h_c the clutter height, default
+    Table 7.8-7). Python floats only (config-time check, no host sync)."""
+    h_bs, h_ut = float(h_bs), float(h_ut)
+    if scn in UT_HEIGHT_RANGE:
+        lo, hi = UT_HEIGHT_RANGE[scn]
+        if not lo - 1e-9 <= h_ut <= hi + 1e-9:
+            why = (" (below 1 m the breakpoint distance 4 (h_BS - 1)(h_UT - 1) fc / c is not positive and the path "
+                   "loss would be 13-23 dB optimistic)") if scn != "RMa" and h_ut <= 1.0 else ""
+            raise ValueError(f"TR 38.901 {scn} path loss is defined for {lo:g} m <= ue_height_m <= {hi:g} m "
+                             f"(Table 7.4.1-1), got ue_height_m={h_ut:g}{why}; {_ALT}")
+        h_min = 1.0 if scn in ("UMa", "UMi") else 0.0
+        if h_bs <= h_min:
+            raise ValueError(f"TR 38.901 {scn}: the BS height must exceed {h_min:g} m for a positive breakpoint "
+                             f"distance, got gnb_height_m={h_bs:g}")
+    elif scn in ("InF-SH", "InF-DH"):
+        hc = INF_CLUTTER[scn][2] if h_c is None else float(h_c)
+        if not h_ut < hc < h_bs:
+            raise ValueError(f"TR 38.901 {scn} needs ue_height_m < inf_clutter_height_m < BS height (UT below the "
+                             f"clutter, BS above it), got ue_height_m={h_ut:g}, clutter height {hc:g}, BS height "
+                             f"{h_bs:g}; for a UT at or above the clutter use InF-SL / InF-DL or lower the UT")
+
+
 def breakpoint_m(scn, fc_ghz, h_bs, h_ut):
-    """d_BP (RMa, Note 5) or d'_BP with h_E = 1 m (UMa, UMi, Note 1); inf for the indoor scenarios."""
+    """d_BP (RMa, Note 5) or d'_BP with h_E = 1 m (UMa, UMi, Note 1); inf for the indoor scenarios. Raises
+    ValueError outside the height range of check_heights (d'_BP <= 0 for h_UT <= 1 m)."""
+    if scn in UT_HEIGHT_RANGE:
+        check_heights(scn, h_bs, h_ut)
     fc = fc_ghz * 1e9
     if scn == "RMa":
         return 2 * math.pi * h_bs * h_ut * fc / C_LIGHT
@@ -175,6 +218,7 @@ def inf_k_subsce(scn, h_bs, h_ut, r=None, d_clutter=None, h_c=None):
     r = r0 if r is None else r
     dc = dc0 if d_clutter is None else d_clutter
     hc = hc0 if h_c is None else h_c
+    check_heights(scn, h_bs, h_ut, hc)
     k = -dc / math.log(1 - r)
     if scn in ("InF-SH", "InF-DH"):
         k = k * (h_bs - h_ut) / (hc - h_ut)
