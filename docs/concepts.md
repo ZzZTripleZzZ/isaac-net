@@ -48,7 +48,7 @@ Isaac Lab resets environments individually: when one episode ends, only that env
 A partial reset re-initializes everything the listed environments own: queues, MAC and HARQ state, link adaptation, fading, the shadowing field of the radio, and the clock. It is exact in two senses:
 
 1. **Isolation.** Every other environment is left bit for bit unaffected, in its outputs and in its internal state. The test suite checks this for every level.
-2. **Random streams.** A reset draws its random numbers (new shadowing, new fading, new surrogate state) from the engine's own generator, seeded by `make_engine(..., seed=...)`. Stepping draws come from the global torch RNG. Resetting one environment therefore never shifts the random numbers another environment consumes.
+2. **Random streams.** With `rng="engine"` (the default) every draw, including stepping, fading and radio fields, is keyed by (seed, env id, episode, step), with the seed from `make_engine(..., seed=...)`; `rng="global"` uses the engine generator for resets and the global torch RNG for stepping. Resetting one environment therefore never shifts the random numbers another environment consumes.
 
 The configurable NR engine keeps one global slot clock internally, because its HARQ, scheduling-request and CQI timers are counted in slots. It presents per-env clocks on top of it by storing the step at which each environment was last reset. For this reason it cannot jump in time: an explicit `t` must equal the engine clock, and after a partial reset only `t=None` is accepted.
 

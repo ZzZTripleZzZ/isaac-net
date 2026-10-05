@@ -217,6 +217,8 @@ The OpenTwin POWDER profile (`NICELabExp,opentwin-matrix`, source in the OpenTwi
 
 `experiment` is `a`, `b`, `c`, `d` or `idle`. Instead of `tdd_pattern`, the `gnb` block may give the stack's own TDD fields as `"tdd": {"period_slots": 5, "nof_dl_slots": 3, "nof_dl_symbols": 10, "nof_ul_slots": 1, "nof_ul_symbols": 2}` (OAI: `"periodicity_idx": 5` instead of `period_slots`). OAI runs give `ul_bler_target_upper` / `ul_bler_target_lower` instead of `olla_target_bler`, and `ulsch_max_frame_inactivity`. File keys: `srsran_metrics`, `srsran_pcap`, `srsran_log`, `oai_macstats`, `oai_pcap`, `oai_ttrace`, and `probes` (per UE either `tx_csv` + `rx_csv` + optional `src`, or `tx_pcap` + `rx_pcap` + optional `port`; a per-UE `offset_ms` overrides the run's).
 
+`gnb.realtime_slots` (default true): set it to false for simulated radios (OAI rfsim, srsRAN ZMQ), whose slot clock does not run at wall-clock rate; SFN wraps are then unwrapped from backward jumps only. Probe tx rows with a negative `t_tx_ns` (local send error) are excluded from `owd` and counted as `send_errors`.
+
 ## Unified schema
 
 `python -m isaac_net.tools.measure.ingest CAMPAIGN` parses every run and writes four tables to `CAMPAIGN/unified/` as CSV (and Parquet when `pyarrow` is installed), plus `runs.json` with the manifests. Missing values are -1 (integers), empty (floats, read back as NaN) and "" (strings). The column list with units is in `isaac_net/tools/measure/schema.py`.

@@ -131,7 +131,7 @@ PPO is trained on `--ppo_envs` envs for `--ppo_iters` iterations of `--ppo_horiz
 
 ## Results format
 
-`bench run` writes one JSON file per (task, variant, level, backend, baseline, seed), named `<task>__<variant>__<level>__<backend>__<baseline>__s<seed>[__<label>].json`:
+`bench run` writes one JSON file per run, named `<task>__<variant>__<sim>__<preset>__<traffic>__<level>__<backend>__<baseline>__s<seed>__<hash>[__<label>].json`, so runs with different settings do not overwrite each other. `<hash>` is 8 hex digits over the rest of the TaskConfig (envs, robots, episode length, observation features, fit file, overrides), the evaluation envs and episodes, and the PPO budget. Result files written before this naming keep their old names, and `bench report` still reads them. The file holds:
 
 | Field | Content |
 |:---|:---|
@@ -145,7 +145,7 @@ PPO is trained on `--ppo_envs` envs for `--ppo_iters` iterations of `--ppo_horiz
 | `timing` | build, train and evaluation seconds, seconds per task step, robot-steps per second |
 | `environment` | torch version, device, GPU name, host, Python version, git commit, time |
 
-`bench report` groups the files by task, variant, level, backend, preset, traffic, baseline and label, and shows for each metric the mean over seeds and the half-width of the two-sided 95% Student t interval (n = number of seeds, no interval for n = 1). `--json` writes the same aggregate as JSON.
+`bench report` groups the files by task, variant, sim, level, backend, preset, traffic, baseline and label (a file without `sim`, `preset` or `traffic` counts as `torch`, `default` or `policy`), and shows for each metric the mean over seeds and the half-width of the two-sided 95% Student t interval (n = number of seeds, no interval for n = 1). `--json` writes the same aggregate as JSON.
 
 ## Adding a task
 

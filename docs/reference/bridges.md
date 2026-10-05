@@ -35,7 +35,7 @@ for t in range(T):
 net.close()                                   # stops the ns-3 processes
 ```
 
-The Isaac-style `Ns3NetModule` takes a `NetConfig` and `step(poses_end, TrafficRequest)`. In mode `"procs"` it rebuilds only the reset environment's process, so partial resets work there.
+`Ns3NetModule` implements the Isaac `NetModule` API: it takes the isaac `NetConfig`, and `submit` then `step(t, poses, cur_tag)` returns the `NetModule` dict, with the raw ns-3 statistics in `out["ns3"]`. The older `step(poses, TrafficRequest)` -> `NetOutput` form is kept. In mode `"procs"` it rebuilds only the reset environment's process, so partial resets work there.
 
 ## Limits to keep in mind
 

@@ -8,6 +8,77 @@ All notable changes to `isaac-net` are listed here, grouped by area. The format 
 
 - The paper is on arXiv as [arXiv:2610.02370](https://arxiv.org/abs/2610.02370); the README citation, `CITATION.cff`, the project URLs and the status page link to it.
 
+### Changed
+
+- The minimum torch version is 2.7: the `compile` backend sets `torch._dynamo.config.recompile_limit`, which first appears in 2.7 (it was `cache_size_limit` before).
+- The sdist now includes `prototype/`. The version on main is `0.1.1.dev0`.
+
+### Fixed
+
+#### L2 MAC and energy
+
+- HARQ processes whose bytes were all purged at the deadline are freed at compaction (`MacLink.compact`). Before, with `discard="purge"` and `harq_fail="rlc_am"`, they retransmitted dead data at retransmission priority indefinitely; partially purged processes are kept.
+- Admitted retransmissions now always take priority over new data on each RBG, and the PF average is floored at 1e-9 bytes (`AVG_MIN`), so a long-idle robot's decayed average can no longer outrank a retransmission. Behaviour is unchanged whenever every metric was below 1e9; the `triton` kernel mirrors the change.
+- With `retx_priority=False`, RBGs won by a retransmission that falls short of its RBG count go to new data instead of staying empty.
+- The wideband PF rate estimate respects `ul_mcs_max` / `dl_mcs_max`.
+- `SlotTap.ul_tx_j` counts the slot's PUSCH symbols (12 in a U slot by default) instead of 14, and the new `SlotTap.ul_tx_s` gives the PUSCH time. `EnergyLoop` uses that PUSCH time for the circuit term and for the fixed-power path.
+
+#### Randomness and sharding
+
+- With poses on `L2` (one or several cells) and on multi-cell `L2-legacy`, the radio's shadowing, LOS-state and O2I draws now come from the engine's counter RNG, keyed by seed, global env id and episode. They no longer depend on E or on other envs' resets, which changes `L2` numerics with poses under `rng="engine"`; `rng="global"` is unchanged.
+- `WIFI`: the radio's shadowing, LOS and O2I draws come from the engine counter RNG too, so an env's channel no longer depends on E or on other envs' resets.
+- `ShardedEngine` is shard-invariant (bitwise equal to one engine) on `L2` with one or several cells, multi-cell `L2-legacy` and `WIFI` under `rng="engine"`. `L2` with traffic models or background users, any level with an edge loop that draws from the global RNG (`service_dist="exponential"`, `ret_jitter_ms > 0`), and `rng="global"` keep derived per-shard seeds (`sharded.shard_invariant`).
+- `CounterRNG.reset` with duplicate env ids advances the episode once.
+- `NetSlotMC` counts the A3 time-to-trigger and the handover interruption in its own UL slots (`proto_ul_slots_per_step`).
+
+#### Configuration, wrappers and edge
+
+- `NRConfig.unused_fields` / `fields_read_by(level, cfg)` follow the switches: DL fields only with `dl=True`, handover and interference fields only with several cells (interference also needs thermal noise), the noise fields of the active noise model, the fields of the selected channel, blockage and fading fields only when on, and `lena_ref_sc_per_rb` only with `tbs_mode="lena"`. `NetSlotMC` reads only the frame fields of its handover conversion.
+- `fading_rho_from_speed` (and the tensor version `channels.doppler.rho_per_ms_from_speed`) is monotone: rho = 0 from the first zero of J0 (about 13.1 m/s at 3.5 GHz).
+- `make_adaptive` applies `NRConfig.energy` (and `edge`) around the adaptive engine, so batteries drain. Background users are refused under `make_adaptive`.
+- `EnergyConfig.seed` takes precedence over the engine seed. `EnergyLoop` raises on the legacy `step(t, x, cur_hid)` form, and the offered-load `BackgroundLoop` accounts the legacy form like the dict form.
+- `EdgeConfig(return_path="nr_dl")` is refused on the `graph` and `triton` NR backends. `act_age` is NaN before a robot's first action, and the edge example treats it as stale.
+- An adaptive cheap `L0` with an empirical `{"q", "p"}` marginal accepts handed-back frames.
+- `srsran_like` / `oai_like` compute their slot counts from the given `mu` / `tdd_pattern`, `with_(fading_rho_per_ms=...)` keeps the explicit value, and `isaac_net.LEVELS` includes `"WIFI"`.
+
+#### Channels and Wi-Fi
+
+- TR 38.901 UMa/UMi with `ue_height_m` <= 1 m gave a non-positive breakpoint and 13–23 dB optimistic path loss. Heights outside Table 7.4.1-1 (UMa/UMi 1.5–22.5 m, RMa 1–10 m) and InF-SH/DH without h_UT < h_c < h_BS now raise `ValueError` when the channel is built.
+- The Wi-Fi Poisson draw capped successful accesses at 8 per robot per sub-step, cutting goodput by 18% (80 MHz / 2 ms) to 66% (160 MHz / 5 ms). The cap now comes from the config with a 6-sigma margin (`poisson_cap`).
+- The Wi-Fi event simulator charged frames lost to FER the collision time instead of Ts, unlike the mean-field model. Validation table B adds FER = 0.2 rows.
+- With `channel="log_distance"`, Wi-Fi used the 40 dB constant of the 3.5 GHz NR carrier at 5.2 GHz. The default is now the free-space loss at 1 m at `carrier_ghz` (46.8 dB at 5.2 GHz); a user-set `pl_const_db` is kept.
+- 802.11ac no longer offers VHT-MCS 6 at 80 MHz / 3 streams or MCS 9 at 160 MHz / 3 streams, and `wifi_mcs` reports MCS numbers.
+
+#### Isaac Lab, MJX and the benchmark suite
+
+- With `net_decimation > 1` a tagged message is no longer dropped by a same-class message in the same window. Between network steps `aoi_s` grows by one env step per tick, and `net_reset` clears the held output of reset envs.
+- Benchmark result files are named `<task>__<variant>__<sim>__<preset>__<traffic>__<level>__<backend>__<baseline>__s<seed>__<hash>[__<label>].json`, so runs with different settings no longer overwrite each other. `bench report` groups by `sim` too, and `bench run` prints `n/a` for a missing metric instead of crashing.
+- With `sim="isaac"`, `hazard_exposure` reads the fleet env's own per-step indicator, the same definition as torch.
+- Building `NetModuleMJX` no longer resets the global CUDA RNG, and `MJXFleetEnv` observations follow the Isaac fleet env order.
+- Warehouse example: the default config uses a 7 m gNB height, and the default network step respects multi-rate settings. `los_blocked_kernel` takes radio-frame inputs.
+
+#### Backends
+
+- The prototype reference and the reference NR engine store copies of the caller's step SNR and submit hid, so the prototype reference is bitwise equal to the eager and `graph` backends when a caller reuses its buffers.
+- The NR `graph` backend recaptures on a change of input dtype, and `NRGraphEngine.submit` honours `tag`, `priority` and `deadline_ms`.
+- The `L2-legacy` `triton` backend reads env ids from `rng.env`, so `set_env_offset` after capture works. `NetFast` capture restores the CUDA RNG: global-mode graph runs after capture are deterministic but no longer reproduce earlier global-mode numbers.
+
+#### Bridges and measurement tools
+
+- `Ns3NetModule` uses the isaac `NetConfig` / `TrafficRequest` and returns the `NetModule` dict. The old `step(poses, req)` form is kept.
+- The ns-3 lockstep bridge interpolates poses from the last commanded end pose. This is a C++ change and needs a rebuild of the bridge program.
+- OAI `rx_vt.csv` maps `t_tx_ns` to virtual time, and telnet replies are prompt-framed and checked.
+- `owd` and `calibrate` skip send-error rows (`t_tx_ns < 0`) and count them as `send_errors`. `unwrap_slots(realtime=False)` and the manifest key `gnb.realtime_slots` are new.
+- MAC-NR CCCH sizes are corrected (LCID 0 = 8 B, LCID 52 = 6 B, TS 38.321 Table 6.2.1-2).
+
+### Tests
+
+- NR `graph` / `triton` equivalence now runs under load, with a phase offset into the medium-load and burst phases.
+- The frozen NR golden references build on a frozen copy of the shared modules (`tests/nr_frozen/base/`; re-freeze with `tests/scripts/refreeze_nr.py`), and the RNG hash is pinned to fixed values.
+- New GPU tests cover the `compile` backend and partial-reset isolation of the free-running `triton` kernel.
+- On CPU the shard test compares `L1` / `L2-legacy` float outputs to float32 rounding; on CUDA it stays bitwise.
+- GPU and Isaac tests are skipped by marker, not by keyword. CI tests torch 2.7 on Python 3.10 and adds Python 3.12.
+
 ## [0.1.0] - 2026-09-30
 
 The first packaged release. It collects everything built since the initial prototype.

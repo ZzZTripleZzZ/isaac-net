@@ -48,12 +48,13 @@ def shard_invariant(level, cfg: NRConfig):
     that draws from the global torch RNG (service_dist="exponential" or ret_jitter_ms > 0)."""
     if cfg.rng != "engine" or level not in INVARIANT_LEVELS:
         return False
+    ed = cfg.edge
+    if ed is not None and (ed.service_dist == "exponential" or ed.ret_jitter_ms > 0):   # global torch RNG, any level
+        return False
     if level != "L2":
         return True
     bg = cfg.background
-    ed = cfg.edge
-    edge_global = ed is not None and (ed.service_dist == "exponential" or ed.ret_jitter_ms > 0)   # global torch RNG
-    return not generates(cfg.traffic) and (bg is None or bg.n_background == 0) and not edge_global
+    return not generates(cfg.traffic) and (bg is None or bg.n_background == 0)
 
 
 def set_env_offset(engine, offset):
