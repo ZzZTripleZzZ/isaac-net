@@ -343,6 +343,44 @@ def test_graph_equals_reference_engine_mode_gpu(level, cfg, _free_gpu_memory):
     assert _eq(a, b)
 
 
+def _mismatch_fraction(a, b, key):
+    """Fraction of the elements of output `key` (all steps) that differ; floats compared to float32 rounding."""
+    bad = tot = 0
+    for oa, ob in zip(a, b):
+        x, y = oa[key], ob[key]
+        same = torch.isclose(x, y, rtol=1e-4, atol=1e-4, equal_nan=True) if x.is_floating_point() else x == y
+        bad += int((~same).sum())
+        tot += same.numel()
+    return bad / max(tot, 1)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("level", ["L0DR", "L1", "L2-legacy"])
+def test_compile_close_to_reference_engine_mode_gpu(level, _free_gpu_memory):
+    """backend="compile" (Inductor bodies captured in CUDA graphs) on the same engine draws as the reference, with
+    partial resets. Inductor may fuse and reorder float ops, so it is equal to rounding, not bitwise: a rounding
+    difference at a threshold can flip a rare decision, after which that robot's queue differs for a few steps.
+    So every output agrees on at least 99% of its elements (floats to 1e-4) and the aggregates within 1%; a broken
+    compiled body disagrees on far more. About 1-2 min on the lab GPU, mostly Inductor compile time."""
+    if not _has_triton():
+        pytest.skip("triton not installed (Inductor's GPU code generator)")
+    dev = torch.device("cuda")
+    ins = _inputs(16, 8, 45, dev=dev, p=0.8, snr=(-5.0, 15.0))
+    rs = {13: torch.tensor([0, 5, 9], device=dev), 31: torch.tensor([2], device=dev)}
+    a = _drive(_engine(level, E=16, R=8, dev=dev), ins, resets=rs)
+    c = _engine(level, E=16, R=8, dev=dev, backend="compile")
+    b = _drive(c, ins, resets=rs)
+    assert set(c._graphs) == {"add", "step"}
+    assert a[0].keys() == b[0].keys()
+    for k in a[0]:
+        assert _mismatch_fraction(a, b, k) <= 0.01, k
+    n = [sum(int(o["delivered"].sum()) for o in run) for run in (a, b)]
+    d = [sum(float(o["delay"].nan_to_num(0).sum()) for o in run) / max(m, 1) for run, m in zip((a, b), n)]
+    assert n[0] > 200, n
+    assert abs(n[0] - n[1]) <= 0.01 * n[0], (n, d)
+    assert abs(d[0] - d[1]) <= 0.01 * d[0] + 1e-3, (n, d)
+
+
 @pytest.mark.gpu
 def test_triton_hash_equals_torch_hash(_free_gpu_memory):
     if not _has_triton():
