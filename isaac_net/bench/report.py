@@ -3,7 +3,8 @@
     rows = aggregate(load_results(["results/"]))
     print(markdown(rows, metrics=["task", "delay_p95_ms", "aoi_mean_s"]))
 
-One group = (task, variant, level, backend, preset, traffic, baseline, label). Each result file contributes one
+One group = (task, variant, sim, level, backend, preset, traffic, baseline, label). A file without a
+sim, preset or traffic field counts as the default ("torch", "default", "policy"). Each result file contributes one
 value per metric (its evaluation mean over envs and episodes); the table shows the mean over the seeds and the
 half-width of the two-sided 95% Student t interval, with n = the number of seeds. The pseudo-metric "task"
 stands for each task's own metric.
@@ -18,7 +19,10 @@ from typing import Iterable, Sequence
 
 from .spec import RESULT_SCHEMA, mean_ci95
 
-GROUP_KEYS = ("task", "variant", "level", "backend", "preset", "traffic", "baseline", "label")
+GROUP_KEYS = ("task", "variant", "sim", "level", "backend", "preset", "traffic", "baseline", "label")
+_KEY_DEFAULTS = {"sim": "torch", "preset": "default", "traffic": "policy"}
+# shown by markdown() next to its group_cols when they differ between rows, so no two lines look alike
+_EXTRA_COLS = ("sim", "preset", "traffic", "label")
 DEFAULT_METRICS = ("task", "return", "deliveries", "drops", "delay_p50_ms", "delay_p95_ms", "aoi_mean_s")
 
 
@@ -47,7 +51,7 @@ def aggregate(results: Sequence[dict]) -> list:
     for every metric found, plus the mean timings."""
     groups = {}
     for r in results:
-        key = tuple(r.get(k, "") for k in GROUP_KEYS)
+        key = tuple(r.get(k) if r.get(k) is not None else _KEY_DEFAULTS.get(k, "") for k in GROUP_KEYS)
         groups.setdefault(key, []).append(r)
     rows = []
     for key, rs in sorted(groups.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
@@ -77,7 +81,10 @@ def _fmt(m, ci, n, digits=3):
 
 def markdown(rows: Sequence[dict], metrics: Sequence[str] = DEFAULT_METRICS, timing: bool = True,
              group_cols: Sequence[str] = ("task", "variant", "level", "backend", "baseline")) -> str:
-    """Markdown table: one line per group, mean ± 95% CI over seeds (n seeds in the "n" column)."""
+    """Markdown table: one line per group, mean ± 95% CI over seeds (n seeds in the "n" column). The columns sim,
+    preset, traffic and label are added after group_cols when they are not the same in every row."""
+    group_cols = list(group_cols) + [c for c in _EXTRA_COLS
+                                     if c not in group_cols and len({str(r.get(c)) for r in rows}) > 1]
     head = list(group_cols) + ["n"] + [("task metric" if m == "task" else m) for m in metrics]
     if timing:
         head += ["train s", "eval s/step"]

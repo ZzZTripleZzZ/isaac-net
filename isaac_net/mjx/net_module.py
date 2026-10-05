@@ -99,9 +99,19 @@ def _release_graphs():
 
 def build_module(level, E, R, device, config, backend, seed, **kwargs) -> NetModule:
     """The torch NetModule, built deterministically from `seed` (the triton backend draws its Philox seed from the
-    global CPU generator at construction; that draw is taken under a forked, seeded CPU RNG)."""
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(seed)
+    global CPU generator at construction; that draw is taken under forked, seeded RNGs). Only the CPU generator and
+    the module's CUDA device are seeded, both inside the fork, so the caller's global RNG states (CPU and every
+    CUDA device) are the same after construction as before. torch.manual_seed would also reseed every CUDA
+    device outside the fork."""
+    dev = torch.device(device)
+    fork = []
+    if dev.type == "cuda" and torch.cuda.is_available():
+        fork = [dev.index if dev.index is not None else torch.cuda.current_device()]
+    with torch.random.fork_rng(devices=fork):
+        torch.random.default_generator.manual_seed(seed)
+        if fork:
+            with torch.cuda.device(fork[0]):
+                torch.cuda.manual_seed(seed)
         net = NetModule(level, E, R, device, config, backend, seed=seed, **kwargs)
     prewarm(net)
     _LIVE.add(net)

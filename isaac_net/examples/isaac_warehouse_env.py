@@ -93,7 +93,10 @@ def warehouse_isaac_cfg(scene_map: bool | SceneRadioMapCfg = True, **kw) -> Isaa
 
 
 def warehouse_net_config(step_dt: float, **kw) -> NRConfig:
-    """fleet.net_config plus the two cells at GNB (log-distance default channel unless overridden)."""
+    """fleet.net_config plus the two cells at GNB (log-distance default channel unless overridden). gnb_height_m is
+    the GNB mast height (7 m), the transmitter height the scene map is baked with, so blockage geometry and a
+    tr38901 channel use the same masts. The log-distance path loss itself is 2-D (core/radio.py)."""
+    kw = {"gnb_height_m": float(GNB[0][2]), **kw}
     return fleet.net_config(step_dt).with_(n_cells=len(GNB), cell_layout="custom",
                                            cell_positions_m=tuple((g[0], g[1]) for g in GNB), **kw)
 
@@ -113,7 +116,9 @@ def make_warehouse_cfg(num_envs: int, num_robots: int, level: str = "L2", device
     cfg.usd_path = usd_path
     cfg.num_robots = num_robots
     cfg.net_isaac = isaac if isaac is not None else warehouse_isaac_cfg()
-    cfg.net_nr = nr if nr is not None else warehouse_net_config(cfg.sim.dt * cfg.decimation)
+    c = cfg.net_isaac
+    net_dt = cfg.sim.dt * cfg.decimation * c.net_decimation / c.net_substeps      # network step (multi-rate)
+    cfg.net_nr = nr if nr is not None else warehouse_net_config(net_dt)
     per_robot = TASK_OBS + cfg.net_isaac.obs_dim(cfg.net_nr)
     cfg.action_space = num_robots * 3
     cfg.observation_space = num_robots * per_robot
