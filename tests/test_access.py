@@ -41,14 +41,15 @@ def _inputs(steps=STEPS, seed=0):
 
 def _drive(net, E, resets=(), steps=STEPS, dl=False):
     rs = dict(resets)
+    dev = getattr(net, "dev", "cpu")                       # the inputs are drawn on the CPU; move them to the engine
     outs = []
     for k, (send, pos, dlb) in enumerate(_inputs(steps)):
-        net.submit(None, Requests(send[:E], None, torch.full((E,), k, dtype=torch.long)))
+        net.submit(None, Requests(send[:E].to(dev), None, torch.full((E,), k, dtype=torch.long, device=dev)))
         if dl:
-            net.add_dl_frames(None, dlb[:E])
-        outs.append(_tensors(net.step(None, pos[:E]), E))
+            net.add_dl_frames(None, dlb[:E].to(dev))
+        outs.append(_tensors(net.step(None, pos[:E].to(dev)), E))
         if k in rs:
-            net.reset(torch.tensor(rs[k]))
+            net.reset(torch.tensor(rs[k], device=dev))
     return outs
 
 
