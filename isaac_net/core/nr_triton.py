@@ -308,6 +308,27 @@ def _mac_slot(
         if PF_RBG:
             got = got + _col(rate, sidx, s) * sel.to(tl.float32)
         left = left - _col(rate, sidx, s) * sel.to(tl.float32) * (~has_rx).to(tl.float32)
+    if RETX_PRIO == 0:     # retx_priority=False: RBGs of admitted retx short of their count go to new data (MacLink.slot)
+        short = has_rx & (tl.sum(won, axis=1).to(tl.int64) != rx_nsb)
+        rel_f = tl.where(short[:, None], won, 0).to(tl.float32)
+        won = tl.where(short[:, None], 0, won)
+        cnt = tl.sum(won, axis=1).to(tl.int64)
+        for s in tl.static_range(S_):
+            avs = tl.max(_col(rel_f, sidx, s), axis=0) > 0.0
+            want = (cnt < want_cnt) & new_el & (left > 0) & rm
+            if PF_RBG:
+                msc = _col(rate, sidx, s) / tl.maximum(PF_A * avg + PF_B * got, 1e-9)
+            else:
+                msc = _col(metric, sidx, s)
+            ms = tl.where(want, msc, -1.0)
+            best = tl.max(ms, axis=0)
+            wi = tl.argmax(ms, axis=0)
+            sel = (ridx == wi) & (best >= 0) & avs
+            won = tl.where((sidx[None, :] == s) & sel[:, None], 1, won)
+            cnt += sel.to(tl.int64)
+            if PF_RBG:
+                got = got + _col(rate, sidx, s) * sel.to(tl.float32)
+            left = left - _col(rate, sidx, s) * sel.to(tl.float32)
     n_sb = tl.sum(won, axis=1).to(tl.int64)
     n_prb = tl.sum(won.to(tl.float32) * w[None, :], axis=1)
     tx_rx = has_rx & (n_sb == rx_nsb) & (n_sb > 0)

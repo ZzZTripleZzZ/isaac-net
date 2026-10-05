@@ -277,6 +277,33 @@ class MacLink:
                 got = got + rate_sb[..., s] * oh
             left = left - rate_sb[..., s] * oh * ~has_rx
         won = torch.stack(cols, -1)
+        if not lex:
+            # retx_priority=False: retransmissions compete on the PF metric like new data, so an admitted one may win
+            # fewer RBGs than its TB needs and then cannot be sent. Its RBGs are released and offered, RBG by RBG, to
+            # the new-data robots of its cell that still want RBGs (same metric, same greedy rule), instead of staying
+            # empty. RBGs of the retransmissions that were sent are untouched.
+            short = has_rx & (won.sum(-1) != rx_nsb)
+            rel_rs = won & short[..., None]                                                      # released [E,R,S]
+            won = won & ~short[..., None]
+            cnt = won.sum(-1)
+            cols = []
+            for s in range(S):
+                want = (cnt < want_cnt) & new_el & (left > 0)
+                ms = rate_sb[..., s] / (base + wwin * got).clamp(min=1e-9) if rbg_pf else metric_sb[..., s]
+                m = torch.where(want, ms, torch.full_like(left, -1.0))
+                if M is None:
+                    best, wi = m.max(-1)
+                    oh = onehot(wi, R) & ((best >= 0) & rel_rs[..., s].any(-1))[:, None]
+                else:
+                    best, wi = torch.where(M, m[:, None, :], torch.full_like(m[:, None, :], -1.0)).max(-1)
+                    av = (rel_rs[..., s][:, None, :] & M).any(-1)                                    # [E,C]
+                    oh = (onehot(wi, R) & ((best >= 0) & av)[..., None]).any(1)
+                cols.append(oh)
+                cnt = cnt + oh.long()
+                if rbg_pf:
+                    got = got + rate_sb[..., s] * oh
+                left = left - rate_sb[..., s] * oh
+            won = won | torch.stack(cols, -1)
         n_sb = won.sum(-1)
         n_prb = (won * w).sum(-1)
         tx_rx = has_rx & (n_sb == rx_nsb) & (n_sb > 0)
