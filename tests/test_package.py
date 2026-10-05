@@ -40,7 +40,7 @@ def test_top_level_api():
     from isaac_net.core import NRConfig, make_engine
     assert inet.make_engine is make_engine and inet.NRConfig is NRConfig
     assert set(inet.LEVELS) == {"L0", "L0DR", "L05", "L05Q", "L1", "L2", "L2-legacy", "TR", "GE", "QA", "NN",
-                                "ORACLE", "NOCOMM"}
+                                "ORACLE", "NOCOMM", "WIFI"}
     net = inet.make_engine("L2", 2, 3, "cpu", seed=0)
     out = net.step(None, torch.zeros(2, 3))
     assert out["newest"].shape == (2, 3)

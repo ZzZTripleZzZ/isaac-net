@@ -1,4 +1,4 @@
-# FROZEN copy of isaac_net/core/mac_ul.py at 2bb77f8 (2bb77f8a7f866acbe7aa4fb188ec2c047775d302), written by tests/scripts/refreeze_nr.py.
+# FROZEN copy of isaac_net/core/mac_ul.py at 3d956ba (3d956baf5d8304dd9ce48bca5b0517451db410c6), written by tests/scripts/refreeze_nr.py.
 # Do not edit: re-freeze from a commit instead (see that script). Import rewrites:
 #   (none)
 """Uplink MAC of the NR engine: SR/BSR access, UE power split with optional

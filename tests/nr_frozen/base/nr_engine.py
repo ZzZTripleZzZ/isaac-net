@@ -1,4 +1,4 @@
-# FROZEN copy of isaac_net/core/nr_engine.py at 2bb77f8 (2bb77f8a7f866acbe7aa4fb188ec2c047775d302), written by tests/scripts/refreeze_nr.py.
+# FROZEN copy of isaac_net/core/nr_engine.py at 3d956ba (3d956baf5d8304dd9ce48bca5b0517451db410c6), written by tests/scripts/refreeze_nr.py.
 # Do not edit: re-freeze from a commit instead (see that script). Import rewrites:
 #   '^(\\s*)from \\.config import' -> '\\1from isaac_net.core.config import'
 #   '^(\\s*)from \\.radio import' -> '\\1from isaac_net.core.radio import'

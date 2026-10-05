@@ -1,4 +1,4 @@
-# FROZEN copy of isaac_net/core/proto/rng.py at 2bb77f8 (2bb77f8a7f866acbe7aa4fb188ec2c047775d302), written by tests/scripts/refreeze_nr.py.
+# FROZEN copy of isaac_net/core/proto/rng.py at 3d956ba (3d956baf5d8304dd9ce48bca5b0517451db410c6), written by tests/scripts/refreeze_nr.py.
 # Do not edit: re-freeze from a commit instead (see that script). Import rewrites:
 #   '^(\\s*)from \\. import rng_triton' -> '\\1from isaac_net.core.proto import rng_triton'
 #   '^(\\s*)from \\.rng_triton import' -> '\\1from isaac_net.core.proto.rng_triton import'
@@ -90,15 +90,19 @@ class CounterRNG:
 
     # ------------------------------------------------------------------ counters
     def reset(self, ids):
-        """New episode for env ids (None = all): episode += 1, call counters = 0. Eager, in place."""
+        """New episode for env ids (None = all): episode += 1, call counters = 0. Eager, in place.
+
+        An env listed several times in ids starts one new episode, as with a bool mask (NRRng.reset_mask), so the
+        k-th episode of env e stays keyed by (seed, e, k)."""
         if ids is None:
             self.episode.add_(1)
             for c in self.ctr.values():
                 c.zero_()
         else:
-            self.episode.index_add_(0, ids, torch.ones_like(ids))
+            m = torch.zeros(self.E, dtype=torch.bool, device=self.dev).index_fill_(0, ids, True)
+            self.episode.add_(m.long())
             for c in self.ctr.values():
-                c.index_fill_(0, ids, 0)
+                c.masked_fill_(m, 0)
 
     def set_env_offset(self, offset):
         """Key row i by env id offset + i instead of i (in place, so captured graphs stay valid). A shard of a

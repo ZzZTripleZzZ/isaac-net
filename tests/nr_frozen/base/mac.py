@@ -1,4 +1,4 @@
-# FROZEN copy of isaac_net/core/mac.py at 2bb77f8 (2bb77f8a7f866acbe7aa4fb188ec2c047775d302), written by tests/scripts/refreeze_nr.py.
+# FROZEN copy of isaac_net/core/mac.py at 3d956ba (3d956baf5d8304dd9ce48bca5b0517451db410c6), written by tests/scripts/refreeze_nr.py.
 # Do not edit: re-freeze from a commit instead (see that script). Import rewrites:
 #   '^(\\s*)from \\.config import' -> '\\1from isaac_net.core.config import'
 """Shared per-slot MAC algorithm for one direction of one cell (NR engine).
@@ -48,6 +48,7 @@ from .phy import PHY
 from .queues import FrameQueue, env_mask, onehot, reset_where
 
 BIG = 2 ** 62
+AVG_MIN = 1e-9             # floor of the PF average (bytes per slot), as 5G-LENA's PF metric max(1e-9, avg)
 BSR_DEPTH = 4              # ul_grant_model="bsr": buffer status reports in flight per robot ("K" state dims)
 
 
@@ -87,6 +88,7 @@ class MacLink:
         self.sinr_hook = None      # same-slot inter-cell interference, see slot()
         self.member = None         # [E,C,R] serving-cell membership (multi-cell only)
         self.sched_ok = None       # [E,R] schedulable (outside a handover interruption; multi-cell only)
+        self.slot_nsym = 14        # data symbols of the slot being processed (set by slot(), read by SINR hooks)
         self.n_cells = 1
         self.rng = None            # nr_rng.NRRng (cfg.rng="engine"; set by NRNet)
         self._bler_site = BLER[self.dir]
@@ -165,6 +167,7 @@ class MacLink:
         inside the control step (engine RNG stream)."""
         cfg, E, R, S, P, d, phy = self.cfg, self.E, self.R, self.S, self.P, self.dev, self.phy
         gh = g if gh is None else gh
+        self.slot_nsym = nsym
         w = self.sb_prb
         unsent = self.unsent()
         # DL processes whose ACK has reached the gNB become free
@@ -191,7 +194,7 @@ class MacLink:
         if cfg.pf_metric == "wideband" or sched == "pf_wideband":
             allm = torch.ones(E, R, S, dtype=torch.bool, device=d)
             wb = phy.eff_sinr_all(est_o, allm, cfg.eff_sinr, w)                        # [E,R,M]
-            ok = wb >= phy.thr_ref
+            ok = (wb >= phy.thr_ref) & (torch.arange(phy.M, device=d) <= phy.mcs_max)   # cap as phy.mcs_at
             m = (ok.long() * torch.arange(1, phy.M + 1, device=d)).max(-1).values.clamp(min=1) - 1
             rate_sb = (phy.se[m] * re_prb / 8)[..., None] * w
         else:
@@ -201,7 +204,7 @@ class MacLink:
         elif sched == "rr":                    # age of the last transmission, the same on every RBG
             metric_sb = (g - self.last_tx).float()[..., None].expand_as(rate_sb)
         else:
-            metric_sb = rate_sb / self.avg[..., None]
+            metric_sb = rate_sb / self.avg.clamp(min=AVG_MIN)[..., None]
         # retransmission admission: rank pending retx per cell (PF metric) and admit them while their
         # RBG counts fit the carrier, so no retx is left with a partial (unusable) allocation
         M = self.member
@@ -240,8 +243,14 @@ class MacLink:
             admitted = torch.zeros_like(rx_c).scatter(-1, order, adm_sorted).any(1)
         has_rx = admitted
         want_cnt = torch.where(has_rx, rx_nsb, torch.where(new_el, n_max, torch.zeros_like(n_max)))
-        prio = (1e9 if cfg.retx_priority else 0.0) * has_rx.float()
+        lex = cfg.retx_priority
+        prio = (1e9 if lex else 0.0) * has_rx.float()
         # ---- PF allocation, RBG by RBG (greedy; stops when the need is covered) ----
+        # retx_priority: an admitted retransmission that still wants RBGs wins RBG s over all new data (lexicographic
+        # priority: while one wants it, the new-data robots of its cell are masked out). Among retransmissions the key
+        # stays metric + 1e9 in float32, as before, so whenever every metric is below 1e9 the choice is unchanged; the
+        # mask only matters when a PF metric (rate / tiny average) reaches the 1e9 bonus, where a new-data robot used
+        # to take RBGs an admitted retransmission needed, leaving it short of its RBG count and unable to send.
         cnt = torch.zeros(E, R, dtype=torch.long, device=d)
         left = need.float()
         cols = []
@@ -254,11 +263,18 @@ class MacLink:
             want = (cnt < want_cnt) & (has_rx | (left > 0))
             ms = rate_sb[..., s] / (base + wwin * got).clamp(min=1e-9) if rbg_pf else metric_sb[..., s]
             m = torch.where(want, ms + prio, torch.full_like(left, -1.0))
+            wr = want & has_rx if lex else None
             if M is None:
+                if lex:
+                    m = torch.where(wr.any(-1, keepdim=True) & ~wr, torch.full_like(m, -1.0), m)
                 best, wi = m.max(-1)
                 oh = onehot(wi, R) & (best >= 0)[:, None]
             else:               # one PF scheduler per cell on RBG s
-                best, wi = torch.where(M, m[:, None, :], torch.full_like(m[:, None, :], -1.0)).max(-1)   # [E,C]
+                mc = torch.where(M, m[:, None, :], torch.full_like(m[:, None, :], -1.0))               # [E,C,R]
+                if lex:
+                    wr_c = wr[:, None, :] & M
+                    mc = torch.where(wr_c.any(-1, keepdim=True) & ~wr_c, torch.full_like(mc, -1.0), mc)
+                best, wi = mc.max(-1)                                                                   # [E,C]
                 oh = (onehot(wi, R) & (best >= 0)[..., None]).any(1)
             cols.append(oh)
             cnt = cnt + oh.long()
@@ -266,6 +282,33 @@ class MacLink:
                 got = got + rate_sb[..., s] * oh
             left = left - rate_sb[..., s] * oh * ~has_rx
         won = torch.stack(cols, -1)
+        if not lex:
+            # retx_priority=False: retransmissions compete on the PF metric like new data, so an admitted one may win
+            # fewer RBGs than its TB needs and then cannot be sent. Its RBGs are released and offered, RBG by RBG, to
+            # the new-data robots of its cell that still want RBGs (same metric, same greedy rule), instead of staying
+            # empty. RBGs of the retransmissions that were sent are untouched.
+            short = has_rx & (won.sum(-1) != rx_nsb)
+            rel_rs = won & short[..., None]                                                      # released [E,R,S]
+            won = won & ~short[..., None]
+            cnt = won.sum(-1)
+            cols = []
+            for s in range(S):
+                want = (cnt < want_cnt) & new_el & (left > 0)
+                ms = rate_sb[..., s] / (base + wwin * got).clamp(min=1e-9) if rbg_pf else metric_sb[..., s]
+                m = torch.where(want, ms, torch.full_like(left, -1.0))
+                if M is None:
+                    best, wi = m.max(-1)
+                    oh = onehot(wi, R) & ((best >= 0) & rel_rs[..., s].any(-1))[:, None]
+                else:
+                    best, wi = torch.where(M, m[:, None, :], torch.full_like(m[:, None, :], -1.0)).max(-1)
+                    av = (rel_rs[..., s][:, None, :] & M).any(-1)                                    # [E,C]
+                    oh = (onehot(wi, R) & ((best >= 0) & av)[..., None]).any(1)
+                cols.append(oh)
+                cnt = cnt + oh.long()
+                if rbg_pf:
+                    got = got + rate_sb[..., s] * oh
+                left = left - rate_sb[..., s] * oh
+            won = won | torch.stack(cols, -1)
         n_sb = won.sum(-1)
         n_prb = (won * w).sum(-1)
         tx_rx = has_rx & (n_sb == rx_nsb) & (n_sb > 0)
@@ -388,11 +431,14 @@ class MacLink:
         slot (need > 0, no retransmission admitted) update their average (5G-LENA's active list)."""
         cfg = self.cfg
         if cfg.pf_update == "slot" and cfg.pf_avg_idle == "decay":
-            self.avg = (1 - 1 / cfg.pf_window) * self.avg + (1 / cfg.pf_window) * served
+            # floored at AVG_MIN: an idle robot's average decays geometrically and would underflow float32 to 0
+            # (an infinite PF metric); the floor binds only after about 2,500 idle slots at pf_window=100, where
+            # rate / avg already exceeded the 1e9 retransmission bonus for any RBG carrying a byte
+            self.avg = ((1 - 1 / cfg.pf_window) * self.avg + (1 / cfg.pf_window) * served).clamp(min=AVG_MIN)
         else:
             wwin = 1.0 / cfg.pf_window
             upd = (tbs_new // 8).float() * tx_new if cfg.pf_update == "rbg" else served.float()
-            new_avg = (1 - wwin) * self.avg + wwin * upd
+            new_avg = ((1 - wwin) * self.avg + wwin * upd).clamp(min=AVG_MIN)
             if cfg.pf_avg_idle == "freeze":
                 self.avg = torch.where((need > 0) & ~has_rx, new_avg, self.avg)
             else:
@@ -443,6 +489,21 @@ class MacLink:
         return delivered, timed, dropped
 
     def compact(self, gone):
+        """Remove the resolved frames gone [E,R,F], advance the stream floor, and free the HARQ processes whose
+        bytes all left with them.
+
+        A process whose TB carried stream bytes that all lie below the new floor (h_lo < h_hi <= floor) holds only
+        purged data (discard="purge" timeouts): it returns to the fresh state (free, no transmissions, no combining),
+        so it neither retransmits dead bytes at retransmission priority nor, under harq_fail="rlc_am", loops on RLC
+        resends forever. A partially purged process (h_lo < floor < h_hi) is kept: its upper bytes belong to the
+        head frame, which is still queued, and freeing it would let ack_ptr pass bytes that were never decoded (a
+        false in-order delivery). A TB that carried no stream bytes (h_lo == h_hi, padding of the 5G-LENA BSR grant
+        model) purged nothing and is left to its HARQ process as before. Without purging, frames leave only once
+        every byte below them is resolved, so no busy process lies wholly below the floor and nothing changes."""
         self.q.remove(gone)
         self.floor = self.q.floor()
         self.sent = torch.maximum(self.sent, self.floor)
+        dead = (self.h_state == 1) & (self.h_hi <= self.floor[..., None]) & (self.h_hi > self.h_lo)
+        for n in ("h_state", "h_ready", "h_ntx", "h_comb", "h_lexp", "h_nrb"):
+            x = getattr(self, n)
+            setattr(self, n, torch.where(dead, torch.full_like(x, self.STATE[n][2]), x))

@@ -1,4 +1,4 @@
-# FROZEN copy of isaac_net/core/phy.py at 2bb77f8 (2bb77f8a7f866acbe7aa4fb188ec2c047775d302), written by tests/scripts/refreeze_nr.py.
+# FROZEN copy of isaac_net/core/phy.py at 3d956ba (3d956baf5d8304dd9ce48bca5b0517451db410c6), written by tests/scripts/refreeze_nr.py.
 # Do not edit: re-freeze from a commit instead (see that script). Import rewrites:
 #   'os\\.path\\.dirname\\(os\\.path\\.abspath\\(__file__\\)\\)' -> 'os.path.dirname(os.path.abspath(__import__("isaac_net.core", fromlist=["PHY"]).__file__))'
 """3GPP PHY abstraction, batched in torch: MCS tables, exact TBS, EESM and SINR-to-BLER lookup.

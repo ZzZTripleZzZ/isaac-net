@@ -1,4 +1,4 @@
-"""Frozen base of the golden NR references: isaac_net/core modules at 2bb77f8.
+"""Frozen base of the golden NR references: isaac_net/core modules at 3d956ba.
 
 Written by tests/scripts/refreeze_nr.py; do not edit. See that script for the re-freeze procedure."""
-FROZEN_COMMIT = "2bb77f8a7f866acbe7aa4fb188ec2c047775d302"
+FROZEN_COMMIT = "3d956baf5d8304dd9ce48bca5b0517451db410c6"
