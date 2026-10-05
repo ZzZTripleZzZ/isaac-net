@@ -34,6 +34,17 @@ starts RACH at the arrival) for an IDLE robot. With rach_initial="idle" every ro
 fleet that powers on together contends at the same ROs. With several cells a robot contends in the cell it was
 associated with at the end of the previous step.
 
+RLF re-establishment (rach=True with rlf=True, several cells). A robot that declares a radio link failure, or that
+went idle at T311 expiry, re-establishes through this RACH model instead of the fixed reest_delay_ms: when the cell
+search of core/radio.CellAssociation selects a cell, the robot enters RACH toward that cell (it contends with the
+robots of that cell) at the first RO at or after the selection that the stage can still process (ROs are drawn at
+the start of each control step, so a selection made during a step takes the first RO of the next step at the
+earliest); contention resolution ends the RLF outage (out["rlf"]) at the slot service starts, and collisions,
+backoff and failed procedures apply as for any other attempt. The interface is two calls on CellAssociation,
+take_reest_requests() (the robots that selected a cell and the slot) and rach_connected() (contention resolved,
+served from slot g), with fixed shapes and no host sync. Contention-free random access (a dedicated preamble) at
+re-establishment is not modelled. With rach=False the fixed reest_delay_ms is unchanged.
+
 DRX (TS 38.321 Sec. 5.7). Active Time = drx-InactivityTimer running (drx_inactivity_ms after the last scheduling
 activity, restarted by each), or the on-duration of the current cycle (slot - drx_start_offset mod cycle <
 drx_on_ms; the short cycle for drx_short_cycles cycles after the inactivity timer expires, if drx_short_cycle_ms is
@@ -86,10 +97,7 @@ class AccessStage:
     cfg.drx is set; see the module docstring."""
 
     def __init__(self, eng):
-        cfg = eng.config
-        if getattr(eng, "backend", None) == "triton":
-            raise ValueError("rach / drx block scheduling through MacLink.sched_ok, which the fused triton kernel does "
-                             "not read; use backend='graph' (bitwise equal to the reference) or 'reference'")
+        cfg = eng.config          # the triton backend refuses rach / drx in NRTritonEngine.__init__ (refusals)
         self.eng = eng
         self.net = net = eng.net
         self.cfg = cfg
@@ -140,6 +148,12 @@ class AccessStage:
         self.sleep_cnt = torch.zeros(E, R, device=d)
         self.vis_cnt = torch.zeros((), device=d)
         self.ctr = {k: torch.zeros((), device=d) for k in CTR_NAMES}
+        # RLF re-establishment through RACH (rach with rlf, several cells): CellAssociation raises a request when its
+        # cell search selects a cell; the robot then runs this RACH procedure toward that cell (self.reest marks it)
+        self.reest = None
+        if self.rach and net.C > 1 and net.assoc.rlf:
+            net.assoc.enable_rach_reest()
+            self.reest = torch.zeros(E, R, dtype=torch.bool, device=d)
         self._install()
 
     # ------------------------------------------------------------------ hooks on this engine instance
@@ -250,6 +264,16 @@ class AccessStage:
         self.ra_att = torch.where(trig, 0, self.ra_att)
         self.ra_next = torch.where(trig, self._next_ro(A), self.ra_next)
         self.conn_at = torch.where(trig, BIG, self.conn_at)
+        if self.reest is not None:      # RLF re-establishment: a new procedure toward the selected cell
+            req, g_sel = net.assoc.take_reest_requests()
+            st = torch.where(req, RACH, st)
+            self.ra_att = torch.where(req, 0, self.ra_att)
+            # ROs are drawn once per step (here): a selection made during the previous step takes the first RO
+            # of this step at the earliest
+            self.ra_next = torch.where(req, self._next_ro(torch.maximum(g_sel, torch.zeros_like(g_sel) + g0)),
+                                       self.ra_next)
+            self.conn_at = torch.where(req, BIG, self.conn_at)
+            self.reest = self.reest | req
         self.st = st
         self._occasions(g0)
 
@@ -258,6 +282,8 @@ class AccessStage:
         net, N, R, P = self.net, self.N, self.R, self.n_pre
         C = net.C
         cell = net.assoc.serv.clamp(min=0) if C > 1 else None
+        if self.reest is not None:      # a re-establishing robot contends in the cell its search selected
+            cell = torch.where(self.reest, net.assoc.reest_cell, cell)
         first = self._next_ro(g0)
         for k in range(N // self.ro + 1):
             r = first + k * self.ro
@@ -276,6 +302,8 @@ class AccessStage:
             c["rach_collisions"] += col.sum()
             self.ra_step = self.ra_step + att.long()
             done = r + self.cres
+            if self.reest is not None:  # contention resolved: the re-establishment completes when service starts
+                net.assoc.rach_connected(ok & self.reest, done)
             self.conn_at = torch.where(ok, done, self.conn_at)
             self.last_act = torch.where(ok, done, self.last_act)      # connection = activity (DRX, release)
             self.ra_next = torch.where(ok, BIG, self.ra_next)
@@ -295,6 +323,8 @@ class AccessStage:
         newly = (self.st == RACH) & (self.conn_at <= g_last)
         self.st = torch.where(newly, CONNECTED, self.st)
         self.conn_at = torch.where(newly, BIG, self.conn_at)
+        if self.reest is not None:
+            self.reest = self.reest & ~newly
         self.ul_seen = net.ul.q.enq.clone()
         if net.dl is not None:
             self.dl_seen = net.dl.q.enq.clone()
@@ -327,6 +357,8 @@ class AccessStage:
             self.dl_seen = put(self.dl_seen, self.net.dl.q.enq)
         self.ra_step = put(self.ra_step, 0)
         self.sleep_cnt = put(self.sleep_cnt, 0.0)
+        if self.reest is not None:
+            self.reest = put(self.reest, False)
         if self._own_rng:
             self.rng.reset_mask(None if ids is None else env_mask(E, ids, d))
         if ids is None:

@@ -326,12 +326,23 @@ class CellAssociation:
     first, the robot goes idle (the engine drops its queue) and keeps searching (a new connection, same delay). A
     robot in RLF neither handles A3 nor counts indications. Timers are slot numbers (-1 = not running), counters
     are tensors, so the state machine is graph-capturable and partial reset clears it per env.
+
+    Re-establishment through RACH (enable_rach_reest(); the NR engine with cfg.rlf and cfg.rach, core/access.py).
+    The fixed reest_delay is replaced by the contention-based random access of AccessStage: when the cell search
+    selects a cell, the robot raises rlf_reest_request [E,R] (with the slot in rlf_reest_slot) and waits with
+    reest_end = REEST_RACH (no completion, no T311 idling, no new search); AccessStage takes the requests
+    (take_reest_requests()) and runs the RACH procedure toward reest_cell, and when contention resolution succeeds it
+    reports the slot from which the robot is served (rach_connected()), which becomes reest_end, so complete() attaches
+    the robot there. Contention-free random access at re-establishment is not modelled.
     """
 
     INIT = {"serv": 0, "pending": True, "a3_cand": -1, "a3_cnt": 0, "ho_end": 0, "n_ho": 0}
     RLF_INIT = {"rlf_active": False, "oos_cnt": 0, "is_cnt": 0, "t310_end": -1, "t311_end": -1, "reest_end": -1,
                 "reest_cell": 0, "n_rlf": 0}
     RLF_CTR = ("rlf", "reest", "rlf_idle", "t310_start", "t310_stop")
+    RACH_INIT = {"rlf_reest_request": False, "rlf_reest_slot": 0}
+    REEST_RACH = 2 ** 62           # reest_end of a robot whose re-establishment waits for its RACH procedure
+    reest_rach = False
 
     def __init__(self, cfg: NRConfig, E, R, C, device, slots_per_step, slot_ms=None, rlf=False):
         self.cfg, self.E, self.R, self.C, self.dev, self.K = cfg, E, R, C, device, slots_per_step
@@ -362,6 +373,31 @@ class CellAssociation:
             for n, v in self.RLF_INIT.items():
                 setattr(self, n, z(torch.bool if isinstance(v, bool) else torch.long, v))
             self.ctr = {k: torch.zeros((), dtype=torch.long, device=device) for k in self.RLF_CTR}
+
+    def enable_rach_reest(self):
+        """Re-establishment through the RACH model (class docstring); called by AccessStage with cfg.rach."""
+        if not self.rlf:
+            raise ValueError("enable_rach_reest needs rlf=True")
+        if self.reest_rach:
+            return
+        self.reest_rach = True
+        self._init.update(self.RACH_INIT)
+        for n, v in self.RACH_INIT.items():
+            setattr(self, n, torch.full((self.E, self.R), v, dtype=torch.bool if isinstance(v, bool) else torch.long,
+                                        device=self.dev))
+
+    def take_reest_requests(self):
+        """(robots that selected a cell and wait for random access [E,R], the slot of that selection [E,R]); the
+        request mask is cleared (each request is taken once)."""
+        req, slot = self.rlf_reest_request, self.rlf_reest_slot
+        self.rlf_reest_request = torch.zeros_like(req)
+        return req, slot
+
+    def rach_connected(self, mask, g):
+        """The RACH procedure of the robots `mask` [E,R] succeeded and serves them from slot g ([E,R] or int): their
+        re-establishment completes at g (complete())."""
+        wait = mask & self.rlf_active & (self.reest_end == self.REEST_RACH)
+        self.reest_end = torch.where(wait, g, self.reest_end)
 
     def reset(self, env_ids=None):
         m = env_mask(self.E, env_ids, self.dev)
@@ -467,13 +503,19 @@ class CellAssociation:
     def search(self, rx, sinr_c, g, mask):
         """Cell selection for the robots `mask` in RLF without a target: the max-RSRP suitable cell (SINR estimate
         sinr_c >= rlf_qin_db, RSRP >= the admission floor when set) is selected at slot g (int or [E,R]) and the
-        re-establishment completes there reest_delay later."""
+        re-establishment completes there reest_delay later (with reest_rach: after the RACH procedure, class
+        docstring)."""
         ok = sinr_c >= self.cfg.rlf_qin_db
         if self.floor_rx is not None:
             ok = ok & (rx >= self.floor_rx)
         best, bc = rx.masked_fill(~ok, -float("inf")).max(-1)
         cand = mask & self.rlf_active & (self.reest_end < 0) & ok.any(-1)
-        self.reest_end = torch.where(cand, g + self.reest, self.reest_end)
+        if self.reest_rach:
+            self.reest_end = torch.where(cand, self.REEST_RACH, self.reest_end)
+            self.rlf_reest_request = self.rlf_reest_request | cand
+            self.rlf_reest_slot = torch.where(cand, torch.zeros_like(self.rlf_reest_slot) + g, self.rlf_reest_slot)
+        else:
+            self.reest_end = torch.where(cand, g + self.reest, self.reest_end)
         self.reest_cell = torch.where(cand, bc, self.reest_cell)
 
     def complete(self, g):
