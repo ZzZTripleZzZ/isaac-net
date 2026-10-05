@@ -15,6 +15,11 @@ unchanged, so the engine's outputs stay bitwise the same. Per control step it ac
   dl_slots [E,R]    DL data slots in which the robot was scheduled (it receives a transport block)
   dl_prb   [E,R]    PRB-slots of those DL transport blocks
 
+With mini-slot grants (NRConfig.ul_mini_slot_symbols) the hook runs once per scheduling occasion; ul_slots, ul_prb,
+dl_slots and dl_prb then add the occasion's share of the slot's data symbols (MacLink.occ_share), so they stay in
+slot units (a robot sending in all six 2-symbol occasions of a U slot counts one slot), and ul_tx_j / ul_tx_s use
+the occasion's own symbols through slot_nsym.
+
 One tap serves every wrapper of an engine (SlotTap.of). begin() zeroes the counters before a step. A user hook set
 through NREngine.set_sinr_hook replaces the installed one, so wrappers call install() again after it.
 """
@@ -65,17 +70,18 @@ class SlotTap:
         def hook(g, d, won, n_prb, act):
             tx = won.any(-1)
             txf = tx.float()
+            occ = txf if link.occ_share == 1.0 else txf * link.occ_share    # mini-slot occasion: its slot share
             if ul:
-                self.ul_slots += txf
-                self.ul_prb += n_prb * txf
+                self.ul_slots += occ
+                self.ul_prb += n_prb * occ
                 n = n_prb.clamp(min=1.0)
                 p_dbm = self.ue_tx_dbm - self.ref_db - link._split(n_prb) + 10 * torch.log10(n)
                 dur = self.slot_s * link.slot_nsym / 14.0                # PUSCH symbols of this slot
                 self.ul_tx_j += torch.where(tx, 10 ** ((p_dbm - 30.0) / 10.0) * dur, torch.zeros_like(n))
                 self.ul_tx_s += txf * dur
             else:
-                self.dl_slots += txf
-                self.dl_prb += n_prb * txf
+                self.dl_slots += occ
+                self.dl_prb += n_prb * occ
             return act if prev is None else prev(g, d, won, n_prb, act)
 
         hook._slot_tap = self

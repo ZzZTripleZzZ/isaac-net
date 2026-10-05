@@ -111,8 +111,15 @@ CFGS = {
     # the radio's LOS state (graph only: triton refuses n_layers_max=2)
     "ul_dl_mimo2": lambda: NRConfig(dl=True, n_layers_max=2, ul_mimo=True, rank_sinr_min_db=8.0, fading_rician=True,
                                     channel="tr38901_inf_sh", rician_k_ramp_slots=4),
+    # mini-slot grants (docs/configurability.md "Mini-slot grants"): 2-symbol occasions on UL and DL; 4-symbol UL
+    # occasions (and the special slot's 2 UL symbols as one) with the BSR pipeline and per-RBG PF (graph only: triton
+    # refuses mini-slots)
+    "ul_minislot2": lambda: NRConfig(ul_mini_slot_symbols=2, dl=True, mini_slot_dl=True),
+    "ul_minislot4": lambda: NRConfig(ul_mini_slot_symbols=4, special_ul_data=True, ul_grant_model="bsr",
+                                     pf_update="rbg", pf_avg_idle="freeze"),
 }
 ACCESS_FDD_DL_CFGS = ("ul_access", "ul_fdd", "ul_dl_fdd", "ul_dl_traffic")    # graph and triton
+MINISLOT_CFGS = ("ul_minislot2", "ul_minislot4")              # graph only (G1, G7)
 RICIAN_CFGS = ("ul_rician", "ul_rician_los", "cells3_rician", "ul_dl_pf_rician")
 FCORR_CFGS = ("ul_fcorr", "ul_fcorr_rician")                 # both run on graph and triton
 RICIAN_TRITON_CFGS = ("ul_rician", "ul_rician_los")          # one cell, lumped grants

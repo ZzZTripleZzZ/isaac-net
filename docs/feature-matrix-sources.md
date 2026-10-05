@@ -70,7 +70,7 @@ Abbreviations in the table: `LENA/x.rst` is `https://gitlab.com/cttc-lena/nr/-/b
 
 ## Rows added after the 2026-09-29 check
 
-The feature branches merged on 2026-10-05 added six rows to the matrix. Their 5G-LENA, Sionna SYS and Simu5G cells were written with the features and have not been checked against the pinned documentation yet, so every cell below is *unverified* or *not assessed* until someone does that check. The 5G-LENA obstacles cell was checked against the ns-3-dev source on 2026-10-05. A second set of branches, merged on `integrate3` the same day, added the frequency-selectivity row and turned the isaac-net side of the QoS row into a QoS scheduler; their tool cells are listed below too, and the [last table](#sources-of-the-isaac-net-models-in-the-new-rows) gives the sources the isaac-net models follow.
+The feature branches merged on 2026-10-05 added six rows to the matrix. Their 5G-LENA, Sionna SYS and Simu5G cells were written with the features and have not been checked against the pinned documentation yet, so every cell below is *unverified* or *not assessed* until someone does that check. The 5G-LENA obstacles cell was checked against the ns-3-dev source on 2026-10-05. A second set of branches, merged on `integrate3` the same day, added the frequency-selectivity row and turned the isaac-net side of the QoS row into a QoS scheduler; their tool cells are listed below too, as are those of the mini-slot row (`feat/minislot`), and the [last table](#sources-of-the-isaac-net-models-in-the-new-rows) gives the sources the isaac-net models follow.
 
 | Tool | Feature | Status | What the matrix states | Basis | Section to check |
 |:---|:---|:---|:---|:---|:---|
@@ -88,6 +88,8 @@ The feature branches merged on 2026-10-05 added six rows to the matrix. Their 5G
 | 5G-LENA | Fast fading: frequency selectivity | *unverified* | cluster delays and angles of the TR 38.901 model; TDL-A / TDL-D in the PHY manual | [channels.md](channels.md#frequency-selective-fading) | LENA/phy-layer.rst; ns-3 `ThreeGppChannelModel` |
 | Sionna SYS | Fast fading: frequency selectivity | *unverified* | TR 38.901 CDL / TDL models of Sionna PHY | the matrix cell only | Sionna PHY channel models |
 | Simu5G | Fast fading: frequency selectivity | not assessed | not assessed | none | — |
+| 5G-LENA | Mini-slots / variable TTI | *unverified* | TDMA scheduler with symbol granularity, variable TTI per UE | the 2026-10-04 feature-gap review (not the pinned docs) | LENA/mac-layer.rst (TDMA schedulers, symbol-level allocation) |
+| Sionna SYS, Simu5G | Mini-slots / variable TTI | not assessed | not assessed | none | — |
 
 ### Sources of the isaac-net models in the new rows
 

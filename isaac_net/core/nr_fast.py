@@ -101,7 +101,7 @@ class _EagerReplay:
 
 
 TRITON_NOT_IMPLEMENTED = ("several cells (n_cells > 1: A3 handover, rlf), the SR / BSR grant pipeline "
-                          "(ul_grant_model='bsr'), SINR hooks, rank-2 MIMO (n_layers_max=2)")
+                          "(ul_grant_model='bsr'), SINR hooks, rank-2 MIMO (n_layers_max=2), mini-slot grants (ul_mini_slot_symbols)")
 
 
 class TritonUnsupported(NotImplementedError, ValueError):
@@ -503,6 +503,9 @@ class NRTritonEngine(NRGraphEngine):
                         "the other 5G-LENA MAC switches (pf_update, pf_avg_idle, ul_retx_sched, ul_amc_alloc) run"))
         if cfg.mimo_dirs:
             out.append(("rank-2 MIMO (n_layers_max=2)", "the kernel has no per-process rank or per-layer SINR"))
+        if cfg.ul_mini_slot_symbols is not None:
+            out.append(("mini-slot grants (ul_mini_slot_symbols, mini_slot_dl)", "the kernel runs one scheduling "
+                        "occasion per slot (its schedule table has no occasion index)"))
         return out
 
     def __init__(self, E, R, device, cfg: NRConfig, seed=None):

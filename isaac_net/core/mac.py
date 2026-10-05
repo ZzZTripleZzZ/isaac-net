@@ -103,6 +103,8 @@ class MacLink:
         self.member = None         # [E,C,R] serving-cell membership (multi-cell only)
         self.sched_ok = None       # [E,R] schedulable (outside a handover interruption; multi-cell only)
         self.slot_nsym = 14        # data symbols of the slot being processed (set by slot(), read by SINR hooks)
+        self.occ_share = 1.0       # mini-slot occasion being processed: its share of the slot's data symbols (set
+                                   # by NRNet around slot() with ul_mini_slot_symbols; read by core.slot_tap)
         self.n_cells = 1
         self.rng = None            # nr_rng.NRRng (cfg.rng="engine"; set by NRNet)
         self._bler_site = BLER[self.dir]
