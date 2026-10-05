@@ -299,10 +299,15 @@ def test_torch_hash_matches_reference_values():
     r.tick(R_.STEP)
     u = r.uniform(R_.STEP, 1, 4)
     assert u.shape == (3, 4) and bool(((u >= 0) & (u < 1)).all())
-    assert R_.mix32(0) == 0 and R_.mix32(1) == R_.mix32(1)
-    ref = [R_.mix32(x) for x in (1, 2, 0xFFFFFFFF)]
-    got = R_.mix32(torch.tensor([1, 2, 0xFFFFFFFF]))
-    assert got.tolist() == ref and all(0 <= v <= 0xFFFFFFFF for v in ref)
+    # Hard-coded values computed with main 2bb77f8. A change here changes every engine stream: only update them on
+    # purpose, with a CHANGELOG entry. The uniforms are 24-bit (u = bits / 2**24), so the bits compare exactly.
+    xs = (0, 1, 2, 12345, 0xDEADBEEF, 0xFFFFFFFF)
+    want = [0, 2261973619, 229111015, 2258480790, 707447538, 2578835075]
+    assert [R_.mix32(x) for x in xs] == want
+    assert R_.mix32(torch.tensor(xs, dtype=torch.int64)).tolist() == want
+    assert (u.double() * 2 ** 24).to(torch.int64).tolist() == [[10567228, 16700380, 16191287, 1599467],
+                                                                [268848, 15326424, 8181290, 3147942],
+                                                                [13082027, 15096436, 9686026, 361841]]
 
 
 # ----------------------------------------------------------------------------- GPU
