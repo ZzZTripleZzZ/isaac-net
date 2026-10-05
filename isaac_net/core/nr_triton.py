@@ -606,6 +606,8 @@ def nr_step_kernel(
         acc_ptr,
         # schedule of this step: itab [K, 10] int64, ftab [K, 7] float64; per-robot fading rho per ms [E,R]
         itab_ptr, ftab_ptr, K, rho_ptr,
+        # Rician fading (RICIAN): K target, ramp start K and slot [E,R], unit phasor of the specular term [E,R,2]
+        k_ptr, kf_ptr, kg_ptr, phi_ptr,
         # tables per direction (UL, DL)
         u_tab, u_thr, u_se, u_beta, u_rate, u_eq, u_tbs, u_cbs, u_ncb, u_bg, u_ci0, u_cwi,
         d_tab, d_thr, d_se, d_beta, d_rate, d_eq, d_tbs, d_cbs, d_ncb, d_bg, d_ci0, d_cwi,
@@ -615,6 +617,7 @@ def nr_step_kernel(
         C: tl.constexpr, G: tl.constexpr, NL: tl.constexpr, EQW: tl.constexpr, NPRB: tl.constexpr,
         UL: tl.constexpr, DL: tl.constexpr, FADING: tl.constexpr, GATE: tl.constexpr, MMB: tl.constexpr,
         RHO_R: tl.constexpr, STORE_H: tl.constexpr,
+        RICIAN: tl.constexpr, K_RAMP: tl.constexpr, K_RAMP_INV: tl.constexpr,
         MODE: tl.constexpr, COMB: tl.constexpr, SCHED: tl.constexpr, WIDEBAND: tl.constexpr,
         HARQ_DROP: tl.constexpr, OLLA: tl.constexpr, PHR_CAP: tl.constexpr, WHOLE_BAND: tl.constexpr,
         PC: tl.constexpr, STEP: tl.constexpr, RETX_PRIO: tl.constexpr,
@@ -654,6 +657,12 @@ def nr_step_kernel(
     jn = (ridx[:, None] * S_ + sidx[None, :]) * 2
     if RHO_R:
         rho_ms = tl.load(rho_ptr + er, mask=rm, other=0.5)
+    if RICIAN:
+        k_t = tl.load(k_ptr + er, mask=rm, other=0.0)
+        k_f = tl.load(kf_ptr + er, mask=rm, other=0.0)
+        k_g = tl.load(kg_ptr + er, mask=rm, other=0)
+        sp_r = tl.load(phi_ptr + er * 2, mask=rm, other=1.0)[:, None]
+        sp_i = tl.load(phi_ptr + er * 2 + 1, mask=rm, other=0.0)[:, None]
     zero_rs = tl.zeros([RB, SB], tl.float32)
     if UL:
         (u_s_sent, u_s_floor, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_enq, u_s_csi, u_s_hst, u_s_hlo,
@@ -724,7 +733,20 @@ def nr_step_kernel(
             else:
                 hr = rho * hr + c1 * zr / 1.4142135623730951
                 hi = rho * hi + c1 * zi / 1.4142135623730951
-            gain = 10.0 * libdevice.log10(tl.maximum(hr * hr + hi * hi, 1e-6))
+            if RICIAN:     # |sqrt(K/(K+1)) e^{j phi} + sqrt(1/(K+1)) h|^2 with K of slot g, as NRNet._k_at / _gain
+                if K_RAMP > 0:
+                    nk = g - k_g + 1
+                    kc = tl.where(nk >= K_RAMP, k_t, k_f + (k_t - k_f) * (nk.to(tl.float32) * K_RAMP_INV))
+                else:
+                    kc = k_t
+                kinv = 1 / (kc + 1)
+                ka = libdevice.sqrt(kc * kinv)[:, None]
+                kb = libdevice.sqrt(kinv)[:, None]
+                xr = ka * sp_r + kb * hr
+                xi = ka * sp_i + kb * hi
+                gain = 10.0 * libdevice.log10(tl.maximum(xr * xr + xi * xi, 1e-6))
+            else:
+                gain = 10.0 * libdevice.log10(tl.maximum(hr * hr + hi * hi, 1e-6))
         else:
             gain = zero_rs
         if DL:
@@ -839,6 +861,10 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
     # start state and keyed draws, the same code), so the UL kernel sees exactly the gains the DL kernel saw, and
     # each carries only one link's state (half the registers). The UL kernel stores the fading state.
     passes = [(True, True)] if not (UL_on and DL_on) else [(False, True), (True, False)]
+    rc = bool(net.rician)             # Rician fading: K and phasor inputs (read only; NRNet._rician_update ran before)
+    if rc:
+        for x in (net.k_lin, net.k_from, net.k_g0, net.spec):
+            assert x.is_contiguous()
     for ul_p, dl_p in passes:
         const = dict(eng._const, UL=ul_p and UL_on, DL=dl_p and DL_on, STORE_H=ul_p or not UL_on)
         eng._kernel = nr_step_kernel[(E,)](
@@ -847,10 +873,12 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
             pc if pc is not None else dummy, eng._tdev, net.rng.env, net.rng.episode, net.rng.ctr[STEP], net.rng.s0, eng._chs,
             *(gate if gate is not None else (dummy, dummy, dummy)), gate[0].shape[-1] if gate is not None else 1,
             eng._acc, itab, ftab, K, net.fading_rho_ms if net.fading_rho_ms is not None else net.h,
+            *((net.k_lin, net.k_from, net.k_g0, net.spec) if rc else (net.h,) * 4),
             tu["tab"], tu["thr"], tu["se"], tu["beta"], tu["rate"], tu["eq"], tu["tbs"], tu["cbs"], tu["ncb"], tu["bg"],
             tu["ci0"], tu["cwi"],
             td["tab"], td["thr"], td["se"], td["beta"], td["rate"], td["eq"], td["tbs"], td["cbs"], td["ncb"], td["bg"],
             td["ci0"], td["cwi"],
             tb["lift"], tb["cax"], tb["w"], tb["S0"], tb["DS"], tb["C0"], tb["DC"], R, cfg.slots_per_step,
             GATE=gate is not None, RHO_R=net.fading_rho_ms is not None, MMB=triton.next_power_of_2(gate[0].shape[-1]) if gate is not None else 1,
+            RICIAN=rc, K_RAMP=net.k_ramp if rc else 0, K_RAMP_INV=1.0 / net.k_ramp if rc and net.k_ramp else 0.0,
             **const, num_warps=eng._num_warps)

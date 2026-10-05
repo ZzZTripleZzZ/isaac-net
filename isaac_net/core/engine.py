@@ -574,6 +574,10 @@ class NREngine:
             if self._los_fn is not None:
                 self.radio.set_los_callback(self._los_fn)
         pg = self.radio.pathgain_db(pos) if blockers is None else self.radio.pathgain_db(pos, blockers)
+        if self.net.rician == "los":      # Rician K from the radio's LOS state (None: no LOS state, K stays 0)
+            los = getattr(self.radio, "los_state", lambda: None)()
+            if los is not None:
+                self.net.set_los(los, getattr(self.radio, "blocked_state", lambda: None)())
         if self.per_robot_doppler:
             speed = self.radio.observe_motion(pos, vel)
             self.net.fading_rho_ms = rho_per_ms_from_speed(speed, self.config.carrier_ghz)

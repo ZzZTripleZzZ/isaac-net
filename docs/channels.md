@@ -1,6 +1,6 @@
 # Channel models
 
-`NRConfig.channel` selects the large-scale channel that `radio.RadioMC` computes for every robot–cell link. The engines see only its output, the path gain `[E, R, C]` in dB, through the existing interfaces (`NREngine.step(t, poses)`, `step_rx(pathgain, ...)`, `step_cells(t, pathgain)` and `NetSlotMC`). Fast fading stays the AR(1) Rayleigh model of the NR engine, and its Doppler can now follow each robot's own speed. Every model keeps fixed-shape state, redraws the rows of reset envs without a host sync, and evaluates with fixed-shape tensor ops, so a step can run inside a CUDA graph (`tests/test_channels.py::test_channel_cuda_graph_capture`).
+`NRConfig.channel` selects the large-scale channel that `radio.RadioMC` computes for every robot–cell link. The engines see only its output, the path gain `[E, R, C]` in dB, through the existing interfaces (`NREngine.step(t, poses)`, `step_rx(pathgain, ...)`, `step_cells(t, pathgain)` and `NetSlotMC`). Fast fading is the AR(1) Rayleigh model of the NR engine, optionally with a Rician specular term whose K-factor follows the link's LOS state, and its Doppler can follow each robot's own speed. Every model keeps fixed-shape state, redraws the rows of reset envs without a host sync, and evaluates with fixed-shape tensor ops, so a step can run inside a CUDA graph (`tests/test_channels.py::test_channel_cuda_graph_capture`).
 
 | `channel` | What it computes | Main fields |
 |:---|:---|:---|
@@ -10,6 +10,7 @@
 | add-on `blockage` | other robots are spheres that cost `blockage_loss_db` when they sit on the robot–gNB segment; or TR 38.901 model B screens (robots plus per-step `blockers=`), or model A angular regions ([obstacles.md](obstacles.md)) | `blockage`, `blockage_radius_m`, `blockage_loss_db`, `blockage_model`, `blocker_size_m`, `blockage_max_db` |
 | add-on LOS state from geometry | LOS / NLOS of every link from a baked `los_prob` map, a 2.5-D ray march over an `obstacle_z` height map, or a `blocked_fn` callback, with optional knife-edge diffraction; TR 38.901 soft LOS for the stochastic state ([obstacles.md](obstacles.md)) | `los_source`, `los_raycast_samples`, `los_diffraction`, `los_soft`, `nlos_extra_loss_db` |
 | add-on per-robot Doppler | AR(1) fading correlation from each robot's speed (NR engine) | `fading_doppler="per_robot"`, `doppler_min_speed_mps` |
+| add-on Rician fading | specular term with a per-link K-factor, fixed or from the LOS state (NR engine) | `fading_rician`, `rician_k_db`, `rician_k_from_los`, `rician_k_ramp_slots` |
 
 ```python
 from isaac_net import NRConfig, make_engine
@@ -57,7 +58,7 @@ The InF LOS probability is `exp(-d_2D / k_subsce)` with `k_subsce = -d_clutter /
 
 **O2I.** With `o2i_indoor_frac > 0` (UMa, UMi, RMa) each robot is indoors with that probability. An indoor robot gets its own `d_2D-in = min(U(0, 25), U(0, 25))` metres (10 m for RMa) and its own penetration-loss draw `N(0, sigma_P^2)`, all redrawn at reset. It adds `PL_tw + 0.5 d_2D-in + N(0, sigma_P^2)` (12.7 dB wall loss and sigma_P = 4.4 dB for the low-loss model at 3.5 GHz, 26.8 dB and 6.5 dB for the high-loss model), and its LOS probability uses `d_2D-out = d_2D - d_2D-in`.
 
-**Simplifications.** UMa uses `h_E = 1 m`, which is exact for robots below 13 m. Distances below the applicability ranges (10 m outdoors, 1 m indoors) extrapolate the formulas, with `d_2D >= 1 m`. The optional single-slope NLOS formulas, InH open office, InF-HH and the < 6 GHz backwards-compatible O2I model (Table 7.4.3-3) are not implemented. Heights are constants (`gnb_height_m`, `ue_height_m`): the z of 3-D poses is ignored, as in the other models. The LOS state changes only the path loss and the shadowing. Fast fading stays Rayleigh, with no Ricean K-factor.
+**Simplifications.** UMa uses `h_E = 1 m`, which is exact for robots below 13 m. Distances below the applicability ranges (10 m outdoors, 1 m indoors) extrapolate the formulas, with `d_2D >= 1 m`. The optional single-slope NLOS formulas, InH open office, InF-HH and the < 6 GHz backwards-compatible O2I model (Table 7.4.3-3) are not implemented. Heights are constants (`gnb_height_m`, `ue_height_m`): the z of 3-D poses is ignored, as in the other models. By default the LOS state changes only the path loss and the shadowing, and fast fading stays Rayleigh. With `fading_rician=True` it also sets the Rician K-factor of the link (see [Rician fading](#rician-fading)).
 
 Heights are checked against TR 38.901 Table 7.4.1-1: UMa and UMi need 1.5 m <= `ue_height_m` <= 22.5 m (below 1 m the breakpoint distance is not positive), RMa 1–10 m, and InF-SH/DH need `ue_height_m` < `inf_clutter_height_m` < BS height. Out-of-range heights raise `ValueError` when the channel is built instead of extrapolating. For ground robots with antennas below 1.5 m, use InF (InF-SL/DL have no UT-height term), a calibrated `log_distance`, or a radio map.
 
@@ -95,6 +96,40 @@ This is `blockage_model="sphere"`, the default. `blockage_model="screen"` (TR 38
 The NR engine's fading is `h <- rho h + sqrt(1 - rho^2) n` per elapsed interval, with one `rho` per ms for all robots (`fading_rho_per_ms`, or `ue_speed_mps` through `fading_rho_from_speed`). With `fading_doppler="per_robot"` each robot gets `rho_ms = J0(2 pi f_D 2.5 ms)^(1 / 2.5)` from its own speed, with `f_D = v f_c / c`, the same rule applied per robot. The speed is `|vel|` when `step(..., vel=...)` passes velocities, else the pose difference over one control step. Right after a reset, a robot has no previous pose and uses `doppler_min_speed_mps` (0 by default: a still robot's fading is frozen). Per-robot Doppler needs pose input, because SNR input carries no motion. Speeds apply from the step in which they are measured.
 
 `NREngine` installs this by replacing `_evolve` on its own `NRNet` instance (`channels/doppler.install_per_robot_fading`). The replacement makes the same `randn_like` calls in the same order and differs only in using a per-robot `rho` tensor, so with every robot at the global speed it reproduces the global model up to float rounding (`test_per_robot_fading_equals_global_at_equal_speed`). If the NR engine's fading code changes, this hook must follow it. The natural long-term home is an optional `rho` tensor in `NRNet._evolve` itself.
+
+## Rician fading
+
+**Model.** With `fading_rician=True` the NR engine's fading gain of every subband becomes
+
+`|x|^2 = |sqrt(K / (K + 1)) e^{j phi} + sqrt(1 / (K + 1)) h|^2`,
+
+where `h` is the unchanged AR(1) Rayleigh state (`E|h|^2 = 1`, same draws, same Doppler, per-robot Doppler included), `phi` is a fixed phase per link drawn uniformly at reset, and `K` is the linear K-factor of the link (`[E, R]` with one cell, `[E, R, C]` with several). The mean power stays 1, so the link budget is unchanged and only the fade distribution changes. A LOS link at K = 7 dB has 1% of its subband-slots below −9.8 dB, against −20 dB for Rayleigh, which removes most of the deep fades that cause HARQ retransmissions on good links. K = 0 gives exactly the Rayleigh engine, fade for fade. The specular phase is constant, so it carries no Doppler shift of the LOS path, and subbands still fade independently.
+
+**Where K comes from.**
+
+| Fields | K of a link |
+|:---|:---|
+| `rician_k_db=x` | `10^(x / 10)` for every link, LOS or not |
+| `rician_k_db=None`, `rician_k_from_los=True` (default), radio with a LOS state | a log-normal draw `10^(N(mu_K, sigma_K) / 10)` per link, fixed for the episode and redrawn at reset, where the radio reports LOS and no blockage; 0 where the link is NLOS or blocked |
+| `rician_k_db=None` and no LOS state (SNR input, or a radio without `los_state()`), or `rician_k_from_los=False` | 0, which is plain Rayleigh |
+
+The LOS state comes from `RadioMC.los_state()` and `RadioMC.blocked_state()` (bool `[E, R, C]`), which `NREngine` reads after every path-gain call with pose input and passes to `NRNet.set_los`. A radio without these methods leaves K at 0. `mu_K` and `sigma_K` are those of `tr38901_scenario`, whatever the channel model, so with `channel="radio_map"` and a LOS state the default InF-SH values apply.
+
+| Scenario | mu_K (dB) | sigma_K (dB) |
+|:---|:---|:---|
+| UMi (street canyon) | 9 | 5 |
+| UMa | 9 | 3.5 |
+| RMa | 7 | 4 |
+| InH (office) | 7 | 4 |
+| InF (SL, DL, SH, DH) | 7 | 8 |
+
+Source: TR 38.901 V17.0.0, Table 7.5-6 Parts 1–3 (K-factor, LOS only; N/A for NLOS and O2I). The values were checked against the itecspec.com mirror of clause 7.5 on 2026-10-05 and are in `nr_engine.RICIAN_K_DB`. With `sigma_K = 8 dB`, InF links range from almost Rayleigh to almost no fading.
+
+**Ramp.** When a link's target K changes, for example on a LOS to NLOS flip, K moves linearly from its current value to the new target over `rician_k_ramp_slots` slots (4 by default, 2 ms at μ = 1), starting at the first slot of the control step that delivered the new LOS state. A flip back in the middle of a ramp starts a new ramp from the current K. `rician_k_ramp_slots=0` switches K at once. The ramp avoids a one-slot SINR cliff on top of the path-loss step. The first LOS state after a reset applies at once, without a ramp. K in slot `g` is a pure function of `g` and the ramp state (`NRNet._k_at`), so the result does not depend on which slots the schedule evaluates.
+
+**Randomness and backends.** Under `rng="engine"` the phase and the K draw are reset draws of the engine's counter RNG (sites `KPHI` and `KFAC` of `nr_rng.py`), keyed by (seed, env, episode). An env's Rician state therefore does not depend on `E` or on other envs' resets. Under `rng="global"` they come from the engine's generator after the initial fading state, so with Rician on they shift the generator draws that follow. The `graph` backend captures the K state as persistent buffers, and `set_los` runs eagerly before the replay, as the per-robot Doppler input does. The fused `triton` kernel takes the K target, ramp start, ramp slot and phasor as inputs (`k_ptr`, `kf_ptr`, `kg_ptr`, `phi_ptr`, constexpr `RICIAN`) and evaluates the same ramp and gain per slot.
+
+**Validation.** `tests/test_rician.py` checks the following. With `fading_rician=False` the engine is bitwise the pre-feature fading code. K = 0 reproduces the Rayleigh engine bitwise. For K ∈ {0, 3, 7, 10} dB the empirical CDF of `|x|^2` over about 400,000 link-slots matches the Rician power CDF (`2 (K + 1) |x|^2` is noncentral χ² with 2 degrees of freedom and noncentrality `2K`) with a Kolmogorov–Smirnov distance below 0.002, against 0.10–0.29 for a Rayleigh CDF, and the mean power is 1 within 0.3%. The ramp, a flip back mid-ramp, the first state after a reset, the K draw statistics (`mu_K`, `sigma_K`), E-independence and partial-reset isolation are also tested. The GPU equivalence lists (`tests/test_nr_fast.py` G1, G2, G7) include the Rician configs of `tests/nr_equiv.py`. 5G-LENA's fading arm cannot serve as a system-level reference here, because stock 5G-LENA's uplink AMC fails under frequency-selective fading ([validation-5g-lena.md](validation-5g-lena.md)). The model is therefore validated at link level against the Rician distribution and the TR 38.901 K table. A system-level check would need OAI rfsim with a Rician TDL channel ([bridges-oai.md](bridges-oai.md)) or a patched 5G-LENA with OLLA.
 
 ## Cost
 

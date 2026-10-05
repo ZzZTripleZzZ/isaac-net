@@ -12,6 +12,8 @@ CPU):
               BLER_UL  UL transport-block decode, one uniform per robot
               BLER_DL  DL transport-block decode, one uniform per robot
               H0       (channel RESET, slot 0) initial fading state
+              KFAC     (channel RESET) Rician K-factor of every link in dB, one normal per link [R, (C)]
+              KPHI     (channel RESET) phase of the Rician specular term, one uniform per link [R, (C)]
   element   index into the flattened per-env draw (C-order over the per-env shape)
 So env e's substream is keyed by (e, episode, slot clock = counter * slots_per_step + slot): a policy's use of the
 global torch RNG never changes the network, env e's network in its k-th episode depends only on (seed, e, k) and its
@@ -27,7 +29,7 @@ import torch
 
 from .proto.rng import RESET, STEP, CounterRNG, salt  # noqa: F401  (salt: the kernel's channel key)
 
-FADING, BLER_UL, BLER_DL, H0 = 1, 2, 3, 4
+FADING, BLER_UL, BLER_DL, H0, KFAC, KPHI = 1, 2, 3, 4, 5, 6
 BLER = {"ul": BLER_UL, "dl": BLER_DL}
 
 
@@ -57,6 +59,9 @@ class NRRng(CounterRNG):
     def reset_normal_all(self, site, n):
         """Reset draws [E, n] for every env, keyed by (env, episode); keep the rows of the envs just reset."""
         return self.reset_normal(None, stream_id(site), n)
+
+    def reset_uniform_all(self, site, n):
+        return self.reset_uniform(None, stream_id(site), n)
 
     def tick_step(self):
         self.tick(STEP)
