@@ -121,13 +121,15 @@ def _args(s):
     return {toks[i]: toks[i + 1] for i in range(0, len(toks) - 1, 2)}
 
 
-def parse_ttracer(path, mu, run_id="", rnti_map=None, day_epoch=None, infer_crc=False):
+def parse_ttracer(path, mu, run_id="", rnti_map=None, day_epoch=None, infer_crc=False, realtime=True):
     """T-tracer textlog output -> sched rows.
 
     GNB_MAC_UL -> event "sched" (mcs, tbs); GNB_MAC_PUSCH_POWER_CONTROL -> event "pc" (mcs, tbs, PRBs, SNR);
     GNB_MAC_UL_PDU_WITH_DATA -> event "rx" (decoded PDU: harq_pid, size, crc = 1); GNB_MAC_DL -> DL "sched".
     t_s = day_epoch + time of day (textlog prints local time of day only; pass the local midnight of the run
     as day_epoch, or use -raw-time, whose epoch seconds are used when present).
+    realtime=False (rfsim): the wall clock does not run at the slot rate, so slot_abs unwraps SFN wraps from
+    backward jumps only (schema.unwrap_slots).
 
     GNB_MAC_LCID_UL (rnti, frame, slot, lcid, data_size in bits: one line per SDU of a decoded PDU), when traced,
     fills data_bytes of the rx rows (0 for PDUs without SDUs, i.e. grants the UE had no data for).
@@ -183,7 +185,7 @@ def parse_ttracer(path, mu, run_id="", rnti_map=None, day_epoch=None, infer_crc=
                 continue
             rows.append(row)
             stamp.append((row["sfn"], row["slot"], t))
-    sabs = unwrap_slots([s[:2] for s in stamp], mu, [s[2] for s in stamp] if stamp else None)
+    sabs = unwrap_slots([s[:2] for s in stamp], mu, [s[2] for s in stamp] if stamp else None, realtime=realtime)
     for r, sa in zip(rows, sabs):
         r["slot_abs"] = sa
     key = lambda r: (r["rnti"], r["slot_abs"])

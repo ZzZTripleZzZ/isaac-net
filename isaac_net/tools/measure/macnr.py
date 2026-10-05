@@ -29,7 +29,9 @@ TAG_LEN = {TAG_RNTI: 2, TAG_UEID: 2, TAG_FRAME_SUBFRAME: 2, TAG_PHR2: 1, TAG_HAR
 C_RNTI = 3
 
 # UL-SCH fixed-size MAC CEs without an L field (TS 38.321 Table 6.2.1-2): LCID -> size in bytes
-UL_FIXED = {0: 6, 52: 8, 53: 2, 55: 0, 57: 2, 58: 2, 59: 1, 61: 1}
+# LCID 0 = CCCH of 64 bits (8 B, "CCCH1" in TS 38.331: RRCResumeRequest1),
+# LCID 52 = CCCH of 48 bits (6 B, RRCSetupRequest)
+UL_FIXED = {0: 8, 52: 6, 53: 2, 55: 0, 57: 2, 58: 2, 59: 1, 61: 1}
 UL_PADDING = 63
 UL_SHORT_BSR, UL_SHORT_TRUNC_BSR, UL_LONG_BSR, UL_LONG_TRUNC_BSR = 61, 59, 62, 60
 

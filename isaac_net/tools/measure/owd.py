@@ -12,6 +12,10 @@ Two inputs are supported:
 OWD = t_rx - t_tx - offset, where ``offset_ms`` is the receiver clock minus the sender clock (0 when both ends
 share one clock; see "Clock synchronization" in docs/measurement-protocol.md for how to measure it). The summary
 reports how many OWDs are negative, which is the first sign of an unsynchronized pair.
+
+A negative t_tx_ns in a sender log marks a local send error (the OAI bridge's UE agent logs -t when sendto fails):
+the packet never left the host, so it is neither an OWD sample nor a network loss. Such rows are left out of the owd
+table (their frame then cannot complete) and counted in the summary as ``send_errors``.
 """
 from __future__ import annotations
 
@@ -43,6 +47,8 @@ def from_probe_logs(rx_csv, tx_csv=None, run_id="", ue="", offset_ms=0.0, src=No
         pk = [(r, rxd.get(_key(r))) for r in tx]
     else:
         pk = [(r, r) for r in rxd.values()]
+    n_err = sum(1 for t, _ in pk if int(t["t_tx_ns"]) < 0)
+    pk = [(t, r) for t, r in pk if int(t["t_tx_ns"]) >= 0]          # local send errors: never sent
     rows = []
     for t, r in pk:
         t_tx = int(t["t_tx_ns"]) / 1e9
@@ -53,7 +59,7 @@ def from_probe_logs(rx_csv, tx_csv=None, run_id="", ue="", offset_ms=0.0, src=No
             pkt_bytes=int(t["pkt_bytes"]), t_tx_s=t_tx, t_rx_s=t_rx,
             owd_ms=(int(r["t_rx_ns"]) - int(t["t_tx_ns"])) / 1e6 - offset_ms if r is not None else float("nan"),
             lost=0 if r is not None else 1))
-    return rows, frames_from_owd(rows, offset_ms), summarize(rows)
+    return rows, frames_from_owd(rows, offset_ms), summarize(rows) | {"send_errors": n_err}
 
 
 def _probe_packets(path, port=None):
@@ -114,6 +120,7 @@ def _q(xs, p):
 
 def summarize(rows):
     d = [r["owd_ms"] for r in rows if not r["lost"]]
-    return {"n": len(rows), "lost": sum(r["lost"] for r in rows), "negative": sum(1 for x in d if x < 0),
+    return {"n": len(rows), "send_errors": 0, "lost": sum(r["lost"] for r in rows),
+            "negative": sum(1 for x in d if x < 0),
             "p50_ms": _q(d, 0.5), "p95_ms": _q(d, 0.95), "p99_ms": _q(d, 0.99),
             "min_ms": min(d) if d else float("nan"), "max_ms": max(d) if d else float("nan")}

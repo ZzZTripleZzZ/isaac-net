@@ -207,12 +207,20 @@ def slots_per_frame(mu):
     return 10 * 2 ** mu
 
 
-def unwrap_slots(sfn_slot, mu, t_s=None):
+def unwrap_slots(sfn_slot, mu, t_s=None, realtime=True):
     """Absolute slot counts for a sequence of (sfn, slot) in time order, unwrapping the 1024-frame SFN cycle
-    (10.24 s). With wall-clock times t_s, a gap longer than the SFN cycle adds the right number of whole cycles;
-    without them, a backward jump is taken as exactly one wrap. The first entry is slot 0."""
+    (10.24 s of slot time). The first entry is slot 0.
+
+    t_s must advance at the slot rate. On a real radio the wall clock does, and with t_s a gap longer than the SFN
+    cycle adds the right number of whole cycles. Under a simulated radio (OAI rfsim, srsRAN ZMQ) the slot clock runs
+    slower or faster than the wall clock, so wall times would add cycles that never happened: pass realtime=False
+    there, or pass the simulator's virtual time as t_s (it advances at the slot rate). With realtime=False or
+    without t_s, only a backward jump (by more than half a cycle) counts, as exactly one wrap; a gap of more than
+    one whole cycle between consecutive rows cannot be seen then."""
     spf = slots_per_frame(mu)
     cyc = 1024 * spf
+    if not realtime:
+        t_s = None
     out, base, prev = [], 0, None
     for i, (sfn, slot) in enumerate(sfn_slot):
         raw = sfn * spf + slot
