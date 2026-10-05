@@ -519,6 +519,8 @@ class NRTritonEngine(NRGraphEngine):
         N, S = cfg.slots_per_step, cfg.n_subbands
         g0 = t * N
         tv, _ = net._times(t)
+        if net.rician:                 # Rician K ramp state for this step (as NRNet.step); the kernel evaluates K(g)
+            net._rician_update(tv * N)
         ul_ref = snr_db if snr_db.dim() == 3 else snr_db[..., None].expand(-1, -1, S)
         pc = None
         if cfg.ul_pc_on:
