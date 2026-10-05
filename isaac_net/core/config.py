@@ -36,14 +36,21 @@ def rbg_size_38214(n_prb, config=1):
     raise ValueError(n_prb)
 
 
+J0_FIRST_ZERO = 2.404825557695773       # first positive zero of the Bessel function J0
+
+
 def fading_rho_from_speed(speed_mps, carrier_ghz=3.5, anchor_ms=2.5):
     """AR(1) fading correlation per ms for a UE speed: the Jakes correlation J0(2 pi f_D anchor) over one legacy
     UL slot spacing (2.5 ms), spread geometrically over its milliseconds. f_D = v f_c / c. 3 m/s at 3.5 GHz gives
-    0.9697 per ms (J0 = 0.926 per 2.5 ms), close to the default 0.93 per 2.5 ms. Clamped to [0, 1): past the
-    first zero of J0 (about 55 m/s at 3.5 GHz) consecutive 2.5 ms samples are treated as uncorrelated."""
+    0.9697 per ms (J0 = 0.926 per 2.5 ms), close to the default 0.93 per 2.5 ms. Monotone non-increasing in speed:
+    from the first zero of J0 on (2 pi f_D anchor >= 2.405, about 13.1 m/s at 3.5 GHz) consecutive 2.5 ms samples
+    are treated as uncorrelated (rho = 0), and the oscillating tail of J0 past that zero is not used."""
     import torch
     fd = speed_mps * carrier_ghz * 1e9 / 299_792_458.0
-    j0 = float(torch.special.bessel_j0(torch.tensor(2 * math.pi * fd * anchor_ms * 1e-3, dtype=torch.float64)))
+    x = 2 * math.pi * fd * anchor_ms * 1e-3
+    if x >= J0_FIRST_ZERO:
+        return 0.0
+    j0 = float(torch.special.bessel_j0(torch.tensor(x, dtype=torch.float64)))
     return min(max(j0, 0.0), 1.0 - 1e-12) ** (1 / anchor_ms)
 
 
@@ -99,19 +106,74 @@ TR38901_SHORT = {"tr38901_rma": "RMa", "tr38901_uma": "UMa", "tr38901_umi": "UMi
                  "tr38901_inf_dh": "InF-DH"}
 
 
+# fields read only under some switches (fields_read_by drops them when the switch is off)
+DL_ONLY_FIELDS = ("k1", "cqi_period_slots", "dl_mcs_max", "dl_snr_offset_db", "dl_interference", "gnb_tx_dbm",
+                  "ue_nf_db")                                 # NR engine downlink (dl=True)
+HANDOVER_FIELDS = ("a3_offset_db", "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc")    # n_cells > 1
+INTERFERENCE_FIELDS = ("ul_interference", "dl_interference", "li_alpha")    # n_cells > 1 and noise_model="thermal"
+UL_PC_FIELDS = ("ul_pc_p0_dbm", "ul_pc_alpha")               # ul_pc_on
+TR38901_FIELDS = ("tr38901_scenario", "tr38901_los", "o2i_indoor_frac", "o2i_model", "inf_clutter_density",
+                  "inf_clutter_size_m", "inf_clutter_height_m")             # channel="tr38901"
+BLOCKAGE_FIELDS = ("blockage_radius_m", "blockage_loss_db")                 # blockage=True
+FADING_FIELDS = ("fading_rho_per_ms", "ue_speed_mps", "fading_doppler", "doppler_min_speed_mps")   # fading=True
+# frame fields the multi-cell legacy engine (NetSlotMC) reads: only through ul_slot_ms, which converts the A3
+# time-to-trigger and the handover interruption to UL slots (ttt_slots, ho_int_slots), so only with n_cells > 1
+NETSLOTMC_FRAME_FIELDS = ("mu", "tdd_pattern", "special_split", "special_ul_data", "ul_data_symbols")
+
+
+def _switch_unread(cfg, nr):
+    """Fields of the radio / cell / NR groups that cfg's switches leave unread (nr: the NR engine, else NetSlotMC)."""
+    off = set()
+    if nr and not cfg.dl:
+        off |= set(DL_ONLY_FIELDS)
+    if cfg.n_cells == 1:
+        off |= set(HANDOVER_FIELDS) | set(INTERFERENCE_FIELDS)
+    elif cfg.noise_model != "thermal":
+        off |= set(INTERFERENCE_FIELDS)
+    if not cfg.ul_pc_on:
+        off |= set(UL_PC_FIELDS)
+    if cfg.noise_model == "thermal":
+        off.add("ni_fixed_dbm")
+    else:
+        off |= {"gnb_nf_db", "ue_nf_db"}
+    if cfg.channel != "tr38901":
+        off |= set(TR38901_FIELDS)
+    if cfg.channel != "radio_map":
+        off.add("radio_map_path")
+    if not cfg.blockage:
+        off |= set(BLOCKAGE_FIELDS)
+    if nr:
+        if not cfg.fading:
+            off |= set(FADING_FIELDS)
+        elif cfg.fading_doppler != "per_robot":
+            off.add("doppler_min_speed_mps")
+        if cfg.tbs_mode != "lena":
+            off.add("lena_ref_sc_per_rb")
+    return off
+
+
 def fields_read_by(level, cfg=None):
-    """NRConfig fields that the engine make_engine(level, ..., cfg) actually reads."""
+    """NRConfig fields that the engine make_engine(level, ..., cfg) actually reads. Without cfg: the fields a level
+    may read under some configuration (whole groups); with cfg: only those its switches make it read (DL fields only
+    with dl=True, handover and interference fields only with several cells, the noise fields of the noise model, the
+    fields of the selected channel model, blockage and fading fields only when on, lena_ref_sc_per_rb only with
+    tbs_mode="lena")."""
     groups = {"L0": ("app", "proto", "l0"), "L0DR": ("app", "proto", "l0dr"), "L1": ("app", "proto", "l1"),
               "L2": ("app", "frame", "nr", "link", "radio", "multicell", "nr_multicell", "traffic")}.get(
         level, ("app", "proto"))
-    if level == "L2-legacy" and cfg is not None and not cfg.is_legacy_cell():
-        groups = ("app", "proto", "frame", "link", "radio", "multicell")        # NetSlotMC
+    netslot_mc = level == "L2-legacy" and cfg is not None and not cfg.is_legacy_cell()
+    if netslot_mc:
+        groups = ("app", "proto", "link", "radio", "multicell")        # NetSlotMC
     read = {f for g in groups for f in FIELD_GROUPS[g]} | set(FIELD_GROUPS["wrappers"])
+    if netslot_mc and cfg.n_cells > 1:
+        read |= set(NETSLOTMC_FRAME_FIELDS)
     if level == "L2":
         read.add("rng")                # engine RNG of the NR engine (nr_rng.py)
         if cfg is not None:            # the UL grant model reads either the lumped SR delay or the BSR pipeline
             read -= set(BSR_PIPELINE_FIELDS) if cfg.ul_grant_model == "lumped" else {"sr_grant_delay_slots",
                                                                                      "proactive_grant"}
+    if cfg is not None and (level == "L2" or netslot_mc):
+        read -= _switch_unread(cfg, nr=level == "L2")
     if cfg is not None and cfg.traffic is not None and not any(m.generates for m in cfg.traffic):
         read.add("traffic")            # policy() only: the submit() path every level has
     return read
@@ -570,7 +632,10 @@ class NRConfig:
                       if f.name not in read and getattr(self, f.name) != getattr(ref, f.name))
 
     def with_(self, **kw):
-        """A copy of this config with the given fields replaced (dataclasses.replace)."""
+        """A copy of this config with the given fields replaced (dataclasses.replace). An explicit
+        fading_rho_per_ms clears an inherited ue_speed_mps, which would otherwise recompute it."""
+        if "fading_rho_per_ms" in kw and "ue_speed_mps" not in kw:
+            kw["ue_speed_mps"] = None
         return replace(self, **kw)
 
     # ---------------- cells ----------------
@@ -664,31 +729,46 @@ lena_match = lena_like
 
 def _ul_slots(n_ul, cfg_pattern="DDDSU", mu=1):
     """UL-slot units of the calibration fits -> slots (DDDSU: one UL slot per 5 slots)."""
-    return int(round(n_ul * len(cfg_pattern) / cfg_pattern.count("U")))
+    n_u = cfg_pattern.count("U")
+    if n_u == 0:
+        raise ValueError(f"tdd_pattern {cfg_pattern!r} has no U slot; the calibrated UL-slot delays need one")
+    return int(round(n_ul * len(cfg_pattern) / n_u))
+
+
+def _calibrated(base, kw, sr_period_ms, sr_grant_ul, harq_rtt_ul):
+    """Merge kw into base, then fill the calibrated timers that kw does not set from the merged mu and tdd_pattern:
+    SR period sr_period_ms in slots, SR -> grant and HARQ RTT in UL-slot units of the fits (_ul_slots)."""
+    base.update(kw)
+    mu, pat = base.get("mu", 1), base.get("tdd_pattern", "DDDSU")
+    derived = {"sr_period_slots": lambda: int(round(sr_period_ms * 2 ** mu)),
+               "sr_grant_delay_slots": lambda: _ul_slots(sr_grant_ul, pat),
+               "ul_harq_rtt_slots": lambda: _ul_slots(harq_rtt_ul, pat)}
+    for k, f in derived.items():
+        if k not in kw:
+            base[k] = f()
+    return NRConfig(**base)
 
 
 def srsran_like(**kw):
     """Fitted to srsRAN UL one-way delay (Zenodo 13754300, calib/params_latency.json 'srs'): SR period
     20 ms, SR -> grant 1 UL slot, HARQ RTT 4 UL slots, BLER target 0.5%, processing offset 2.5 ms, no
     proactive grants (W1 1.25 ms, KS 0.12 on the fit set). UL MCS capped at 15 (SE 2.41) for the
-    measured bench UL SE ceiling of about 2.4-3 (calib/params_link.json)."""
-    base = dict(mu=1, tdd_pattern="DDDSU", sr_period_slots=int(20 * 2 ** 1), sr_grant_delay_slots=_ul_slots(1),
-                ul_harq_rtt_slots=_ul_slots(4), bler_target=0.005, proc_offset_ms=2.5, proactive_grant="off",
+    measured bench UL SE ceiling of about 2.4-3 (calib/params_link.json). The slot counts follow the mu and
+    tdd_pattern of the call (fit: mu=1, DDDSU)."""
+    base = dict(mu=1, tdd_pattern="DDDSU", bler_target=0.005, proc_offset_ms=2.5, proactive_grant="off",
                 ul_mcs_max=15)
-    base.update(kw)
-    return NRConfig(**base)
+    return _calibrated(base, kw, sr_period_ms=20, sr_grant_ul=1, harq_rtt_ul=4)
 
 
 def oai_like(**kw):
     """Fitted to OAI UL one-way delay, 5/10-slot TDD periods (params_latency.json 'oai'): proactive UL
     grant once per TDD period, BLER target 0.5%, processing offset 2.25 ms (OAI 20-slot periods need
     about 7.25 ms), SR period 20 ms / SR -> grant 10 UL slots (irrelevant with proactive grants),
-    HARQ RTT 4 UL slots; UL MCS capped at 15 (bench OAI UL SE ceiling median 2.36)."""
+    HARQ RTT 4 UL slots; UL MCS capped at 15 (bench OAI UL SE ceiling median 2.36). The slot counts follow the
+    mu and tdd_pattern of the call (fit: mu=1, DDDSU)."""
     base = dict(mu=1, tdd_pattern="DDDSU", proactive_grant="per_period", bler_target=0.005, proc_offset_ms=2.25,
-                sr_period_slots=int(20 * 2 ** 1), sr_grant_delay_slots=_ul_slots(10),
-                ul_harq_rtt_slots=_ul_slots(4), ul_mcs_max=15)
-    base.update(kw)
-    return NRConfig(**base)
+                ul_mcs_max=15)
+    return _calibrated(base, kw, sr_period_ms=20, sr_grant_ul=10, harq_rtt_ul=4)
 
 
 def multicell(n_cells=3, **kw):
