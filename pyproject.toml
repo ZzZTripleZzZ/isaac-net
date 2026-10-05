@@ -126,5 +126,6 @@ ignore = ["E701", "E702", "E731", "E741"]
 "isaac_net/isaac/netmodule.py" = ["F401", "F841"]
 # Merged components, kept as delivered (dead locals in nrconfig's PHY; lab validation scripts).
 "isaac_net/core/phy.py" = ["F841"]
+"tests/nr_frozen/base/phy.py" = ["F841"]   # frozen copy of core/phy.py (tests/scripts/refreeze_nr.py)
 "benchmarks/ns3/*" = ["E402", "F841"]
 "tests/bridges/*" = ["E402", "F841"]
