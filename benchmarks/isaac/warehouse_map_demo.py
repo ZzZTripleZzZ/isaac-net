@@ -98,7 +98,6 @@ def run_arm(env, steps, seed, R):
 
 
 def main():
-    import torch
 
     from isaac_net.examples.isaac_warehouse_env import (WAREHOUSE_USD, WarehouseFleetEnv, make_warehouse_cfg,
                                                           warehouse_isaac_cfg, warehouse_net_config)
@@ -125,8 +124,8 @@ def main():
         g = m.gain.view(m.C, m.H, m.W)
         rec["map"] = dict(C=m.C, H=m.H, W=m.W, bounds=m.bounds, gain_min_db=float(g.min()), gain_max_db=float(g.max()),
                           gain_mean_db=float(g.mean()))
-        if "los_prob" in m.meta:
-            rec["map"]["los_mean"] = [float(x) for x in torch.as_tensor(m.meta["los_prob"]).float().mean((1, 2))]
+        if m.los_prob is not None:
+            rec["map"]["los_mean"] = [float(x) for x in m.los_prob.float().mean(1)]
         arms = dict(map=nr_map, logdist=nr_map.with_(channel="log_distance", radio_map_path=None),
                     map_blockage=nr_map.with_(blockage=True))
         rec["arms"] = {}

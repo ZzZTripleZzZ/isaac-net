@@ -52,6 +52,13 @@ class ExportResult:
     skipped: dict                        # {reason: prim count}
     prims: list = field(default_factory=list)   # [(path, type, material, source, triangles)]
 
+    def obstacle_z(self, bounds, H: int, W: int) -> "np.ndarray":
+        """Obstacle height map [H, W] of the exported triangles on a radio-map grid (heightmap.height_map; the
+        export's exclude / z_max options decide which prims count, so exclude the robots and drop the ceiling)."""
+        from .heightmap import height_map, scene_triangles
+        v, f = scene_triangles(self.out_dir)
+        return height_map(v, f, bounds, H, W)
+
     def coverage(self) -> float:
         """Share of triangles whose material came from a rule other than the default."""
         n = max(self.n_triangles, 1)
