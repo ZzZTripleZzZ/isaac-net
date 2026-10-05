@@ -5,6 +5,13 @@ env offset), so an env draws the same numbers whether it lives in shard 0 or 1. 
 cross the shard boundary, on the prototype, surrogate-free bound and L2-legacy levels, with background load and the
 energy model on top (CPU reference), and (gpu) on the L2-legacy graph and triton backends and L1 triton. The NR
 engine L2 is not shard-invariant (global-RNG stepping draws) and says so.
+
+Bitwise vs rounding on CPU: the draws, decisions and every integer or boolean output are compared exactly
+everywhere. The float outputs of the levels with a link model (L1, L2-legacy: log2 / exp in the rate and BLER) are
+compared exactly on CUDA (the claim) but to float32 rounding on CPU, because CPU kernels (vectorized log / exp, and
+reductions) may pick a different code path or summation order for a different tensor shape, and a shard has fewer
+envs than the unsharded engine. macOS arm64 shows it: queue_bytes 2592.6250 vs 2592.6252 at L2-legacy, split [2, 5].
+A real shard bug (a wrong env offset, a reset hitting the wrong env) changes draws and decisions, which stay exact.
 """
 import pytest
 import torch
@@ -35,7 +42,17 @@ def _drive(net, dev, steps=10, seed=0, pos=True, resets=((3, (1, 4, 5)), (6, (0,
     return outs
 
 
-def _same(a, b):
+CPU_ROUNDING_LEVELS = {"L1", "L2-legacy"}
+
+
+def _close(u, v, exact):
+    """Exact unless `exact` is False, then float tensors to float32 rounding (integers and booleans stay exact)."""
+    if exact or not v.is_floating_point():
+        return torch.equal(u, v)
+    return torch.allclose(u, v, rtol=1e-5, atol=1e-4, equal_nan=True)
+
+
+def _same(a, b, exact=True):
     for x, y in zip(a, b):
         assert x.keys() == y.keys()
         for k in y:
@@ -44,7 +61,7 @@ def _same(a, b):
                 continue
             if v.is_floating_point():
                 u, v = u.nan_to_num(-7.0), v.nan_to_num(-7.0)
-            assert torch.equal(u.cpu(), v.cpu()), k
+            assert _close(u.cpu(), v.cpu(), exact), k
     return True
 
 
@@ -69,8 +86,9 @@ def test_two_shards_bitwise_cpu(level, split):
     un = make_engine(level, E, R, "cpu", cfg, seed=11)
     sh = ShardedEngine(level, E, R, ["cpu", "cpu"], cfg, seed=11, split=split)
     assert sh.shard_invariant
-    _same(_drive(sh, "cpu", pos=level != "L1"), _drive(un, "cpu", pos=level != "L1"))
-    assert torch.equal(sh.clock, un.clock) and torch.equal(sh.queued(), un.queued())
+    exact = level not in CPU_ROUNDING_LEVELS
+    _same(_drive(sh, "cpu", pos=level != "L1"), _drive(un, "cpu", pos=level != "L1"), exact)
+    assert torch.equal(sh.clock, un.clock) and _close(sh.queued(), un.queued(), exact)
 
 
 @pytest.mark.parametrize("level", ["L1", "L2-legacy"])
@@ -79,8 +97,8 @@ def test_two_shards_with_background_and_energy(level):
                    energy=EnergyConfig(initial_soc=(0.3, 1.0)))
     un = make_engine(level, E, R, "cpu", cfg, seed=2)
     sh = ShardedEngine(level, E, R, ["cpu", "cpu"], cfg, seed=2, split=[4, 3])
-    _same(_drive(sh, "cpu", pos=True), _drive(un, "cpu", pos=True))
-    assert torch.equal(sh.energy_obs(), un.energy_obs())
+    _same(_drive(sh, "cpu", pos=True), _drive(un, "cpu", pos=True), exact=False)
+    assert _close(sh.energy_obs(), un.energy_obs(), exact=False)
 
 
 def test_locate_and_mapping():
