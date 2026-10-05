@@ -51,7 +51,11 @@ def _drive(net, E, resets=(), steps=STEPS):
     return outs
 
 
-def _rows_equal(a, b, rows_a, rows_b=None, steps=None):
+def _rows_equal(a, b, rows_a, rows_b=None, steps=None, float_tol=False):
+    """Every output equal row by row. Integer and boolean outputs (draws, decisions) are always compared exactly;
+    with float_tol the float outputs are compared to float32 rounding, which the levels with a link model
+    (L2-legacy: log2 / exp in the rate and BLER) need on the CPU, where a kernel may round differently for a
+    different tensor shape (as tests/test_sharded.py documents; seen on Linux x86 CI, not on macOS arm64)."""
     rows_b = rows_a if rows_b is None else rows_b
     n = 0
     for k, (x, y) in enumerate(zip(a, b)):
@@ -62,9 +66,17 @@ def _rows_equal(a, b, rows_a, rows_b=None, steps=None):
             u, v = x[name][rows_a], y[name][rows_b]
             if u.is_floating_point():
                 u, v = u.nan_to_num(-7.0), v.nan_to_num(-7.0)
+                if float_tol and u.device.type == "cpu":
+                    assert torch.allclose(u, v, rtol=1e-5, atol=1e-4), (k, name)
+                    n += 1
+                    continue
             assert torch.equal(u, v), (k, name)
             n += 1
     assert n > 0
+
+
+def _tol(case):
+    return CASES[case][0] == "L2-legacy"
 
 
 def _make(case, E):
@@ -77,7 +89,7 @@ def test_env0_independent_of_E(case):
     resets = {3: [1]}
     a = _drive(_make(case, 3), 3, resets)
     b = _drive(_make(case, 6), 6, resets)
-    _rows_equal(a, b, slice(0, 3))
+    _rows_equal(a, b, slice(0, 3), float_tol=_tol(case))
     assert a[0]["sinr_db"].abs().sum() > 0
 
 
@@ -85,15 +97,15 @@ def test_env0_independent_of_E(case):
 def test_other_resets_do_not_shift_env0(case):
     a = _drive(_make(case, 4), 4, {2: [0]})
     b = _drive(_make(case, 4), 4, {0: [1], 1: [1, 2], 2: [0]})
-    _rows_equal(a, b, 0)                                  # every step: env 0's draws never see env 1 / 2's resets
-    _rows_equal(a, b, 3)
+    _rows_equal(a, b, 0, float_tol=_tol(case))            # every step: env 0's draws never see env 1 / 2's resets
+    _rows_equal(a, b, 3, float_tol=_tol(case))
 
 
 @pytest.mark.parametrize("case", list(CASES))
 def test_partial_reset_leaves_others_untouched(case):
     a = _drive(_make(case, 4), 4)
     b = _drive(_make(case, 4), 4, {2: [1]})
-    _rows_equal(a, b, [0, 2, 3])
+    _rows_equal(a, b, [0, 2, 3], float_tol=_tol(case))
     # env 1 after its reset is a new episode: its channel differs from the run without the reset
     assert not torch.equal(a[4]["sinr_db"][1], b[4]["sinr_db"][1])
 
