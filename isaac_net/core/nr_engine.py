@@ -40,6 +40,13 @@ linear ramp over rician_k_ramp_slots slots that starts at the first slot of that
 pure function of g and the ramp state (_k_at), which the fused Triton kernel evaluates the same way. With
 fading_rician off none of this code runs.
 
+Frequency-correlated fading (cfg.fading_freq_corr, docs/channels.md "Frequency-selective fading"): the AR(1) innovation
+z [E,R,(C),S,2] (and the initial state) becomes L z, with L [S,S] a square root of the subband correlation matrix of
+an exponential power-delay profile with rms delay spread tau (subband_corr). With fading_delay_spread_ns, L is one
+constant; otherwise every link draws a log-normal tau (TR 38.901 Table 7.5-6, LOS and NLOS values, the state from
+set_los) at reset and indexes a precomputed table of L on a log grid of tau (fading_ds_grid), so the step stays a
+fixed-shape gather and a batched [S,S] matmul. With fading_freq_corr off none of this code runs.
+
 Capture (nr_fast.py): with self._tdev set to a 0-dim long device tensor holding t, every time-dependent value of the
 step is computed on the device from it, and host decisions depend only on t through the TDD / SR / CQI schedule key
 and the fading step of the first slot, so one captured graph per (key, first fading step) serves every control step.
@@ -53,7 +60,7 @@ import torch
 from .config import NRConfig
 from .mac_dl import DlMac
 from .mac_ul import UlMac
-from .nr_rng import FADING, H0, KFAC, KPHI, make_rng
+from .nr_rng import DSPR, FADING, H0, KFAC, KPHI, make_rng
 from .queues import env_mask, onehot, reset_where
 from .radio import CellAssociation, pick
 
@@ -68,6 +75,98 @@ def rician_k_params(scenario):
     """(mu_K, sigma_K) dB of a TR 38.901 scenario name (aliases as config.tr38901_scenario accepts)."""
     from .channels.tr38901 import scenario_name
     return RICIAN_K_DB[scenario_name(scenario)]
+
+
+# rms delay spread lgDS = log10(DS / 1 s), (mu, sigma) per scenario and LOS state, fc in GHz: TR 38.901 V17.0.0 Table
+# 7.5-6 Parts 1-3. Checked on 2026-10-05 against Sionna's parameter files of V16.1 (src/sionna/phy/channel/tr38901/
+# models/v16_1/*.json; the V17.0.0 rows are those of V16.1) and, for RMa, InH and InF, against the itecspec.com mirror
+# of clause 7.5 (Rel-19; those rows are unchanged). Rel-19 (note 8, the 7-24 GHz study) updated UMi and UMa to
+# UMi LOS -0.18 lg(1 + fc) - 7.28 / 0.39, NLOS -0.22 lg(1 + fc) - 6.87 / 0.19 lg(1 + fc) + 0.22, UMa LOS
+# -7.067 - 0.0794 lg(fc) / 0.57 + 0.026 lg(fc), NLOS -6.47 - 0.134 lg(fc) / 0.39; the V17.0.0 values are kept here,
+# as in the rest of the package. Frequency floors (notes 6, 7): UMa and InH use fc = 6 GHz below 6 GHz, UMi fc = 2 GHz
+# below 2 GHz. InF: V the hall volume (m^3), S its total surface (walls + floor + ceiling, m^2).
+def _lg(x):
+    return math.log10(x)
+
+
+LG_DS = {
+    "UMi": lambda fc, los: (-0.24 * _lg(1 + max(fc, 2.0)) - 7.14, 0.38) if los else
+    (-0.24 * _lg(1 + max(fc, 2.0)) - 6.83, 0.16 * _lg(1 + max(fc, 2.0)) + 0.28),
+    "UMa": lambda fc, los: (-6.955 - 0.0963 * _lg(max(fc, 6.0)), 0.66) if los else
+    (-6.28 - 0.204 * _lg(max(fc, 6.0)), 0.39),
+    "RMa": lambda fc, los: (-7.49, 0.55) if los else (-7.43, 0.48),
+    "InH": lambda fc, los: (-0.01 * _lg(1 + max(fc, 6.0)) - 7.692, 0.18) if los else
+    (-0.28 * _lg(1 + max(fc, 6.0)) - 7.173, 0.10 * _lg(1 + max(fc, 6.0)) + 0.055),
+}
+# InF default hall (length x width x height, m) of TR 38.901 Table 7.8-7 as Sionna implements it (inf_scenario.py,
+# _DEFAULT_HALL_DIMENSIONS; not checked against the spec text): SL and DH 120 x 60 x 10 (V/S = 4.0), DL and SH
+# 300 x 150 x 10 (V/S = 4.545)
+INF_HALL_M = {"InF-SL": (120.0, 60.0, 10.0), "InF-DL": (300.0, 150.0, 10.0), "InF-SH": (300.0, 150.0, 10.0),
+              "InF-DH": (120.0, 60.0, 10.0)}
+
+
+def lg_ds_params(cfg, los):
+    """(mu_lgDS, sigma_lgDS) of cfg.tr38901_scenario for the LOS (los=True) or NLOS state at cfg.carrier_ghz."""
+    from .channels.tr38901 import scenario_name
+    sc = scenario_name(cfg.tr38901_scenario)
+    if not sc.startswith("InF"):
+        return LG_DS[sc](cfg.carrier_ghz, los)
+    sigma = 0.15 if los else 0.19
+    if cfg.inf_lg_ds is not None:
+        return cfg.inf_lg_ds, sigma
+    if cfg.inf_hall_volume_m3 is not None:
+        vs = cfg.inf_hall_volume_m3 / cfg.inf_hall_surface_m2
+    else:
+        a, b, h = INF_HALL_M[sc]
+        vs = a * b * h / (2 * (a * b + a * h + b * h))
+    return (_lg(26 * vs + 14) - 9.35 if los else _lg(30 * vs + 32) - 9.44), sigma
+
+
+def subband_centers_hz(cfg):
+    """Center frequency of every subband (RBG) relative to the carrier edge, Hz [S] (float64): PRBs per RBG x 12 x
+    SCS, the last RBG possibly narrower (cfg.subband_prbs)."""
+    w = torch.tensor([float(x) for x in cfg.subband_prbs], dtype=torch.float64) * (12 * cfg.scs_khz * 1e3)
+    return torch.cumsum(w, 0) - w / 2
+
+
+def subband_corr(tau_s, centers_hz):
+    """Real correlation matrix [..., S, S] (float64) of the subband fading for rms delay spreads tau_s [...] (s).
+
+    Exponential power-delay profile P(t) = exp(-t / tau) / tau, t >= 0. The complex channel H(f) = sum of the taps
+    a_k exp(-j 2 pi f t_k), uncorrelated taps of mean power P(t_k), has the frequency correlation
+        rho(df) = E[H(f + df) H*(f)] = int_0^inf P(t) exp(-j 2 pi df t) dt = 1 / (1 + j 2 pi df tau).
+    The exact circular model would give the innovation w = x + j y the complex covariance R_ij = rho(f_i - f_j), that
+    is, the real 2S x 2S covariance [[Re R, -Im R], [Im R, Re R]] / 2 for (x, y). The engine keeps the real and
+    imaginary parts independent and identically correlated, x = L z_x / sqrt 2, y = L z_y / sqrt 2 with one real
+    L L^T = Cm, so E[w w^H] = Cm and E[w w^T] = 0 (still circular). We take the magnitude-consistent choice
+        Cm_ij = |rho(f_i - f_j)| = 1 / sqrt(1 + (2 pi (f_i - f_j) tau)^2),
+    because
+      * Cm_ii = 1: every subband keeps unit power, so the AR(1) recursion h <- rho_t h + sqrt(1 - rho_t^2) w stays
+        stationary with E|h_s|^2 = 1, and its temporal correlation rho_t^k per subband is unchanged;
+      * for circular Gaussian h the power correlation between subbands is corr(|h_i|^2, |h_j|^2) = |E h_i h_j^*|^2,
+        here Cm_ij^2 = |rho|^2 = 1 / (1 + (2 pi df tau)^2), the same as the exact complex model; the engine's gain
+        uses only |h|^2 (Rayleigh) or |a e^{j phi} + b h|^2 (Rician), so the Rayleigh gains have the exact model's
+        joint statistics up to the (unobservable) phase rotation arg rho = -atan(2 pi df tau);
+      * Cm is positive definite: 1 / sqrt(1 + (2 pi tau f)^2) is the Fourier transform of a positive function (a
+        modified Bessel function K_0, up to a scale), so by Bochner's theorem every Cm is a valid covariance.
+    With Rician fading the cross term Re(e^{-j phi} h) correlates across subbands as Cm_ij / 2 instead of the exact
+    Re(rho) / 2, slightly more correlated (Re rho = 1 / (1 + (2 pi df tau)^2) <= Cm_ij)."""
+    df = centers_hz[:, None] - centers_hz[None, :]
+    x = 2 * math.pi * df * torch.as_tensor(tau_s, dtype=torch.float64)[..., None, None]
+    return 1.0 / torch.sqrt(1.0 + x * x)
+
+
+def corr_sqrt(c):
+    """Lower-triangular L [..., S, S] with L L^T = c and unit row norms (unit diagonal of L L^T exactly, in float64):
+    the Cholesky factor, with a diagonal jitter for nearly singular c (delay spreads far below 1 / bandwidth, where
+    all subbands are almost fully correlated) and rows renormalized after it."""
+    eye = torch.eye(c.shape[-1], dtype=c.dtype)
+    for eps in (0.0, 1e-12, 1e-10, 1e-8, 1e-6):
+        L, info = torch.linalg.cholesky_ex(c + eps * eye)
+        if not bool((info != 0).any()):
+            return L / L.norm(dim=-1, keepdim=True)
+    raise ValueError("subband correlation matrix is not positive definite")
+
 
 class NRNet:
     """Drop-in replacement for netsim.NetSlot (same add_frames / step / queued / stats API) with an
@@ -86,6 +185,7 @@ class NRNet:
         self.E, self.R, self.dev = E, R, device
         self.rician = self.cfg.rician_mode                # None | "fixed" | "los" (config.NRConfig.rician_mode)
         self.k_ramp = self.cfg.rician_k_ramp_slots if self.rician == "los" else 0
+        self.fc_mode = self.cfg.freq_corr_mode           # None | "fixed" | "los" (config.NRConfig.freq_corr_mode)
         self.sizes = torch.tensor(sizes, device=device, dtype=torch.float32)
         self.S = self.cfg.n_subbands
         meta = [("cls", torch.long), ("det", torch.bool), ("hid", torch.long), ("f_nact", torch.long),
@@ -101,6 +201,8 @@ class NRNet:
         self.trace_frames = None
         self.trace_frames_dl = None
         self.log_sinr = False      # multi-cell: per-TB SINR samples in self.sinr_log (host copies; sweeps only)
+        if self.fc_mode:
+            self._init_fcorr()
         if self.C > 1:
             self._init_cells()
         elif self.cfg.rlf:
@@ -156,6 +258,9 @@ class NRNet:
         else:              # new episode for the reset envs, then their draws (rows of other envs are discarded)
             self.rng.reset_mask(None if env_ids is None else env_mask(E, env_ids, d))
             h0 = self.rng.reset_normal_all(H0, R * math.prod(cdim) * S * 2).view(E, R, *cdim, S, 2) / math.sqrt(2)
+        if self.fc_mode:                    # stationary start: the initial state has the subband correlation too
+            self._reset_fcorr(env_ids, cdim)
+            h0 = self._fcorr(h0)
         if env_ids is None:
             self.h = h0
             self.last_g = None
@@ -211,11 +316,66 @@ class NRNet:
         if self.rician == "los":
             self.k_fresh = self.k_fresh | m
 
+    def _init_fcorr(self):
+        """Square roots of the subband correlation (subband_corr): fixed delay spread -> fc_L [S,S]; per-link
+        delay spread -> fc_tab [G,S,S] on the log grid fc_grid_ns of fading_ds_grid (G points)."""
+        cfg = self.cfg
+        f = subband_centers_hz(cfg)
+        if self.fc_mode == "fixed":
+            self.fc_L = corr_sqrt(subband_corr(cfg.fading_delay_spread_ns * 1e-9, f)).float().to(self.dev)
+            return
+        lo, hi, G = cfg.fading_ds_grid
+        self.fc_grid_ns = torch.logspace(math.log10(lo), math.log10(hi), int(G), dtype=torch.float64)
+        self.fc_tab = corr_sqrt(subband_corr(self.fc_grid_ns * 1e-9, f)).float().to(self.dev).contiguous()
+        self.fc_lgds = (lg_ds_params(cfg, False), lg_ds_params(cfg, True))       # ((mu, sigma) NLOS, LOS)
+
+    def _ds_index(self, lg):
+        """Nearest grid point (in log tau) of lgDS = log10(tau / 1 s) values, clamped to the grid ends."""
+        lo, hi, G = self.cfg.fading_ds_grid
+        u = (lg + 9.0 - math.log10(lo)) * ((int(G) - 1) / (math.log10(hi) - math.log10(lo)))
+        return torch.round(u).clamp(0, int(G) - 1).long()
+
+    def _reset_fcorr(self, env_ids, cdim):
+        """Per-link delay spread of the reset envs (fc_mode "los"): two independent normals per link (site DSPR, keyed
+        by (seed, env, episode); rng="global": the engine's generator), lgDS = mu + sigma z for the NLOS and LOS
+        state, kept as grid indices fc_idx_nlos / fc_idx_los [E,R,(C)]; the live index fc_idx starts at the NLOS
+        value until set_los delivers a LOS state."""
+        if self.fc_mode != "los":
+            return
+        E, R, d = self.E, self.R, self.dev
+        n = R * math.prod(cdim) * 2
+        if self.rng is None:
+            z = torch.randn(E, n, device=d, generator=self.gen)
+        else:
+            z = self.rng.reset_normal_all(DSPR, n)
+        z = z.view(E, R, *cdim, 2)
+        (mn, sn), (ml, sl) = self.fc_lgds
+        i_n, i_l = self._ds_index(mn + sn * z[..., 0]), self._ds_index(ml + sl * z[..., 1])
+        if env_ids is None:
+            self.fc_idx_nlos, self.fc_idx_los, self.fc_idx = i_n, i_l, i_n.clone()
+            return
+        m = env_mask(E, env_ids, d)
+        self.fc_idx_nlos = reset_where(self.fc_idx_nlos, m, i_n)
+        self.fc_idx_los = reset_where(self.fc_idx_los, m, i_l)
+        self.fc_idx = reset_where(self.fc_idx, m, i_n)
+
+    def _fcorr(self, z):
+        """Correlate z [E,R,(C),S,2] across the subbands: L z per link (real and imaginary parts alike)."""
+        L = self.fc_L if self.fc_mode == "fixed" else self.fc_tab[self.fc_idx]
+        return L @ z
+
     def set_los(self, los, blocked=None):
         """LOS state of every link (bool [E,R,C], or [E,R] with one cell) and optionally its blockage: the Rician K
         target becomes the link's LOS draw k_los where LOS and not blocked, else 0. Eager (before the step); the
         next step() / step_cells() ramps K to it. Right after a reset an env's first LOS state applies at once.
-        No-op unless rician_mode == "los"."""
+        Per-link delay spread (freq_corr_mode "los"): the link's LOS or NLOS draw, NLOS where blocked; applies from
+        the next slot (no ramp: the AR(1) state carries the change over the coherence time).
+        No-op unless rician_mode == "los" or freq_corr_mode == "los"."""
+        if self.fc_mode == "los":
+            fon = los if blocked is None else los & ~blocked
+            if self.C == 1 and fon.dim() == 3:
+                fon = fon[..., 0]
+            self.fc_idx = torch.where(fon, self.fc_idx_los, self.fc_idx_nlos)
         if self.rician != "los":
             return
         on = los if blocked is None else los & ~blocked
@@ -356,6 +516,8 @@ class NRNet:
                 z = torch.randn_like(self.h)
             else:
                 z = self.rng.step_normal(FADING, rel, self.h[0].numel()).view(self.h.shape)
+            if self.fc_mode:
+                z = self._fcorr(z)
             if self.fading_rho_ms is None:
                 rho = self.cfg.fading_rho_per_ms ** (dt * self.cfg.slot_ms)
                 self.h = rho * self.h + math.sqrt(1 - rho ** 2) * z / math.sqrt(2)

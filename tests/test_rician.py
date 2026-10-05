@@ -88,9 +88,11 @@ def test_a_off_is_bitwise_the_pre_feature_engine(cfg):
 
 
 def test_a_frozen_fading_code_is_the_live_off_path():
-    """The frozen functions used as the reference above are the live ones minus the Rician branch."""
+    """The frozen functions used as the reference above are the live ones minus the Rician branch (and minus the
+    frequency-correlation branch of _evolve, tests/test_freqfade.py)."""
     import inspect
-    live = inspect.getsource(NRNet._evolve)
+    live = inspect.getsource(NRNet._evolve).replace(
+        "            if self.fc_mode:\n                z = self._fcorr(z)\n", "")
     assert live == inspect.getsource(frozen.NRNet._evolve)
     assert "return 10 * torch.log10((self.h ** 2).sum(-1).clamp(min=1e-6))" in inspect.getsource(NRNet._gain)
 

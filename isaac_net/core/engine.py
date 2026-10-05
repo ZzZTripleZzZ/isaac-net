@@ -771,7 +771,8 @@ class NREngine:
             if self._los_fn is not None:
                 self.radio.set_los_callback(self._los_fn)
         pg = self.radio.pathgain_db(pos) if blockers is None else self.radio.pathgain_db(pos, blockers)
-        if self.net.rician == "los":      # Rician K from the radio's LOS state (None: no LOS state, K stays 0)
+        if self.net.rician == "los" or self.net.fc_mode == "los":   # Rician K / delay spread from the LOS state
+                                          # (None: no LOS state, K stays 0 and the delay spread NLOS)
             los = getattr(self.radio, "los_state", lambda: None)()
             if los is not None:
                 self.net.set_los(los, getattr(self.radio, "blocked_state", lambda: None)())
