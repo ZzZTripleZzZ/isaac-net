@@ -67,7 +67,7 @@ net.counters()["access"]   # rach_attempts, rach_collisions, rach_successes, rac
 
 **DRX.** A connected robot is awake (Active Time) while the inactivity timer runs, during the on-duration of its cycle, or, with `drx_ul_wake="sr"`, while it has UL data. The inactivity timer restarts in every slot in which the robot is awake and has data or a waiting HARQ process in that direction. This stands for the PDCCH of a new transmission, so the timer starts once the buffers have drained. On-durations follow the global slot clock (the SFN), so an env's resets do not move them. DL data for a dormant robot waits for the next on-duration.
 
-**Randomness and batching.** The preamble and backoff draws use the engine's counter RNG (sites 16 and 17 of `nr_rng.py`), keyed by seed, env, episode and step. An env's access process therefore does not depend on E, on other envs' resets, or on sharding (tested). All state is fixed-shape `[E, R]`, and nothing syncs with the host. The graph backend registers the stage's state with its other state and captures it. A partial reset returns the reset envs to `rach_initial` and clears their procedures.
+**Randomness and batching.** The preamble and backoff draws use the engine's counter RNG (sites 16 and 17 of `nr_rng.py`), keyed by seed, env, episode and step. An env's access process therefore does not depend on E, on other envs' resets, or on sharding (tested). All state is fixed-shape `[E, R]`, and nothing syncs with the host. The graph backend registers the stage's state with its other state and captures it, and the triton backend runs the same stage around its fused kernel. A partial reset returns the reset envs to `rach_initial` and clears their procedures.
 
 ## Backends and levels
 
@@ -75,7 +75,7 @@ net.counters()["access"]   # rach_attempts, rach_collisions, rach_successes, rac
 |:---|:---|
 | `reference` | yes |
 | `graph` | yes (same ops as the reference; GPU equivalence test `test_graph_backend_bitwise_equal_reference`) |
-| `triton` | refused in `NRTritonEngine.__init__` (`TritonUnsupported`, a `ValueError` and a `NotImplementedError`): the fused kernel has no schedulable-mask input; see [NR engine backends](configurability.md#nr-engine-backends) |
+| `triton` | yes: `AccessStage.pre` and `post` (releases, triggers, ROs, collisions, backoff, the step outputs) run as torch code around the fused kernel, which evaluates the per-slot schedulable mask (connected, DRX Active Time) itself and updates the last scheduling activity and the sleeping slots in place (constexpr `ACCESS`); with the access gate the UL and DL slots run in one kernel, because the DRX and release timers couple the two links. Equal to the reference to float rounding (GPU test `test_g2_triton_teacher_forced[ul_access]`); see [NR engine backends](configurability.md#nr-engine-backends) |
 
 Every level other than `L2` refuses `rach=True` or `drx=True` (`make_engine` raises), and `unused_fields("L2")` lists the RACH fields as unused while `rach` is False and the DRX fields while `drx` is False.
 
