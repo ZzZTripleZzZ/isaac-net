@@ -2,6 +2,12 @@
 
 All notable changes to `isaac-net` are listed here, grouped by area. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/) from 0.1.0 on: while the major version is 0, a minor release may change the API, and every such change is listed under **Changed**. [RELEASE.md](RELEASE.md) describes how a release is cut.
 
+## [Unreleased]
+
+### Documentation
+
+- The paper is on arXiv as [arXiv:2610.02370](https://arxiv.org/abs/2610.02370); the README citation, `CITATION.cff`, the project URLs and the status page link to it.
+
 ## [0.1.0] - 2026-09-30
 
 The first packaged release. It collects everything built since the initial prototype.

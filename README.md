@@ -5,6 +5,7 @@
 <p><b>GPU-batched 5G and Wi-Fi network simulation for massively parallel robot learning: thousands of Isaac Lab environments, tens to hundreds of robots per cell, one GPU, network state stepped in lockstep with physics.</b></p>
 
 <p>
+  <a href="https://arxiv.org/abs/2610.02370"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-2610.02370-B31B1B?style=flat-square&logo=arxiv&logoColor=white"></a>
   <a href="https://pypi.org/project/isaac-net/"><img alt="PyPI" src="https://img.shields.io/pypi/v/isaac-net?style=flat-square&color=4B5563"></a>
   <a href="https://www.python.org/"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-3776AB?style=flat-square&logo=python&logoColor=white"></a>
   <a href="https://pytorch.org/"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-CUDA-EE4C2C?style=flat-square&logo=pytorch&logoColor=white"></a>
@@ -18,6 +19,7 @@
 </p>
 
 <p>
+  <a href="https://arxiv.org/abs/2610.02370"><b>Paper (arXiv)</b></a> &nbsp;·&nbsp;
   <a href="https://isaacnet.zifanzhang.com"><b>Project website</b></a> &nbsp;·&nbsp;
   <a href="docs/README.md"><b>Documentation</b></a> &nbsp;·&nbsp;
   <a href="docs/tutorials/index.md"><b>Tutorials</b></a> &nbsp;·&nbsp;
@@ -440,16 +442,17 @@ The project website is [isaacnet.zifanzhang.com](https://isaacnet.zifanzhang.com
 
 ## Contributing
 
-The repository is private while the first paper is in preparation. Collaborators should start from [CONTRIBUTING.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/CONTRIBUTING.md), the open roadmap items and the starter tasks in [docs/STATUS.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/STATUS.md). Changes to the prototype levels go into the eager reference first, and the `graph` backend must stay bitwise equal to it. New MAC and PHY modelling goes into the NR engine. [RELEASE.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/RELEASE.md) describes how a release is cut.
+Contributions are welcome. Collaborators should start from [CONTRIBUTING.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/CONTRIBUTING.md), the open roadmap items and the starter tasks in [docs/STATUS.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/STATUS.md). Changes to the prototype levels go into the eager reference first, and the `graph` backend must stay bitwise equal to it. New MAC and PHY modelling goes into the NR engine. [RELEASE.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/RELEASE.md) describes how a release is cut.
 
 ## Citation
 
-The paper describing Isaac-Net is under submission; an arXiv link will be added when it is posted. Zifan Zhang and Mingzhe Han contributed equally.
+The paper describing Isaac-Net is on arXiv: [Network-in-the-Loop at Scale: GPU-Batched 5G Simulation for Massively Parallel Robot Learning](https://arxiv.org/abs/2610.02370) (arXiv:2610.02370, [PDF](https://arxiv.org/pdf/2610.02370)). Zifan Zhang and Mingzhe Han contributed equally.
 
 ```bibtex
 @article{zhang2026isaacnet,
   title   = {Network-in-the-Loop at Scale: GPU-Batched 5G Simulation for Massively Parallel Robot Learning},
   author  = {Zhang, Zifan and Han, Mingzhe and Athreya, Kannan and Liu, Yuchen},
+  journal = {arXiv preprint arXiv:2610.02370},
   year    = {2026},
   note    = {Zifan Zhang and Mingzhe Han contributed equally}
 }

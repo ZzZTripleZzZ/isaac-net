@@ -36,7 +36,7 @@ The templates are in `scripts/hazel/` in the repository. They hard-code the Haze
 
 | Step | Template | Partition | What it does | Time |
 |:---|:---|:---|:---|---:|
-| 0 | (by hand) | login | copy the code: `git archive main \| ssh hazel "tar x -C $B/repo"` (the repository is private and the cluster has no deploy key) | |
+| 0 | (by hand) | login | copy the code: `git archive main \| ssh hazel "tar x -C $B/repo"` (or `git clone https://github.com/ZzZTripleZzZ/isaac-net` on the login node, since the repository is public) | |
 | 1 | `install_core.sbatch` | xfer | fetches the uv binary, creates a Python 3.11 venv, installs torch cu126 and `isaac-net[dev]` | 1.7 min |
 | 2 | `core_gpu.sbatch` | gpu | `pytest -m gpu`, `pytest -m "not gpu"`, `benchmarks/bench.py` fast and reference backends, `bench_nr.py` | 10 min |
 | 3 | `install_isaaclab_kitless.sbatch` | xfer | clones Isaac Lab `release/3.0.0`, pulls `python:3.12-bookworm` as a SIF, runs `uv sync --extra rsl-rl --extra ovphysx` inside it, adds `isaac-net` (editable, `--no-deps`) and pytest | 6 min |

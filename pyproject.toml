@@ -40,6 +40,7 @@ dependencies = ["torch>=2.4", "numpy>=1.23"]
 [project.urls]
 # The repository is private until the project is released publicly; these links need repository access.
 Homepage = "https://isaacnet.zifanzhang.com"
+Paper = "https://arxiv.org/abs/2610.02370"
 Repository = "https://github.com/ZzZTripleZzZ/isaac-net"
 Documentation = "https://github.com/ZzZTripleZzZ/isaac-net/tree/main/docs"
 Changelog = "https://github.com/ZzZTripleZzZ/isaac-net/blob/main/CHANGELOG.md"

@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use Isaac-Net, please cite the paper below."
+title: "Isaac-Net: GPU-batched 5G and Wi-Fi network simulation for massively parallel robot learning"
+type: software
+version: 0.1.0
+date-released: 2026-09-30
+license: BSD-3-Clause
+repository-code: "https://github.com/ZzZTripleZzZ/isaac-net"
+url: "https://isaacnet.zifanzhang.com"
+authors:
+  - family-names: Zhang
+    given-names: Zifan
+    affiliation: "North Carolina State University"
+  - family-names: Han
+    given-names: Mingzhe
+    affiliation: "The Ohio State University"
+  - family-names: Athreya
+    given-names: Kannan
+    affiliation: "The Ohio State University"
+  - family-names: Liu
+    given-names: Yuchen
+    affiliation: "North Carolina State University"
+preferred-citation:
+  type: article
+  title: "Network-in-the-Loop at Scale: GPU-Batched 5G Simulation for Massively Parallel Robot Learning"
+  authors:
+    - family-names: Zhang
+      given-names: Zifan
+    - family-names: Han
+      given-names: Mingzhe
+    - family-names: Athreya
+      given-names: Kannan
+    - family-names: Liu
+      given-names: Yuchen
+  journal: "arXiv preprint arXiv:2610.02370"
+  year: 2026
+  url: "https://arxiv.org/abs/2610.02370"
+  notes: "Zifan Zhang and Mingzhe Han contributed equally."
