@@ -10,9 +10,9 @@ Hook names checked against mani_skill/envs/sapien_env.py on main, 2026-09-29.
 Env origins: ManiSkill GPU sim keeps each sub-scene in its own frame, so poses are already
 env-local (verify for the chosen scene builder).
 
-MuJoCo Playground variant (JAX): wrap NetModule calls with jax.dlpack <-> torch.utils.dlpack
-inside a host callback, or port the ~300 lines of NetModule to jnp; the reset contract maps to
-`jnp.where(done[:, None], init, state)` in the auto-reset wrapper.
+Network features: NetModule.obs() (IsaacNetCfg.obs_features), which NetModule.reset zeroes, so an env that
+reset since the last step does not observe its previous episode's AoI / queue / SNR.
+MuJoCo Playground (JAX) is implemented in isaac_net/mjx (NetModuleMJX).
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import torch
 from mani_skill.envs.sapien_env import BaseEnv
 
 from isaac_net import NRConfig
-from isaac_net.isaac import MessageHistory, NetModule, TrafficRequest, net_features
+from isaac_net.isaac import MessageHistory, NetModule, TrafficRequest
 
 NUM_ROBOTS = 16
 
@@ -58,6 +58,5 @@ class NetFleetManiSkill(BaseEnv):
         self.uplink.update(self._net_out["newest_cap"])
 
     def _get_obs_extra(self, info: dict):
-        feats = (net_features(self._net_out, self.net.step_dt, self.net.F) if self._net_out is not None
-                 else torch.zeros(self.num_envs, NUM_ROBOTS, 4, device=self.device))
+        feats = self.net.obs()        # [E,R,obs_dim]: zeros before the first step and for envs reset since
         return dict(server_view=self.uplink.seen.flatten(1), net=feats.flatten(1))

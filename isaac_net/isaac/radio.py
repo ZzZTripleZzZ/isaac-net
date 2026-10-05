@@ -166,13 +166,24 @@ try:
 
     @wp.kernel
     def los_blocked_kernel(mesh: wp.uint64, ue: wp.array(dtype=wp.vec3, ndim=2),
-                           gnb: wp.array(dtype=wp.vec3), env_origin: wp.array(dtype=wp.vec3),
+                           gnb: wp.array(dtype=wp.vec3, ndim=2), to_world: wp.array(dtype=wp.vec3),
                            out: wp.array(dtype=wp.int32, ndim=3)):
         """One ray per (env, robot, gNB) against a static world-frame mesh. Launch with dim=(E, R, G).
-        ue: [E,R] env-local positions, gnb: [G] env-local, env_origin: [E] world offsets."""
+
+        Every input is in the frame a blocked_fn sees, the radio frame (env-local + IsaacNetCfg.pose_offset_m):
+        ue [E,R] = the poses passed to blocked_fn, gnb [E,G] = net.radio.gnb_env (per-env gNB positions, DR
+        offsets included), to_world [E] = scene.env_origins - pose_offset_m (radio frame -> world frame).
+        out [E,R,G] int32, 1 = blocked. Example blocked_fn (torch tensors through wp.from_torch):
+            to_world = env.scene.env_origins - torch.tensor(isc.pose_offset_m, device=dev)
+            def blocked_fn(p):
+                out = torch.zeros(E, R, G, dtype=torch.int32, device=dev)
+                wp.launch(los_blocked_kernel, dim=(E, R, G), inputs=[mesh.id, wp.from_torch(p.contiguous(),
+                          dtype=wp.vec3), wp.from_torch(net.radio.gnb_env.contiguous(), dtype=wp.vec3),
+                          wp.from_torch(to_world.contiguous(), dtype=wp.vec3), wp.from_torch(out)])
+                return out.bool()"""
         e, r, g = wp.tid()
-        a = gnb[g] + env_origin[e]
-        b = ue[e, r] + env_origin[e]
+        a = gnb[e, g] + to_world[e]
+        b = ue[e, r] + to_world[e]
         d = b - a
         L = wp.length(d)
         q = wp.mesh_query_ray(mesh, a, d / L, L - 0.05)
