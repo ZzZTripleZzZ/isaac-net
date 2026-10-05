@@ -599,17 +599,19 @@ class NRConfig:
 
     @property
     def ul_slot_ms(self):
-        """Mean spacing of UL data slots (DDDSU at mu = 1: 2.5 ms); converts the handover times to UL slots."""
-        return self.control_step_ms / self.ul_slots_per_step
+        """UL slot spacing of the multi-cell legacy engine NetSlotMC: control_step_ms / proto_slots_per_step (2.5 ms
+        by default). Converts the handover times to NetSlotMC's slots. The NR engine counts them in slot_ms
+        instead (CellAssociation(slot_ms=...)), so its values do not depend on this."""
+        return self.control_step_ms / self.proto_slots_per_step
 
     @property
     def ttt_slots(self):
-        """A3 time-to-trigger a3_ttt_ms in uplink data slots."""
+        """A3 time-to-trigger a3_ttt_ms in NetSlotMC's UL slots (ul_slot_ms)."""
         return int(round(self.a3_ttt_ms / self.ul_slot_ms))
 
     @property
     def ho_int_slots(self):
-        """Handover interruption ho_interruption_ms in uplink data slots."""
+        """Handover interruption ho_interruption_ms in NetSlotMC's UL slots (ul_slot_ms)."""
         return int(round(self.ho_interruption_ms / self.ul_slot_ms))
 
     @property
