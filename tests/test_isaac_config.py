@@ -75,7 +75,7 @@ def test_obs_dim_matches_every_feature(level, backend, seeded):
         _run(net, T=8)
         assert net.obs().shape == (E, R, isc.obs_dim(cfg)) and bool(torch.isfinite(net.obs()).all())
     assert IsaacNetCfg(gnb_pos=gnbs).obs_dim() == 4 == obs_dim()
-    assert obs_dim(OBS_FEATURES, cfg, n_cells=2, history=3) == 16 + 16 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 3 + 1
+    assert obs_dim(OBS_FEATURES, cfg, n_cells=2, history=3) == 16 + 16 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 3 + 1 + 1     # ... blocked, los
     with pytest.raises(ValueError):
         IsaacNetCfg(obs_features=("aoi", "rssi"))
 

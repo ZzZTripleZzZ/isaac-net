@@ -7,7 +7,8 @@
 | `log_distance` (default) | `pl_const_db + 10 n log10(d)`, a correlated shadowing field and an optional short-range white component | `pl_const_db`, `pathloss_exp`, `shadow_sigma_db`, `shadow_modes`, `shadow_dcorr_m`, `shadow_acf`, `shadow_white_frac`, `shadow_white_dcorr_m` |
 | `tr38901` | TR 38.901 path loss, LOS probability with a spatially consistent LOS state, shadow fading and O2I penetration | `tr38901_scenario`, `tr38901_los`, `carrier_ghz`, `gnb_height_m`, `ue_height_m`, `o2i_indoor_frac`, `o2i_model`, `inf_clutter_*` |
 | `radio_map` | a precomputed gain map per cell, sampled bilinearly at the robot positions | `radio_map_path` (or `RadioMC(..., radio_map=RadioMap)`) |
-| add-on `blockage` | other robots are spheres that cost `blockage_loss_db` when they sit on the robot–gNB segment | `blockage`, `blockage_radius_m`, `blockage_loss_db` |
+| add-on `blockage` | other robots are spheres that cost `blockage_loss_db` when they sit on the robot–gNB segment; or TR 38.901 model B screens (robots plus per-step `blockers=`), or model A angular regions ([obstacles.md](obstacles.md)) | `blockage`, `blockage_radius_m`, `blockage_loss_db`, `blockage_model`, `blocker_size_m`, `blockage_max_db` |
+| add-on LOS state from geometry | LOS / NLOS of every link from a baked `los_prob` map, a 2.5-D ray march over an `obstacle_z` height map, or a `blocked_fn` callback, with optional knife-edge diffraction; TR 38.901 soft LOS for the stochastic state ([obstacles.md](obstacles.md)) | `los_source`, `los_raycast_samples`, `los_diffraction`, `los_soft`, `nlos_extra_loss_db` |
 | add-on per-robot Doppler | AR(1) fading correlation from each robot's speed (NR engine) | `fading_doppler="per_robot"`, `doppler_min_speed_mps` |
 
 ```python
@@ -79,11 +80,15 @@ rtenv/bin/python isaac_net/tools/bake_radio_map_sionna.py --out warehouse.npz --
     --gnb 15 20 6 --gnb 45 20 6 --fc 3.5 --cell 1.0 --samples 2000000 --depth 4 --variant llvm
 ```
 
+**LOS and obstacle grids.** A map may also carry `los_prob [C, H, W]` (`bake.py --los-map`) and `obstacle_z [H, W]` (`bake.py --obstacle-z`). `RadioMap` keeps them as attributes (`los_prob`, `obstacle_z`) instead of metadata, and files without them load as before. They feed `los_source="map"` and `"raycast"`, also for the `tr38901` and `log_distance` channels. With `channel="radio_map"` the LOS state adds no path loss, because the map already holds the NLOS loss ([obstacles.md](obstacles.md)). `python -m isaac_net.tools.make_synthetic_radio_map --obstacles hall.npz` writes a synthetic hall with both grids.
+
 **From an Isaac Sim USD stage.** `python -m isaac_net.tools.scene.bake --usd scene.usd ...` exports the stage with ITU radio materials and bakes the map, and `IsaacNetCfg(scene_map=...)` does the same at env creation from the running stage. See [scene-radio-map.md](scene-radio-map.md).
 
 ## Blockage
 
 With `blockage=True` every other robot of the same env is a sphere of radius `blockage_radius_m` centred at its antenna position `(x, y, ue_height_m)`. A link loses `blockage_loss_db` (20 dB by default, the value of the Isaac layer's blockage) when the segment from the robot's antenna to the gNB antenna passes through at least one sphere. A robot never blocks itself, and a sphere behind the robot or beyond the gNB does not count. The test is one pairwise tensor op of shape `[E, R, R, C]`, cheap up to a few hundred robots per env. The gNB height is the scenario's for `tr38901` and `gnb_height_m` otherwise (unset means 2-D geometry at robot height, where any robot on the line blocks). The loss is one fixed value per link. It does not model diffraction around the body, several blockers adding up, or static obstacles, which belong in a radio map or in the Isaac layer's mesh ray test (`isaac/radio.py`).
+
+This is `blockage_model="sphere"`, the default. `blockage_model="screen"` (TR 38.901 model B, knife-edge screens for robots and for per-step `blockers=` such as people and vehicles) and `"stochastic"` (model A, angular regions for scenes without geometry) are described in [obstacles.md](obstacles.md), together with `RadioMC.los_state()` / `blocked_state()` and the `los` / `blocked` step keys.
 
 ## Per-robot Doppler
 
