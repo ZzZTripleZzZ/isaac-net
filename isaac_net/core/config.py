@@ -66,7 +66,8 @@ FIELD_GROUPS = {
     "l0dr": ("dr_delay_median_steps", "dr_delay_log_sigma", "dr_loss"),
     "l1": ("l1_eta",),
     "frame": ("mu", "bandwidth_mhz", "n_prb", "rbg_size", "rbg_config", "tdd_pattern", "special_split",
-              "special_dl_data", "special_ul_data", "dl_ctrl_symbols", "ul_data_symbols"),
+              "special_dl_data", "special_ul_data", "dl_ctrl_symbols", "ul_data_symbols", "duplex", "dl_n_prb",
+              "dl_bandwidth_mhz"),
     "nr": ("dmrs_re_per_prb", "overhead_re_per_prb", "k1", "k2", "gnb_proc_slots", "sr_period_slots",
            "sr_grant_delay_slots", "ul_harq_rtt_slots", "cqi_period_slots", "proactive_grant", "proc_offset_ms",
            "n_harq", "max_harq_tx", "harq_combining", "harq_fail", "rlc_retx_slots", "discard", "mcs_table",
@@ -108,7 +109,9 @@ TR38901_SHORT = {"tr38901_rma": "RMa", "tr38901_uma": "UMa", "tr38901_umi": "UMi
 
 # fields read only under some switches (fields_read_by drops them when the switch is off)
 DL_ONLY_FIELDS = ("k1", "cqi_period_slots", "dl_mcs_max", "dl_snr_offset_db", "dl_interference", "gnb_tx_dbm",
-                  "ue_nf_db")                                 # NR engine downlink (dl=True)
+                  "ue_nf_db", "dl_n_prb", "dl_bandwidth_mhz")      # NR engine downlink (dl=True)
+TDD_PATTERN_FIELDS = ("tdd_pattern", "special_split", "special_dl_data", "special_ul_data")   # duplex="tdd" only
+DUPLEX = ("tdd", "fdd")
 HANDOVER_FIELDS = ("a3_offset_db", "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc")    # n_cells > 1
 INTERFERENCE_FIELDS = ("ul_interference", "dl_interference", "li_alpha")    # n_cells > 1 and noise_model="thermal"
 UL_PC_FIELDS = ("ul_pc_p0_dbm", "ul_pc_alpha")               # ul_pc_on
@@ -126,6 +129,8 @@ def _switch_unread(cfg, nr):
     off = set()
     if nr and not cfg.dl:
         off |= set(DL_ONLY_FIELDS)
+    if nr and cfg.duplex == "fdd":
+        off |= set(TDD_PATTERN_FIELDS)            # FDD: all-U UL carrier and all-D DL carrier (slot_symbols)
     if cfg.n_cells == 1:
         off |= set(HANDOVER_FIELDS) | set(INTERFERENCE_FIELDS)
     elif cfg.noise_model != "thermal":
@@ -259,7 +264,11 @@ class NRConfig:
     n_prb: int | None = None             # override of the 38.101 N_RB (e.g. 50 to match LENA RbOverhead=0.1)
     rbg_size: int | None = None          # override of the 38.214 RBG size (subband = RBG)
     rbg_config: int = 1                  # 38.214 RBG configuration 1 or 2
-    # ---- TDD ----
+    # ---- duplexing (TDD pattern, or FDD with a paired DL carrier) ----
+    duplex: str = "tdd"                  # "tdd": tdd_pattern below; "fdd": the UL carrier is all-U and a paired DL
+                                         # carrier is all-D, so every slot carries both (the TDD fields are unused)
+    dl_n_prb: int | None = None          # fdd: PRBs of the DL carrier (override); None = from dl_bandwidth_mhz
+    dl_bandwidth_mhz: int | None = None  # fdd: DL carrier bandwidth (38.101 N_RB at scs_khz); None = the UL carrier
     tdd_pattern: str = "DDDSU"           # one letter per slot, D / S / U, repeated
     special_split: tuple = (10, 2, 2)    # S slot symbols (DL, guard, UL)
     special_dl_data: bool = True         # S slot DL symbols carry PDSCH
@@ -456,6 +465,18 @@ class NRConfig:
         assert self.rlc_tail_bytes >= 0 and self.rlc_tail_timer_ms > 0
         assert self.mcs_table in (1, 2) and self.n_harq >= 1 and self.max_harq_tx >= 1
         assert sum(self.special_split) == 14
+        if self.duplex not in DUPLEX:
+            raise ValueError(f"duplex must be 'tdd' or 'fdd', not {self.duplex!r}")
+        if self.duplex == "tdd" and (self.dl_n_prb is not None or self.dl_bandwidth_mhz is not None):
+            raise ValueError("dl_n_prb / dl_bandwidth_mhz set the paired DL carrier of duplex='fdd'; with TDD both "
+                             "directions share one carrier (n_prb / bandwidth_mhz)")
+        if self.duplex == "fdd":
+            if self.proactive_grant == "per_period":
+                raise ValueError("proactive_grant='per_period' grants once per TDD period; FDD has none: use "
+                                 "proactive_grant='every_ul_slot' (or 'off') with duplex='fdd'")
+            if self.dl_nprb < self.n_subbands:
+                raise ValueError(f"the FDD DL carrier ({self.dl_nprb} PRB) needs at least one PRB per RBG of the "
+                                 f"shared subband grid ({self.n_subbands} RBGs)")
         assert self.cell_layout in ("hex", "grid", "custom") and self.ho_rlc in ("carry", "flush")
         assert 1 <= self.n_cells <= 7, "1 to 7 cells"
         if self.cell_layout == "custom":
@@ -548,8 +569,35 @@ class NRConfig:
                              "proto_ul_slots_per_step for the prototype levels")
         return int(round(n))
 
+    @property
+    def dl_nprb(self):
+        """PRBs of the DL carrier: with duplex="fdd" dl_n_prb, else the 38.101 N_RB of dl_bandwidth_mhz, else (and
+        always with TDD, where both directions share one carrier) nprb."""
+        if self.duplex != "fdd" or (self.dl_n_prb is None and self.dl_bandwidth_mhz is None):
+            return self.nprb
+        if self.dl_n_prb is not None:
+            return self.dl_n_prb
+        tab = NRB_FR1[self.scs_khz]
+        if self.dl_bandwidth_mhz not in tab:
+            raise ValueError(f"dl_bandwidth_mhz={self.dl_bandwidth_mhz} MHz not defined at {self.scs_khz} kHz")
+        return tab[self.dl_bandwidth_mhz]
+
+    @property
+    def dl_subband_prbs(self):
+        """PRBs per DL RBG. The DL carrier is split into the same n_subbands RBGs as the UL carrier (the engine's
+        per-subband fading grid is shared by both directions), as evenly as possible (the first RBGs take the
+        remainder); equal to subband_prbs when the DL carrier is the UL carrier."""
+        if self.dl_nprb == self.nprb:
+            return self.subband_prbs
+        S = self.n_subbands
+        q, r = divmod(self.dl_nprb, S)
+        return [q + 1 if i < r else q for i in range(S)]
+
     def slot_symbols(self, pos):
-        """(dl_data_symbols, ul_data_symbols) of the slot at pattern position pos."""
+        """(dl_data_symbols, ul_data_symbols) of the slot at pattern position pos. FDD: every slot is a full D slot
+        on the DL carrier and a full U slot on the UL carrier."""
+        if self.duplex == "fdd":
+            return 14 - self.dl_ctrl_symbols, self.ul_data_symbols
         c = self.tdd_pattern[pos % len(self.tdd_pattern)]
         if c == "D":
             return 14 - self.dl_ctrl_symbols, 0
@@ -560,7 +608,9 @@ class NRConfig:
         return max(dl, 0), ul
 
     def ul_capable(self, pos):
-        """Slot carries UL symbols (PUCCH for SR / HARQ-ACK / CQI) even if no PUSCH data."""
+        """Slot carries UL symbols (PUCCH for SR / HARQ-ACK / CQI) even if no PUSCH data (FDD: every slot)."""
+        if self.duplex == "fdd":
+            return True
         c = self.tdd_pattern[pos % len(self.tdd_pattern)]
         return c == "U" or (c == "S" and self.special_split[2] > 0)
 
@@ -609,9 +659,11 @@ class NRConfig:
 
     def summary(self):
         """One-line human-readable summary of the frame structure, HARQ, PHY and scheduler settings."""
+        frame = (f"TDD {self.tdd_pattern} S={self.special_split}" if self.duplex == "tdd" else
+                 f"FDD (UL all-U, DL all-D carrier of {self.dl_nprb} PRB {self.dl_subband_prbs})")
         return (f"mu={self.mu} ({self.scs_khz} kHz), {self.bandwidth_mhz} MHz -> {self.nprb} PRB, "
-                f"RBG {self.rbg} -> {self.n_subbands} subbands {self.subband_prbs}, TDD {self.tdd_pattern} "
-                f"S={self.special_split}, {self.slots_per_step} slots/step "
+                f"RBG {self.rbg} -> {self.n_subbands} subbands {self.subband_prbs}, {frame}, "
+                f"{self.slots_per_step} slots/step "
                 f"({self.ul_slots_per_step} UL, {self.dl_slots_per_step} DL data slots), HARQ {self.n_harq}x"
                 f"{self.max_harq_tx}tx {self.harq_fail}, MCS table {self.mcs_table}, {self.eff_sinr}, "
                 f"OLLA {'on' if self.olla else 'off'}, PF {self.pf_metric}")

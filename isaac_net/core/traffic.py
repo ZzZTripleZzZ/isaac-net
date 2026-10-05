@@ -20,6 +20,12 @@ Two sources feed the uplink queues, and they can be mixed freely:
    can emit several messages per control step: every message carries an arrival offset in slots inside the step,
    the MAC cannot send its bytes before that slot, and its delay is measured from that slot.
 
+Direction. A model feeds the uplink by default; direction="dl" (or model.downlink()) makes it a downlink source: its
+messages go into the gNB-side DL queue of the robot (the NR engine's DL path, config dl=True), with the same arrival
+offsets, sizes, tags and deadlines, and the DL scheduler serves them. UL and DL models can be mixed in one list.
+DL models draw from their own generator (TrafficGen(direction="dl")), so adding a DL model never changes the arrivals
+of the UL models of the same config.
+
 Generated messages are tensors with fixed shapes [E, R, M] (M = the sum of the models' max_msgs_per_step), so the
 generator has no data-dependent shapes and no host syncs. Draws come from a generator that the engine owns and
 seeds from its own seed, so policy sampling does not shift the traffic and the traffic does not shift the
@@ -39,6 +45,7 @@ from .proto.netsim import Requests  # noqa: F401
 __all__ = ["Requests", "TrafficModel", "TrafficGen", "Arrivals", "normalize_traffic"]
 
 KINDS = ("periodic", "bursty", "video", "event", "policy")
+DIRECTIONS = ("ul", "dl")
 
 
 @dataclass(frozen=True)
@@ -49,7 +56,8 @@ class TrafficModel:
     = 1 + the model's position in NRConfig.traffic, 0 is the policy's), priority (int, carried and reported; the
     MAC is FIFO per robot and does not use it), deadline_ms (reported as `deadline_miss`; inf = none),
     max_msgs_per_step (the fixed number of arrivals per robot per step the model reserves; more arrivals than
-    that are deferred to the next step, never dropped, and counted in TrafficGen.deferred).
+    that are deferred to the next step, never dropped, and counted in TrafficGen.deferred), direction ("ul", the
+    default, or "dl": the messages go to the robot's downlink queue; see downlink()).
     """
 
     kind: str
@@ -68,6 +76,7 @@ class TrafficModel:
     priority: int = 0
     deadline_ms: float = math.inf
     max_msgs_per_step: Optional[int] = None
+    direction: str = "ul"
 
     # ------------------------------------------------------------------ constructors
     @staticmethod
@@ -139,6 +148,10 @@ class TrafficModel:
     def with_(self, **kw):
         return replace(self, **kw)
 
+    def downlink(self):
+        """The same model as a downlink source (direction="dl"): the gNB sends its messages to the robot."""
+        return replace(self, direction="dl")
+
     @property
     def generates(self):
         return self.kind != "policy"
@@ -172,12 +185,21 @@ def normalize_traffic(traffic):
     for m in traffic:
         if not isinstance(m, TrafficModel) or m.kind not in KINDS:
             raise TypeError(f"NRConfig.traffic takes TrafficModel objects (TrafficModel.periodic(...), ...), got {m!r}")
+        if m.direction not in DIRECTIONS:
+            raise ValueError(f"traffic model {m.kind}: direction must be 'ul' or 'dl', not {m.direction!r}")
+        if m.direction == "dl" and m.kind == "policy":
+            raise ValueError("policy() is the policy's uplink submit(); downlink messages from the policy go through "
+                             "add_dl_frames(), not a DL policy() model")
+        if m.direction == "dl" and m.det:
+            raise ValueError(f"traffic model {m.kind}: det=True marks an uplink task event; a DL model cannot carry it")
     return traffic or None
 
 
-def generates(traffic):
-    """True if the traffic tuple has a model that generates messages (anything but policy())."""
-    return traffic is not None and any(m.generates for m in traffic)
+def generates(traffic, direction=None):
+    """True if the traffic tuple has a model that generates messages (anything but policy()), in `direction` ("ul" or
+    "dl"; None = either)."""
+    return traffic is not None and any(m.generates and (direction is None or m.direction == direction)
+                                       for m in traffic)
 
 
 @dataclass
@@ -347,9 +369,11 @@ def onehot_(idx, n):
 
 
 class TrafficGen:
-    """All generating models of a config for E envs x R robots. step() -> Arrivals [E, R, M] per control step."""
+    """All generating models of one direction of a config for E envs x R robots. step() -> Arrivals [E, R, M] per
+    control step. direction "ul" (default) or "dl": only the models of that direction get a stream; a model's default
+    tag is still 1 + its position in the whole list."""
 
-    def __init__(self, traffic, E, R, device, step_ms, slots_per_step, generator=None, seed=None):
+    def __init__(self, traffic, E, R, device, step_ms, slots_per_step, generator=None, seed=None, direction="ul"):
         self.E, self.R, self.dev = E, R, torch.device(device)
         self.N = int(slots_per_step)
         self.step_ms, self.slot_ms = float(step_ms), float(step_ms) / self.N
@@ -362,7 +386,7 @@ class TrafficGen:
         self.rgen.manual_seed((seed + 0x9E3779B97F4A7C15) % 2 ** 63)   # reset draws
         models = normalize_traffic(traffic) or ()
         self.streams = [_Stream(m, i, E, R, self.dev, self.step_ms, self.slot_ms, self.gen, self.rgen)
-                        for i, m in enumerate(models) if m.generates]
+                        for i, m in enumerate(models) if m.generates and m.direction == direction]
         self.M = sum(s.M for s in self.streams)
         self.reset(None)
 

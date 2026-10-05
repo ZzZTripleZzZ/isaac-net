@@ -13,6 +13,7 @@ unchanged, so the engine's outputs stay bitwise the same. Per control step it ac
                     UL symbols in an S slot with special_ul_data; MacLink.slot_nsym, the nsym of MacLink.slot)
   ul_tx_s  [E,R]    PUSCH time of those transmissions (s): per TB the slot duration times slot_nsym / 14
   dl_slots [E,R]    DL data slots in which the robot was scheduled (it receives a transport block)
+  dl_prb   [E,R]    PRB-slots of those DL transport blocks
 
 One tap serves every wrapper of an engine (SlotTap.of). begin() zeroes the counters before a step. A user hook set
 through NREngine.set_sinr_hook replaces the installed one, so wrappers call install() again after it.
@@ -35,6 +36,7 @@ class SlotTap:
         self.ue_tx_dbm = c.ue_tx_dbm
         z = lambda: torch.zeros(self.E, self.R, device=self.dev)     # noqa: E731
         self.ul_slots, self.ul_prb, self.ul_tx_j, self.dl_slots = z(), z(), z(), z()
+        self.dl_prb = z()
         self.ul_tx_s = z()                                          # PUSCH time (s) of the robot's transmissions
         self.install()
 
@@ -73,11 +75,12 @@ class SlotTap:
                 self.ul_tx_s += txf * dur
             else:
                 self.dl_slots += txf
+                self.dl_prb += n_prb * txf
             return act if prev is None else prev(g, d, won, n_prb, act)
 
         hook._slot_tap = self
         return hook
 
     def begin(self):
-        for x in (self.ul_slots, self.ul_prb, self.ul_tx_j, self.ul_tx_s, self.dl_slots):
+        for x in (self.ul_slots, self.ul_prb, self.ul_tx_j, self.ul_tx_s, self.dl_slots, self.dl_prb):
             x.zero_()
