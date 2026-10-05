@@ -19,8 +19,8 @@ env's clock (control steps). EdgeLoop then runs, per env:
    exactly where it stopped at the next step (`edge_lag`), so times stay exact and only their reporting is late.
 2. Return path. The newest result of each robot in a step becomes a command: "instant" (arrives at completion),
    "delay" (fixed + uniform jitter + cmd_bytes over a rate from the robot's SINR), or "nr_dl" (a real downlink
-   message of cmd_bytes through the NR engine's DL scheduler; the command is enqueued at the next control-step
-   boundary, since the engine takes new messages per step).
+   message of cmd_bytes through the NR engine's DL scheduler, reference backend only; the command is enqueued at
+   the next control-step boundary, since the engine takes new messages per step).
 3. Loop accounting. Each robot keeps the newest command it received (highest capture step): its capture step,
    arrival time, age, and the uplink / edge / return delays of that action.
 
@@ -34,7 +34,8 @@ Step dict keys added (per step; times in control steps of the env clock, NaN = n
   act_new [E,R] bool              a newer action (command) reached the robot this step
   act_cap [E,R] long              capture step of the robot's newest action (-1 = none yet)
   act_time [E,R] float            its arrival time at the robot
-  act_age [E,R] float             t + 1 - act_cap: age of the action the robot holds at the end of the step
+  act_age [E,R] float             t + 1 - act_cap: age of the action the robot holds at the end of the step (NaN
+                                  before its first action)
   act_latency [E,R] float         act_time - act_cap: capture -> uplink -> edge -> return of that action
   act_ul_delay, act_edge_delay, act_ret_delay [E,R] float   the three stages of act_latency
   cmd_dropped [E,R] long          commands lost this step (replaced in flight, DL loss or DL queue full)
@@ -394,7 +395,7 @@ class EdgeLoop:
             "edge_dropped_deadline": dropped_dl, "edge_queue_len": at_edge,
             "edge_in_service": (jv & (idx < c)).sum(-1) if fifo else jv.sum(-1), "edge_lag": lag,
             "act_new": anew, "act_cap": acap.clone(), "act_time": nan(atime),
-            "act_age": f32(T1[:, None] - capf), "act_latency": nan(atime - capf),
+            "act_age": nan(T1[:, None] - capf), "act_latency": nan(atime - capf),
             "act_ul_delay": nan(ain - capf), "act_edge_delay": nan(adone - ain), "act_ret_delay": nan(atime - adone),
             "cmd_dropped": replaced.long(), "_new": new, "_newcap": res_cap,
         }
@@ -405,6 +406,12 @@ class EdgeLoop:
         eng = self.engine
         if not isinstance(eng, NREngine) or eng.net.dl is None:
             raise ValueError("return_path='nr_dl' needs the NR engine (level 'L2') with NRConfig(dl=True)")
+        backend = getattr(eng, "backend", "reference")
+        if backend != "reference":
+            # the hook below is Python: the graph and triton backends run it only while capturing, so every later
+            # step would replay without observing the DL frames and no command would ever arrive
+            raise ValueError(f"return_path='nr_dl' needs the reference backend of the NR engine, not {backend!r}: "
+                             "the DL observation hook does not run inside a replayed CUDA graph")
         link = eng.net.dl
         orig = link.end_step
 
