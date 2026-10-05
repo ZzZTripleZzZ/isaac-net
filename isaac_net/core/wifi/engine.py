@@ -41,6 +41,7 @@ the loop has a fixed trip count, and there are no host syncs inside submit / ste
 from __future__ import annotations
 
 import copy
+import math
 
 import torch
 
@@ -54,11 +55,20 @@ from .phy import AccessTiming, mcs_table
 
 
 def poisson_icdf(lam, u, n_max):
-    """Poisson(lam) by inverse CDF from uniforms u, capped at n_max (vectorized over the n_max terms)."""
+    """Poisson(lam) by inverse CDF from uniforms u, capped at n_max (vectorized over the n_max terms). The cap
+    should sit well above lam (WifiNet uses poisson_cap), or the draw is biased low."""
     k = torch.arange(int(n_max), device=lam.device, dtype=lam.dtype)
     logpmf = k * torch.log(lam.clamp(min=1e-30))[..., None] - lam[..., None] - torch.lgamma(k + 1.0)
     cdf = torch.exp(logpmf).cumsum(-1)
     return (u[..., None] > cdf).sum(-1).to(lam.dtype)
+
+
+def poisson_cap(lam_max):
+    """Static support of the Poisson draw: lam_max + 6 sqrt(lam_max) + 1, rounded up (lam_max floored at 1).
+    P(N > cap) is below 2e-6 for every lam <= lam_max (below 1e-7 once lam_max >= 5), so the cap does not bind in
+    practice and the draw keeps a fixed shape computed from the config."""
+    lam_max = max(float(lam_max), 1.0)
+    return int(math.ceil(lam_max + 6.0 * math.sqrt(lam_max) + 1.0))
 
 
 def radio_config(cfg: NRConfig, wc: WifiConfig):
@@ -102,6 +112,10 @@ class WifiNet(LevelNet):
         self.rates = torch.tensor(rates, dtype=f, device=d)
         self.thr = torch.tensor(thr, dtype=f, device=d) + wc.ra_margin_db
         self.timing = AccessTiming(wc)
+        # upper bound of a robot's successful accesses per sub-step: one access needs at least the channel time Ts
+        # of a 1-byte frame at the top MCS after the shortest AIFS, so lam = mu dt <= dt / Ts_min
+        ts_min = float(self.timing.times(1.0, max(rates), float(min(v[2] for v in EDCA.values())))[0])
+        self.n_acc_max = poisson_cap(wc.substep_ms * 1000.0 / ts_min)
         tab = torch.tensor([EDCA[a] for a in AC_NAMES], dtype=f, device=d)                          # [5, 4]
         self.ac_W0, self.ac_Wmax = tab[:, 0] + 1, tab[:, 1] + 1
         self.ac_aifsn, self.ac_txop = tab[:, 2], tab[:, 3]
@@ -312,7 +326,7 @@ class WifiNet(LevelNet):
             p = res["p"][:, :R]
             lam = mu * dt_us
             if wc.access_noise == "poisson":
-                n_acc = poisson_icdf(lam, u_acc[:, k], 8)
+                n_acc = poisson_icdf(lam, u_acc[:, k], self.n_acc_max)
             else:
                 c1 = credit + lam * act
                 n_acc = torch.floor(c1)
