@@ -166,7 +166,8 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
       levels.load_level_params). seed: overrides config.seed. With config.rng = "engine" (default) every draw of
       the prototype, surrogate and bound levels comes from the engine's streams seeded by it (proto/rng.py);
       with "global", reset draws use the engine generator and stepping draws the global torch RNG. The NR engine
-      (L2) seeds its generator with it; its stepping draws still use the global RNG.
+      (L2) keys its slot draws and, with "engine", its radio (RadioMC) draws by (seed, env id, episode) as well;
+      only traffic models (TrafficGen) still use one generator per engine.
     inject: fast backends only, take the per-slot random draws from set_noise(...) (equivalence tests).
     strict: raise if the config sets fields away from their defaults that this level ignores
       (config.unused_fields(level)); by default they are ignored silently.

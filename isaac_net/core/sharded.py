@@ -44,13 +44,16 @@ def shard_invariant(level, cfg: NRConfig):
     """True if every draw of `level` under `cfg` is keyed by (seed, env id, episode), so shards that share the seed
     and key their rows by global env id equal one unsharded engine. Needs rng="engine"; on L2 also no traffic models,
     neither the user's (NRConfig.traffic) nor the background UEs' (on L2 BackgroundLoop runs them as ghost traffic
-    models of the inner engine), since TrafficGen draws from one sequential generator per engine."""
+    models of the inner engine), since TrafficGen draws from one sequential generator per engine, and no edge loop
+    that draws from the global torch RNG (service_dist="exponential" or ret_jitter_ms > 0)."""
     if cfg.rng != "engine" or level not in INVARIANT_LEVELS:
         return False
     if level != "L2":
         return True
     bg = cfg.background
-    return not generates(cfg.traffic) and (bg is None or bg.n_background == 0)
+    ed = cfg.edge
+    edge_global = ed is not None and (ed.service_dist == "exponential" or ed.ret_jitter_ms > 0)   # global torch RNG
+    return not generates(cfg.traffic) and (bg is None or bg.n_background == 0) and not edge_global
 
 
 def set_env_offset(engine, offset):

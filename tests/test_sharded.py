@@ -4,7 +4,8 @@ Engine-owned randomness is keyed by global env id in every shard (CounterRNG.set
 env offset), so an env draws the same numbers whether it lives in shard 0 or 1. Checked with partial resets that
 cross the shard boundary, on the prototype, surrogate-free bound and L2-legacy levels, with background load and the
 energy model on top (CPU reference), and (gpu) on the L2-legacy graph and triton backends and L1 triton. The NR
-engine L2 is not shard-invariant (global-RNG stepping draws) and says so.
+engine L2 with traffic models is not shard-invariant (one TrafficGen generator per engine) and says so; L2 without
+them, multi-cell L2-legacy and WIFI are covered in test_followup_fixes.py.
 """
 import pytest
 import torch
