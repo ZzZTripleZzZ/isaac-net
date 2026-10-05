@@ -305,9 +305,16 @@ def _drive(eng, E, resets=()):
 
 
 def _rows_equal(a, b, rows):
+    """Row-wise equality across engines of different E: exact for integer / boolean outputs and on CUDA; the float
+    outputs (K from the log-normal transform, SINR) to float32 rounding on the CPU, whose vectorized kernels may round
+    differently for a different tensor shape (Linux x86 CI showed sub-print-precision differences in `k`)."""
     for x, y in zip(a, b):
         for name in x:
-            assert torch.equal(x[name][rows].nan_to_num(-7.0), y[name][rows].nan_to_num(-7.0)), name
+            u, v = x[name][rows].nan_to_num(-7.0), y[name][rows].nan_to_num(-7.0)
+            if u.is_floating_point() and u.device.type == "cpu":
+                assert torch.allclose(u, v, rtol=1e-5, atol=1e-5), name
+            else:
+                assert torch.equal(u, v), name
 
 
 @pytest.mark.parametrize("case", list(E_CASES))
