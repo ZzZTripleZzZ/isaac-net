@@ -83,10 +83,11 @@ class NetSlotMC(NetSlot):
 
     # ---- inputs -----------------------------------------------------------------------------------
     def rx_from_poses(self, pos):
-        """Per-link received power [E,R,C] from poses [E,R,2|3] through the engine's RadioMC (made on first use,
-        from the engine generator; reset(env_ids) redraws its shadowing rows)."""
+        """Per-link received power [E,R,C] from poses [E,R,2|3] through the engine's RadioMC (made on first use;
+        reset(env_ids) redraws its shadowing rows). With rng="engine" its draws come from the engine's counter RNG,
+        keyed by (seed, env id, episode); with rng="global" from the engine generator."""
         if self.radio is None:
-            self.radio = RadioMC(self.cfg, self.E, self.dev, generator=self.gen)
+            self.radio = RadioMC(self.cfg, self.E, self.dev, generator=self.gen, rng=self.rng)
         return self.radio.rx_dbm(pos)
 
     def step(self, t, x=None, cur_hid=None, rx_dbm=None):

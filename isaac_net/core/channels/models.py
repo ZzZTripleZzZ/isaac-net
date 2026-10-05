@@ -21,10 +21,15 @@ class TR38901Channel:
     keeps it. Shadow fading: two unit fields per env and cell (LOS and NLOS correlation distances) scaled by the
     scenario's sigma. O2I (o2i_indoor_frac > 0): each robot is indoors with that probability, with its own d_2D-in and
     sigma_P draw, redrawn at reset; the LOS probability then uses d_2D-out = d_2D - d_2D-in.
+
+    Randomness: `generator`, or an engine CounterRNG `rng` with base stream id `stream`: the three fields use streams
+    stream + 0..2 (LOS shadow fading), + 3..5 (NLOS), + 6..8 (LOS state), the O2I draws + 9..11, all RESET draws keyed
+    by (seed, env id, episode), so an env's channel does not depend on E or on other envs' resets.
     """
 
-    def __init__(self, cfg, E, C, gnb_xy, device, generator=None):
+    def __init__(self, cfg, E, C, gnb_xy, device, generator=None, rng=None, stream=0):
         self.cfg, self.E, self.C, self.dev, self.gen = cfg, E, C, device, generator
+        self.rng, self.stream = rng, int(stream)
         self.scn = tr.scenario_name(cfg.tr38901_scenario)
         sc = tr.SCENARIOS[self.scn]
         self.fc = cfg.carrier_ghz
@@ -40,9 +45,10 @@ class TR38901Channel:
             self.k_subsce = tr.inf_k_subsce(self.scn, self.h_bs, self.h_ut, cfg.inf_clutter_density,
                                             cfg.inf_clutter_size_m, cfg.inf_clutter_height_m)
         self.los_corr = los_corr
-        self.sf_los = PlaneWaveField(E, C, K, device, generator, "exp", sc.sf_corr_los_m)
-        self.sf_nlos = PlaneWaveField(E, C, K, device, generator, "exp", sc.sf_corr_nlos_m)
-        self.los_field = PlaneWaveField(E, C, K, device, generator, "exp", los_corr)
+        st = self.stream
+        self.sf_los = PlaneWaveField(E, C, K, device, generator, "exp", sc.sf_corr_los_m, rng=rng, stream=st)
+        self.sf_nlos = PlaneWaveField(E, C, K, device, generator, "exp", sc.sf_corr_nlos_m, rng=rng, stream=st + 3)
+        self.los_field = PlaneWaveField(E, C, K, device, generator, "exp", los_corr, rng=rng, stream=st + 6)
         self.table = sum_of_cosines_cdf_table(K).to(device)
         self.o2i = cfg.o2i_indoor_frac > 0
         if self.o2i and not sc.o2i:
@@ -55,10 +61,16 @@ class TR38901Channel:
     # per-robot O2I state, allocated at the first call (R known) and redrawn by reset
     def _draw_o2i(self, E, R):
         g, d = self.gen, self.dev
-        indoor = torch.rand(E, R, device=d, generator=g) < self.cfg.o2i_indoor_frac
-        u = torch.rand(E, R, 2, device=d, generator=g) * self.d_in_max
+        if self.rng is not None:
+            st = self.stream + 9
+            indoor = self.rng.reset_uniform(None, st, R) < self.cfg.o2i_indoor_frac
+            u = self.rng.reset_uniform(None, st + 1, R, 2) * self.d_in_max
+            xp = self.rng.reset_normal(None, st + 2, R)
+        else:
+            indoor = torch.rand(E, R, device=d, generator=g) < self.cfg.o2i_indoor_frac
+            u = torch.rand(E, R, 2, device=d, generator=g) * self.d_in_max
+            xp = torch.randn(E, R, device=d, generator=g)
         d_in = u.min(-1).values
-        xp = torch.randn(E, R, device=d, generator=g)
         return indoor, d_in, xp
 
     def _alloc(self, R):

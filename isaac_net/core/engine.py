@@ -544,7 +544,9 @@ class NREngine:
 
     def _pathgain(self, pos, vel=None):
         if self.radio is None:
-            self.radio = RadioMC(self.config, self.E, self.dev, generator=self.gen, R=self.R)
+            # rng="engine": the radio draws from the engine's counter RNG keyed by (seed, env id, episode), so an env's
+            # shadowing / LOS / O2I draws depend neither on E nor on other envs' resets; rng="global": self.gen
+            self.radio = RadioMC(self.config, self.E, self.dev, generator=self.gen, R=self.R, rng=self.rng)
         pg = self.radio.pathgain_db(pos)
         if self.per_robot_doppler:
             speed = self.radio.observe_motion(pos, vel)

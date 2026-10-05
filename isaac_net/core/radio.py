@@ -12,7 +12,16 @@
     Radio            the prototype single-cell radio (gNB at the origin), used by the prototype levels.
 
 Both classes are configured by NRConfig (cells and radio blocks), keep fixed-shape state and support partial
-reset(env_ids) without host syncs. The NR engine (nr_engine.py) and the multi-cell legacy engine
+reset(env_ids) without host syncs.
+
+Randomness of RadioMC (shadowing fields, LOS state, O2I): `rng`, the engine's counter-based RNG (proto/rng.CounterRNG,
+NRConfig.rng = "engine"), or else `generator` (a sequential torch.Generator, NRConfig.rng = "global", the earlier
+behavior). With `rng` every draw is a RESET draw keyed by (seed, global env id, episode of that env, stream), so an
+env's channel depends only on (seed, env id, episode): not on E, not on other envs' resets, and not on the shard that
+holds the env (set_env_offset). The engine advances the episode of the envs it resets before it calls reset(env_ids).
+Streams: the log-distance field 10, 11, 12 (direction, wavelength, phase: the streams of the prototype Radio, so at
+C = 1 the field equals Radio's under the same engine RNG), everything else RADIO_STREAM + j (STREAMS below).
+ The NR engine (nr_engine.py) and the multi-cell legacy engine
 (proto/netsim_mc.py) use both classes.
 """
 from __future__ import annotations
@@ -23,6 +32,7 @@ import torch
 
 from .channels import (PlaneWaveField, RadioMapChannel, TR38901Channel, blocked_links, draw_plane_waves,
                        eval_plane_waves)
+from .channels.fields import counter_uniform
 from .config import NRConfig
 from .proto.netsim import Radio  # noqa: F401  (re-export: the prototype single-cell radio)
 from .queues import env_mask, onehot, reset_where
@@ -34,15 +44,23 @@ def pick(x, idx):
     return x.gather(2, ix).squeeze(2)
 
 
+# RESET stream ids of RadioMC's draws under an engine CounterRNG (disjoint from the engines' own reset streams:
+# prototype 0..12, NR engine (site << 16) with sites 1..4)
+LOG_DISTANCE_STREAM = 10            # + 0..2, = proto Radio's streams
+RADIO_STREAM = 0x52 << 16
+STREAMS = {"white": RADIO_STREAM, "tr38901": RADIO_STREAM + 16}
+
+
 class RadioMC:
     """Per-link large-scale radio for C = cfg.n_cells gNBs at cfg.gnb_xy(), channel model cfg.channel.
 
     R (robots per env) is optional: state that is per robot (O2I draws, previous poses for the speed) is allocated at
-    the first call otherwise. radio_map: a channels.RadioMap that overrides cfg.radio_map_path.
+    the first call otherwise. radio_map: a channels.RadioMap that overrides cfg.radio_map_path. rng: the engine's
+    CounterRNG (draws keyed by env id and episode, see the module docstring); it overrides `generator`.
     """
 
-    def __init__(self, cfg: NRConfig, E, device, generator=None, R=None, radio_map=None):
-        self.cfg, self.E, self.dev, self.gen = cfg, E, device, generator
+    def __init__(self, cfg: NRConfig, E, device, generator=None, R=None, radio_map=None, rng=None):
+        self.cfg, self.E, self.dev, self.gen, self.rng = cfg, E, device, generator, rng
         self.gnb = torch.tensor(cfg.gnb_xy(), dtype=torch.float32, device=device)     # [C,2]
         self.C = self.gnb.shape[0]
         self.model = cfg.channel
@@ -54,9 +72,9 @@ class RadioMC:
             self.k, self.phi = self._draw(E)
             if w > 0:
                 self.white = PlaneWaveField(E, self.C, K, device, generator, "exp", cfg.shadow_white_dcorr_m,
-                                            cfg.shadow_sigma_db * math.sqrt(w))
+                                            cfg.shadow_sigma_db * math.sqrt(w), rng=rng, stream=STREAMS["white"])
         elif self.model == "tr38901":
-            self.ch = TR38901Channel(cfg, E, self.C, self.gnb, device, generator)
+            self.ch = TR38901Channel(cfg, E, self.C, self.gnb, device, generator, rng=rng, stream=STREAMS["tr38901"])
         else:
             self.ch = RadioMapChannel(cfg, self.gnb, device, radio_map)
         # heights for blockage: tr38901 has them; the other models are 2-D unless gnb_height_m is set
@@ -72,7 +90,9 @@ class RadioMC:
 
     def _draw(self, n):
         cfg = self.cfg
-        return draw_plane_waves(n, self.C, cfg.shadow_modes, self.dev, self.gen, cfg.shadow_acf, cfg.shadow_dcorr_m)
+        rand = None if self.rng is None else counter_uniform(self.rng, LOG_DISTANCE_STREAM, self.C, cfg.shadow_modes)
+        return draw_plane_waves(n, self.C, cfg.shadow_modes, self.dev, self.gen, cfg.shadow_acf, cfg.shadow_dcorr_m,
+                                rand)
 
     def _alloc(self, R):
         self.R = R
@@ -85,7 +105,8 @@ class RadioMC:
 
     def reset(self, env_ids=None):
         """Redraw the shadowing / LOS fields and per-robot draws of the given envs (fixed shape: draw all, keep
-        masked rows) and forget their previous poses."""
+        masked rows) and forget their previous poses. With an engine rng the new draws are keyed by the envs'
+        current episode, so the engine advances it first."""
         m = env_mask(self.E, env_ids, self.dev)
         if self.k is not None:
             k, phi = self._draw(self.E)
@@ -104,7 +125,7 @@ class RadioMC:
         """Wrap an existing single-cell prototype Radio (same shadowing field) as a C = 1 RadioMC."""
         assert cfg.channel == "log_distance" and cfg.shadow_white_frac == 0 and not cfg.blockage
         obj = cls.__new__(cls)
-        obj.cfg, obj.E, obj.dev, obj.gen = cfg, radio.k.shape[0], device, None
+        obj.cfg, obj.E, obj.dev, obj.gen, obj.rng = cfg, radio.k.shape[0], device, None, None
         obj.gnb = torch.tensor(cfg.gnb_xy(), dtype=torch.float32, device=device)
         assert obj.gnb.shape[0] == 1
         obj.C, obj.amp, obj.model = 1, radio.amp, "log_distance"
