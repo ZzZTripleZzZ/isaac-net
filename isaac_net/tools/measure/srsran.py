@@ -129,7 +129,7 @@ def parse_metrics_json(path, run_id="", rnti_map=None, period_s=None):
     return rows
 
 
-def parse_mac_pcap(path, mu, run_id="", rnti_map=None, stack="srsran", c_rnti_only=True):
+def parse_mac_pcap(path, mu, run_id="", rnti_map=None, stack="srsran", c_rnti_only=True, realtime=True):
     """MAC-NR pcap (srsRAN DLT 252, or OAI / any UDP-framed capture) -> sched rows, event "rx" for UL (the gNB
     writes UL PDUs it decoded) and "sched" for DL. Rows keep the pcap order; slot_abs unwraps SFN using the
     pcap timestamps."""
@@ -143,7 +143,7 @@ def parse_mac_pcap(path, mu, run_id="", rnti_map=None, stack="srsran", c_rnti_on
         raw.append((t, info, pdu))
     spf = 2 ** mu
     sfn_slot = [(i["sfn"], i["slot"] if i.get("slot_exact") else i["subframe"] * spf) for _, i, _ in raw]
-    sabs = unwrap_slots(sfn_slot, mu, [t for t, _, _ in raw])
+    sabs = unwrap_slots(sfn_slot, mu, [t for t, _, _ in raw], realtime=realtime)
     rows = []
     for (t, info, pdu), (sfn, slot), sa in zip(raw, sfn_slot, sabs):
         ul = info["direction"] == 0
@@ -181,7 +181,7 @@ def _int(v, base=10):
         return -1
 
 
-def parse_phy_log(path, mu, run_id="", rnti_map=None, mcs_table=1):
+def parse_phy_log(path, mu, run_id="", rnti_map=None, mcs_table=1, realtime=True):
     """srsRAN gNB log -> sched rows: "PUSCH:" PHY lines (event rx, with CRC and SINR) and scheduler PUSCH
     decisions ("- UE PUSCH:" debug lines and "UL:" info entries, event sched). The MCS index is recovered from
     mod + tcr when the line has tcr (verbose), else left missing."""
@@ -247,7 +247,7 @@ def parse_phy_log(path, mu, run_id="", rnti_map=None, mcs_table=1):
                         tbs_bytes=_int(kv.get("tbs", "-1").rstrip(","))))
                     stamp.append((sfn, slot, ts))
     ok = [i for i, (s, sl, _) in enumerate(stamp) if s >= 0 and sl >= 0]
-    sabs = unwrap_slots([stamp[i][:2] for i in ok], mu, [stamp[i][2] for i in ok])
+    sabs = unwrap_slots([stamp[i][:2] for i in ok], mu, [stamp[i][2] for i in ok], realtime=realtime)
     for i, sa in zip(ok, sabs):
         rows[i]["slot_abs"] = sa
     return rows

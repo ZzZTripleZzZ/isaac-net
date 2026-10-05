@@ -31,7 +31,7 @@ py/ns3bridge/protocol.py     wire format (numpy)
 py/ns3bridge/transport.py    StreamConn (tcp/unix), ShmConn (ns3-ai)
 py/ns3bridge/core.py         Ns3Lockstep: spawns/drives E envs, one step per call
 py/ns3bridge/lockstep_net.py Ns3Net(NetBase): drop-in network for FleetEnv / train.py / evaluate()
-py/ns3bridge/netmodule_ns3.py Ns3NetModule: isaac/netmodule.py API (reset(env_ids) / step(pos, req) -> NetOutput)
+py/ns3bridge/netmodule_ns3.py Ns3NetModule: isaac/net_module.py API (reset / submit / step(t, poses, cur_tag) -> dict)
 py/win_client.py             stdlib-only Windows client + round-trip benchmark
 scripts/build_bridge.sh      build netslot-bridge (add "ai" for netslot-bridge-ai)
 scripts/build_pyshm.sh       build the ns3-ai Python module for the i5g interpreter
@@ -102,12 +102,15 @@ net = Ns3NetModule(NetConfig(num_envs=E, num_robots=R, device="cuda", msg_sizes=
                    transport="tcp", mode="procs")                 # in WSL: spawns the servers
 # Windows side (servers already started in WSL with scripts/serve_wsl.sh E R 57100):
 net = Ns3NetModule(cfg, transport="tcp", spawn=False, endpoints=[f"tcp:{57100+e}" for e in range(E)])
-out = net.step(poses_local[E, R, 3], TrafficRequest(send[E, R]), blocked=blocked[E, R, 1])
+net.submit(None, TrafficRequest(send[E, R], tag[E, R]))
+out = net.step(None, poses_local[E, R, 3], cur_tag[E], blocked=blocked[E, R, 1])     # dict, as NetModule.step
 ```
 
-Poses are env-local END-of-step poses; ns-3 moves each UE linearly from its previous pose in 4
-sub-steps (the counterpart of NetModule's `pose_chunks`). `blocked` adds 20 dB for that step.
-`out.ns3` carries the raw per-UE ns-3 statistics.
+NetConfig and TrafficRequest are the isaac layer's classes (`isaac_net.isaac.net_module`), re-exported. Poses are
+env-local END-of-step poses; ns-3 moves each UE linearly from its previous commanded end pose in 4 sub-steps (the
+counterpart of NetModule's `pose_chunks`). `blocked` adds 20 dB for that step. `out["ns3"]` carries the raw per-UE
+ns-3 statistics. The earlier form `net.step(poses, TrafficRequest(send), blocked=...)` still works and returns a
+`NetOutput` with attribute access (`out.ns3`).
 
 Windows without numpy/torch: `py/win_client.py` (stdlib only) implements the client (`Ns3Client`)
 and a round-trip benchmark:

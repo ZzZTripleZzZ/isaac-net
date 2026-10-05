@@ -211,7 +211,8 @@ def latency_components(sched, ue_period, facts, mu):
 
 
 def _arrivals(frames, run_id):
-    fr = [f for f in frames if f["run_id"] == run_id]
+    # a negative or missing first send time is a local send error marker (owd.py), not an arrival: it would shift t0
+    fr = [f for f in frames if f["run_id"] == run_id and _fin(f["t_tx_first_s"]) and f["t_tx_first_s"] >= 0]
     if not fr:
         return [], [], []
     ues = sorted({f["ue"] for f in fr})

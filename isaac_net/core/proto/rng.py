@@ -86,15 +86,19 @@ class CounterRNG:
 
     # ------------------------------------------------------------------ counters
     def reset(self, ids):
-        """New episode for env ids (None = all): episode += 1, call counters = 0. Eager, in place."""
+        """New episode for env ids (None = all): episode += 1, call counters = 0. Eager, in place.
+
+        An env listed several times in ids starts one new episode, as with a bool mask (NRRng.reset_mask), so the
+        k-th episode of env e stays keyed by (seed, e, k)."""
         if ids is None:
             self.episode.add_(1)
             for c in self.ctr.values():
                 c.zero_()
         else:
-            self.episode.index_add_(0, ids, torch.ones_like(ids))
+            m = torch.zeros(self.E, dtype=torch.bool, device=self.dev).index_fill_(0, ids, True)
+            self.episode.add_(m.long())
             for c in self.ctr.values():
-                c.index_fill_(0, ids, 0)
+                c.masked_fill_(m, 0)
 
     def set_env_offset(self, offset):
         """Key row i by env id offset + i instead of i (in place, so captured graphs stay valid). A shard of a

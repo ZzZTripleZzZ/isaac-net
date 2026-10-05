@@ -2,7 +2,7 @@
 
     Ns3Lockstep   drives E envs over one or several ns-3 processes (bridges/ns3/lockstep/netslot-bridge.cc)
     Ns3Net        NetBase drop-in (lockstep_net.py) for the prototype FleetEnv / training loop
-    Ns3NetModule  the isaac.netmodule NetModule API (netmodule_ns3.py)
+    Ns3NetModule  the isaac.net_module NetModule API (netmodule_ns3.py)
 
 Environment: NS3BRIDGE_ROOT = directory with bin/netslot-bridge and the ns-3.48 build (see
 bridges/ns3/lockstep/README.md), NS3_TOOLCHAIN_ENV = conda env whose lib/ the ns-3 build links against.

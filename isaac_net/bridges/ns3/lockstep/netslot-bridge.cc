@@ -48,6 +48,7 @@
 #include <set>
 #include <sstream>
 #include <tuple>
+#include <vector>
 
 #ifdef WITH_NS3AI
 #include "ns3-ai-msg-interface.h"
@@ -271,6 +272,10 @@ class ShmAiTransport : public Transport
 // Scenario state (rebuilt on RESET)
 // ---------------------------------------------------------------------------------------------
 static std::map<uint32_t, double> g_ueShadowDb; // node id -> shadowing (dB)
+// Last commanded end-of-step pose per UE (global UE index), the start of the next STEP_INTERP_POS interpolation.
+// The scheduled waypoints stop at 7/8 of the way, so the mobility model's own position lags the command.
+static std::vector<Vector> g_lastEnd;
+static std::vector<bool> g_hasLastEnd;
 
 class LogDistShadowLoss : public PropagationLossModel
 {
@@ -1132,6 +1137,8 @@ main(int argc, char* argv[])
             const float* sh = (flags & RESET_HAS_SHADOW) ? Take<float>(in, off, N) : nullptr;
             TeardownWorld();
             BuildWorld(c, run);
+            g_lastEnd.assign(N, Vector());
+            g_hasLastEnd.assign(N, false); // no command yet: interpolate from the rebuilt world's pose
             for (uint32_t i = 0; i < N; ++i)
             {
                 if (pos && std::isfinite(pos[3 * i]))
@@ -1163,6 +1170,11 @@ main(int argc, char* argv[])
 
         Time t0 = StepStart(k);
         Time t1 = StepStart(k + 1);
+        if (g_lastEnd.size() != N)
+        {
+            g_lastEnd.assign(N, Vector());
+            g_hasLastEnd.assign(N, false);
+        }
         for (uint32_t i = 0; i < N; ++i)
         {
             if (sh && std::isfinite(sh[i]))
@@ -1176,11 +1188,14 @@ main(int argc, char* argv[])
             double z = std::isfinite(pos[3 * i + 2]) ? pos[3 * i + 2] : c.ueHeight;
             if (flags & STEP_INTERP_POS)
             {
-                // Waypoint: 4 linear sub-steps from the current pose to the end-of-step pose.
+                // Waypoint: 4 linear sub-steps from the previous commanded end pose (the mobility model's
+                // position before the first command) to this step's end pose.
                 Ptr<MobilityModel> mm = g_w.ueNodes.Get(i)->GetObject<MobilityModel>();
-                Vector p0 = mm->GetPosition();
+                Vector p0 = g_hasLastEnd[i] ? g_lastEnd[i] : mm->GetPosition();
                 double ex = (i / c.nUe) * c.envSpacing;
                 Vector p1(ex + pos[3 * i], pos[3 * i + 1], z);
+                g_lastEnd[i] = p1;
+                g_hasLastEnd[i] = true;
                 const int C = 4;
                 for (int j = 0; j < C; ++j)
                 {
@@ -1193,6 +1208,8 @@ main(int argc, char* argv[])
             else
             {
                 SetUePos(i, pos[3 * i], pos[3 * i + 1], z);
+                g_lastEnd[i] = g_w.ueNodes.Get(i)->GetObject<MobilityModel>()->GetPosition();
+                g_hasLastEnd[i] = true;
             }
         }
         for (uint32_t j = 0; j < nIn; ++j)

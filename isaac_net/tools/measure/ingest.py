@@ -61,6 +61,7 @@ def ingest_run(run_dir, write=True):
     m = load_manifest(run_dir)
     rid, g, files = m["run_id"], m.get("gnb", {}), m.get("files", {})
     mu, rmap = int(g.get("mu", 1)), _rnti_map(m)
+    rt = bool(g.get("realtime_slots", True))      # false for simulated radios (rfsim, ZMQ): see schema.unwrap_slots
     p = lambda k: os.path.join(run_dir, files[k])
     tabs = {t: [] for t in TABLES}
     if "srsran_metrics" in files:
@@ -68,16 +69,16 @@ def ingest_run(run_dir, write=True):
         tabs["ue_period"] += srsran.parse_metrics_json(p("srsran_metrics"), rid, rmap,
                                                        per / 1000 if per else None)
     if "srsran_pcap" in files:
-        tabs["sched"] += srsran.parse_mac_pcap(p("srsran_pcap"), mu, rid, rmap, "srsran")
+        tabs["sched"] += srsran.parse_mac_pcap(p("srsran_pcap"), mu, rid, rmap, "srsran", realtime=rt)
     if "srsran_log" in files:
-        tabs["sched"] += srsran.parse_phy_log(p("srsran_log"), mu, rid, rmap, int(g.get("mcs_table", 1)))
+        tabs["sched"] += srsran.parse_phy_log(p("srsran_log"), mu, rid, rmap, int(g.get("mcs_table", 1)), realtime=rt)
     if "oai_macstats" in files:
         tabs["ue_period"] += oai.parse_macstats(p("oai_macstats"), rid, rmap)
     if "oai_pcap" in files:
-        tabs["sched"] += srsran.parse_mac_pcap(p("oai_pcap"), mu, rid, rmap, "oai")
+        tabs["sched"] += srsran.parse_mac_pcap(p("oai_pcap"), mu, rid, rmap, "oai", realtime=rt)
     if "oai_ttrace" in files:
         tabs["sched"] += oai.parse_ttracer(p("oai_ttrace"), mu, rid, rmap, m.get("ttrace_day_epoch"),
-                                           infer_crc=bool(m.get("ttrace_infer_crc", False)))
+                                           infer_crc=bool(m.get("ttrace_infer_crc", False)), realtime=rt)
     off = float(m.get("clock", {}).get("offset_ms", 0.0))
     summaries = {}
     for ue, spec in (files.get("probes") or {}).items():

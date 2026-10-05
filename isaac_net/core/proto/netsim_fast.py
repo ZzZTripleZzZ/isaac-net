@@ -552,10 +552,12 @@ class NetFast:
 
     def _capture(self, region):
         """Warm up (compiles for the compile/triton backends) and capture region into a CUDA graph.
-        State is snapshotted and restored so capture has no side effect on the simulation."""
+        State is snapshotted and restored so capture has no side effect on the simulation. Both global generators
+        (CPU and this device's CUDA generator, which the warm-up advances with rng="global") are restored too."""
         snap = {n: getattr(self, n).clone() for n in self._state()}
         snap_io = [x.clone() for x in self._io()]
         cpu_rng = torch.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state(self.dev)
         s = torch.cuda.Stream(self.dev)
         s.wait_stream(torch.cuda.current_stream(self.dev))
         with torch.cuda.stream(s):
@@ -575,6 +577,7 @@ class NetFast:
         for dst, src in zip(self._io(), snap_io):
             dst.copy_(src)
         torch.set_rng_state(cpu_rng)
+        torch.cuda.set_rng_state(cuda_rng, self.dev)
         return g
 
 
