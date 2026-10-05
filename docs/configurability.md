@@ -53,7 +53,7 @@ One `NRConfig` dataclass (`isaac_net/core/config.py`) configures every module, a
 | MCS / TBS / BLER tables | `phy.py` | 38.214 tables 1 and 2, Sionna or local 5G-LENA BLER | `mcs_table`, `bler_source`, `tbs_mode`, `eff_sinr`, `bler_target`, `*_mcs_max` | `L2` has no fast backend |
 | Link-adaptation reference | `phy.py:203-204` | threshold SINR at a 1524-bit code block on one 10-PRB RBG | no | n/a |
 | OLLA steps | `proto/netsim.py:546`, `proto/netsim_mc.py:257`, `mac.py:254` | legacy +0.05 / −0.45 dB; NR `olla_up_db`; clamp ±10 dB everywhere | NR yes (except the clamp); legacy and `NetSlotMC` no | literal |
-| Layers / antennas | `phy.py:46` | one layer, one antenna | no (`tbs_38214` already has `layers`) | n/a |
+| Layers / antennas | `phy.py` (`tbs_38214(layers=)`, `PHY.layer_sinr_db`), `mac.py` (`MacLink._rank`) | one layer; optional rank-1/2 SU-MIMO model | `n_layers_max`, `rank_rule`, `rank_sinr_min_db`, `rank_k_max_db`, `rank_layer_penalty_db`, `ul_mimo`, `dl_mimo` ([MIMO rank](#mimo-rank)) | reference and graph; `triton` refuses rank 2 |
 
 ### MAC
 
@@ -106,7 +106,7 @@ The comparison was checked line by line against the official documentation of ns
 | Link adaptation | BLER target, OLLA, MCS caps; DL CQI per MCS or on the 38.214 4-bit CQI table (`cqi_table`) | AMC, error-model or Shannon based | inner and outer loop | CQI-based AMC | **have**; OLLA clamp and legacy steps fixed |
 | Power control | UL fractional open loop (`L2` and legacy multi-cell) and closed-loop TPC, accumulated or absolute (`ul_tpc`, `L2`) | UL open and closed loop; DL uniform power allocation only | UL open loop, DL fair power | none documented (fixed transmit powers) | **have** UL open loop (`ul_pc`) and closed-loop TPC (`ul_tpc`, `L2` reference and `graph`); **missing**: DL power control, PUCCH / SRS loops, TPC on the `triton` backend |
 | Antenna patterns | gNB sector element of TR 38.901 Table 7.3-1 per cell, boresight and downtilt (`gnb_antenna`); UE isotropic | 3GPP UPAs, dual polarization, multi-panel, isotropic / cosine / parabolic | antenna arrays and patterns via Sionna PHY | isotropic or directional per node | **have** (`gnb_antenna="sector"`, every backend): one element per cell; **missing**: arrays and beamforming; the Sionna RT bake applies the pattern per grid point along the direct direction, not per traced ray ([scene-radio-map.md](scene-radio-map.md#sector-antennas-at-bake-time)) |
-| MIMO / beamforming | none (one layer) | SU-MIMO up to rank 4, analog beamforming | SU-MIMO streams; precoding via Sionna PHY | none (incomplete MIMO removed in v1.4.3) | **missing**: layers could scale TBS and SINR (moderate); beamforming is large |
+| MIMO / beamforming | rank-1/2 SU-MIMO model: rank per new TB from the wideband SINR and the Rician K, TBS over the layers, per-layer SINR with a power split and a fixed inter-layer penalty ([MIMO rank](#mimo-rank)) | SU-MIMO up to rank 4, analog beamforming | SU-MIMO streams; precoding via Sionna PHY | none (incomplete MIMO removed in v1.4.3) | **partial** (`n_layers_max=2`, `L2` reference and graph): no ranks 3 and 4, no PMI or Type-I codebook, no rank-conditioned CQI; beamforming is large and **missing** |
 | Channel model | log-distance with correlated and white shadowing; TR 38.901 RMa, UMa, UMi, InH, InF-SL/DL/SH/DH path loss with spatially consistent LOS state and O2I; precomputed radio maps (Sionna RT baking tool); robot-body blockage (obstacles and the TR 38.901 blockage models: next row); AR(1) Rayleigh with per-robot Doppler and an optional Rician K-factor (row after next) | 3GPP TR 38.901 (RMa, UMa, UMi, InH, V2V, NTN), NYUSIM (incl. InF), FTR, Sionna RT | TR 38.901 via Sionna PHY (UMi, UMa, RMa, InH, InF); ray tracing via Sionna RT | 3GPP TR 36.814, 36.873, 38.901 path loss, shadowing, Rayleigh or Jakes fading | **have** large-scale models ([channels.md](channels.md)); **missing**: 38.901 cluster fast fading, online ray tracing |
 | Obstacles / LOS blockage | geometric LOS state from a baked LOS map or a 2.5-D ray march over the scene's height map, or an Isaac callback (`los_source`); ITU-R P.526 knife-edge diffraction (`los_diffraction`); TR 38.901 soft LOS (`los_soft`); TR 38.901 blockage model B screens for robots and per-step blockers and model A regions (`blockage_model`) (`RadioMC`, per-step `blockers=` on `L2`; [obstacles.md](obstacles.md)) | supported (source only, ns-3-dev): LOS from `Building` boxes (`BuildingsChannelConditionModel`) and blockage model A in `ThreeGppChannelModel`; no model B in the source | not assessed | not assessed | **have** (`los_source`, `los_diffraction`, `los_soft`, `blockage_model`): 2.5-D height map, one map for all envs; **missing**: exact 3-D mesh LOS inside the graph backend, multi-edge diffraction |
 | Rician fading / K-factor | per-link K fixed or from the LOS state (TR 38.901 Table 7.5-6 log-normal per scenario, 0 when NLOS or blocked), linear ramp on LOS changes, all three `L2` backends ([channels.md](channels.md#rician-fading)) | K-factor inside the TR 38.901 cluster model | inside the TR 38.901 CDL / TDL models of Sionna PHY | not assessed | **have** (`fading_rician`, `L2`): specular term on the AR(1) Rayleigh state; no LOS-path Doppler; subbands independent unless `fading_freq_corr` |
@@ -212,6 +212,7 @@ Limits: `proactive_grant="per_period"` needs a TDD period and is refused with FD
 | RACH and DRX (`rach`, `drx`) | yes | yes | refused |
 | FDD (`duplex="fdd"`) | yes | yes | refused |
 | DL traffic models (`TrafficModel(..., direction="dl")`) | yes | yes | refused |
+| rank-2 MIMO (`n_layers_max=2` with `ul_mimo`, or `dl_mimo` and `dl`) | yes | yes | refused |
 | SINR hooks (`set_sinr_hook`, `core.slot_tap` wrappers such as energy and background) | yes | yes | refused at the first step |
 | debug traces (`trace_frames`, `log_sinr`, link traces) | yes | no | no |
 | the other 5G-LENA MAC switches (`pf_update`, `pf_avg_idle`, `ul_retx_sched`, `ul_amc_alloc`), Rician fading, the gNB sector antenna, UL traffic models | yes | yes | yes |
@@ -269,6 +270,40 @@ The alternative was one queue per class, `[E, R, Q]` with a stream pointer per c
 
 **Limits.** No guaranteed bit rate (5G-LENA's GBR resource type only selects the delay factor here), no per-class PRB quota, no slicing. The PDCP discard of `discard="pdcp_arrival"` checks the message at the head of the byte stream, which is the most important class after a reorder, not necessarily the oldest message. A message purged by `discard="purge"` from the middle of the stream leaves a gap that is skipped at the next step start.
 
+## MIMO rank
+
+A parsimonious single-user MIMO model with rank 1 or 2 (level `L2`, `mac.MacLink._rank`, `phy.PHY.layer_sinr_db`, `tbs_38214(layers=)`). 5G-LENA `v5.1` supports SU-MIMO up to rank 4 with a Type-I codebook. Its UE picks a rank indicator (RI), a precoding matrix (PMI) and a CQI for that rank from the full channel matrix. This engine keeps one scalar SINR per robot and RBG, so it models the rank only through its effect on the transport block: twice the resource elements and a lower SINR per layer. The default (`n_layers_max=1`) has no rank state and runs exactly the earlier ops (`tests/test_mimo.py` (a) compares it with the frozen engine bit for bit).
+
+**Rank decision.** The rank is chosen once per new TB at link adaptation, after the scheduler has allocated the RBGs. A HARQ process keeps the rank of its TB for every retransmission (`h_rank`). The rule (`rank_rule`) reads two inputs. The first is the wideband SINR, the PRB-weighted linear mean over the RBGs of the link-adaptation estimate (per PRB, at this grant's transmit PSD, before OLLA and before the layer split). The second is the Rician K-factor target of the serving link (`NRNet.k_lin`, see [channels.md](channels.md#rician-fading)), which is 0 for an NLOS or blocked link. Without Rician fading there is no K, and the link counts as rich scattering (K = 0), which matches the Rayleigh fading the engine then draws.
+
+| `rank_rule` | rank 2 when |
+|:---|:---|
+| `"sinr"` | wideband SINR ≥ `rank_sinr_min_db` |
+| `"los"` | K < `rank_k_max_db` (NLOS, or a weak specular path) |
+| `"sinr_los"` (default) | both |
+
+**Per-layer SINR.** A rank-2 TB sees, on every RBG, the per-layer SINR
+
+    SINR_layer = SINR − 10 log10(rank) − rank_layer_penalty_db
+
+The 3 dB term splits the transmit power over the two layers. The penalty stands for the inter-layer interference left after precoding and detection, as one fixed number instead of a function of the channel's condition number. Link adaptation selects the MCS on the per-layer SINR (with OLLA on top) and sizes the TB with `tbs_38214(..., layers=rank)`, which doubles N_info (TS 38.214 Sec. 5.1.3.2 step 2, so the TBS is about 1.9 to 2.1 times the rank-1 TBS at the same MCS). With `tbs_mode="lena"` the rank multiplies the resource elements of the 5G-LENA payload size. Decoding uses the per-layer SINR of the process's rank in the same EESM and BLER lookup. Both layers carry one TB with one CRC (a single codeword, as in NR up to rank 4), so they are decoded jointly as one TB, and the TB error probability counts the code blocks of the doubled TB.
+
+| Field | Default | Meaning |
+|:---|:---|:---|
+| `n_layers_max` | 1 | 1 (one layer, the earlier engine) or 2 |
+| `rank_rule` | `"sinr_los"` | `"sinr"`, `"los"` or `"sinr_los"` (table above) |
+| `rank_sinr_min_db` | 10 | wideband SINR threshold for rank 2 |
+| `rank_k_max_db` | 3 | K-factor (dB) below which a link counts as rich scattering |
+| `rank_layer_penalty_db` | 3 | inter-layer interference penalty on top of the 3 dB power split |
+| `ul_mimo` | `False` | rank 2 in the uplink (the UE needs two transmit antennas) |
+| `dl_mimo` | `True` | rank 2 in the downlink (read only with `dl=True`) |
+
+`unused_fields` counts the rank fields as read only with `n_layers_max=2` and a direction that may use rank 2, `rank_k_max_db` only with a rule that reads K and `rank_sinr_min_db` only with a rule that reads the SINR. With `n_layers_max=2` the step dict adds `rank` (UL) and, with `dl=True`, `dl_rank`: the rank of each robot's last new TB [E, R], 1 in a direction without rank 2.
+
+**Simplifications against 5G-LENA.** No ranks 3 and 4, no PMI, no Type-I codebook and no channel matrix. The penalty is one number, not a function of the antenna correlation. CQI and OLLA are unchanged: the CQI is not conditioned on the rank, so at high SINR the gNB's estimate saturates at the threshold of the highest MCS, and the per-layer estimate sits 3 dB plus the penalty below it until OLLA climbs (rank 2 at a 40 dB input SNR gives about 1.75 times the rank-1 saturated throughput, not 2). The scheduler's rate estimate stays single-layer, so a rank-2 TB of a robot with a small backlog may carry padding. The rank uses the K target of the LOS state, not the ramped K of the slot.
+
+**Backends.** `reference` and `graph` (the rank is a long tensor and the rule a fixed-shape comparison, so the step captures; `tests/test_mimo.py` checks the capture path on CPU, and `ul_dl_mimo2` is in the G1 and G7 lists of `tests/test_nr_fast.py`). `triton` refuses rank 2 ([NR engine backends](#nr-engine-backends)). A kernel mirror needs the per-process rank in its HARQ state, the rank rule with K as a per-robot input, TBS tables per rank (`[NPRB + 1, M]` for layers 1 and 2), and the per-layer SINR shift in the MCS selection and in decoding.
+
 ## Proposed modes and switches
 
 Every proposal keeps today's behavior as the default, so existing results and the bitwise backend tests stay valid. A field that a level cannot honor must appear in `unused_fields(level)`, or the level must refuse it, never ignore it silently.
@@ -303,7 +338,7 @@ Every proposal keeps today's behavior as the default, so existing results and th
 | Robot blockage and per-robot Doppler | `NRConfig(blockage=True, fading_doppler="per_robot")` | **done** on `feat/channel`; per-robot Doppler needs the NR engine (`L2`) and pose input |
 | Obstacles and NLOS | `NRConfig(los_source="raycast", radio_map_path="map.npz", los_diffraction=True, blockage=True, blockage_model="screen")`, `step(..., blockers=)` | **done** on `feat/obstacles` ([obstacles.md](obstacles.md)): `RadioMC` and `NetSlotMC`; `blockers=` and the `los` / `blocked` step keys on the NR engine (`L2`, reference and graph); no Triton change (per-step pathgain inputs only) |
 | 5G-LENA MAC behavior under load | `NRConfig` fields `pf_update="rbg"`, `pf_avg_idle="freeze"`, `ul_retx_sched="tdma"`, `ul_amc_alloc="previous"`, `ul_grant_model="bsr"` (with `sr_boot_*`, `bsr_*`, `rlc_tail_*`); all on in the presets `lena_match_v2()` / `lena_validation_v2()` ([fidelity-load-gap.md](fidelity-load-gap.md)) | `L2`, reference and graph backends (graph bitwise), one or several cells; triton runs every switch except `ul_grant_model="bsr"`; defaults = the engine before the switches, bitwise |
-| MIMO layers | `NRConfig(n_layers=2)` | TBS already takes `layers`; SINR per layer needs a rank model |
+| MIMO layers | **done** on `feat/mimo`: `NRConfig(n_layers_max=2, dl=True)`, see [MIMO rank](#mimo-rank) | `L2` reference and graph; triton refuses; ranks 3 and 4, PMI and rank-conditioned CQI open |
 | Unified Isaac config | **Done (9c642ce).** The Isaac layer takes the same `NRConfig` as `make_engine`, with Isaac-only settings in `IsaacNetCfg` (`isaac/config.py`); observation features are chosen by name through `obs_features`, with one normalization and `obs_dim()`; domain-randomization ranges live in `IsaacNetCfg.dr_ranges` and `dr_support()` reports which levels honor them. `NetConfig` remains only as a deprecated alias with no defaults of its own. | closed |
 | Background users, radio energy, multi-GPU sharding | **done** on `feat/bgenergy`: `NRConfig(background=BackgroundConfig(n_background=8), energy=EnergyConfig())`, `ShardedEngine(level, E, R, devices)`; see [background-energy-sharding.md](background-energy-sharding.md) | background: ghost robots on `L2`, an offered-load approximation on `L1` / `L2-legacy` (every backend), refused elsewhere; energy: per-slot on `L2`, airtime approximation elsewhere, every level and backend; sharding: bitwise shard-invariant for the engine-RNG levels, including `L2` without traffic models or background users |
 | Per-env domain randomization for `make_engine` levels | `NRConfig` field ranges resolved per env at reset | needs per-env parameter tensors in the radio and MAC |
