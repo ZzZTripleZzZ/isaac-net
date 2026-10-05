@@ -134,3 +134,44 @@ def test_isaac_adapter_reads_env_inside_indicator():
     _, _, done, info = task.step(torch.zeros(E, R, 2), torch.zeros(E, R, dtype=torch.long))
     assert bool(done[0]) and len(info["episodes"]) == 1
     assert info["episodes"][0][FleetAlert.METRIC.key] == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------------------------- MJX (item 25)
+def _import_mjx_module_with_stub_jax(monkeypatch):
+    """isaac_net.mjx.net_module imports JAX at module level; stub the few names it touches at import time so the
+    pure-torch build_module can be tested without JAX."""
+    import importlib
+    import sys
+    import types
+    if importlib.util.find_spec("jax") is None:
+        jax = types.ModuleType("jax")
+        jnp = types.ModuleType("jax.numpy")
+        jnp.float32, jnp.bool_, jnp.int32 = "float32", "bool", "int32"
+        exp = types.ModuleType("jax.experimental")
+        bc = types.ModuleType("jax.experimental.buffer_callback")
+        bc.buffer_callback = lambda *a, **k: None
+        jax.numpy, jax.experimental, exp.buffer_callback = jnp, exp, bc
+        for name, mod in (("jax", jax), ("jax.numpy", jnp), ("jax.experimental", exp),
+                          ("jax.experimental.buffer_callback", bc)):
+            monkeypatch.setitem(sys.modules, name, mod)
+        for name in ("isaac_net.mjx", "isaac_net.mjx.net_module"):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    return importlib.import_module("isaac_net.mjx.net_module")
+
+
+def test_mjx_build_module_leaves_global_rng_alone(monkeypatch):
+    import sys
+    try:
+        nm = _import_mjx_module_with_stub_jax(monkeypatch)
+        torch.manual_seed(123)
+        before = torch.get_rng_state()
+        cuda_before = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        a = nm.build_module("L0", 2, 3, "cpu", NRConfig(), "reference", seed=7)
+        assert torch.equal(torch.get_rng_state(), before)
+        if cuda_before is not None:
+            assert all(torch.equal(x, y) for x, y in zip(torch.cuda.get_rng_state_all(), cuda_before))
+        b = nm.build_module("L0", 2, 3, "cpu", NRConfig(), "reference", seed=7)
+        assert a.seed == b.seed == 7
+    finally:
+        for name in ("isaac_net.mjx", "isaac_net.mjx.net_module"):
+            sys.modules.pop(name, None)

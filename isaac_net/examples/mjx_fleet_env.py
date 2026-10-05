@@ -8,8 +8,9 @@ The MJX counterpart of isaac_net/examples/isaac_fleet_env.py (same task, same ne
     channel bucketed at -1/3 and +1/3; velocity components pointing out of the arena are cancelled
   - hazards spawn near a random robot, grow, last 10 s; a frame detects with p = 0.6 / 1.0 within 25 / 50 m;
     when a detecting frame is DELIVERED the fleet learns the hazard location
-  - obs per robot (12, the Isaac layout): pos, goal offset, known-hazard offset and radius, siren, queued frames,
-    AoI, SNR, known flag
+  - obs per robot (12, the Isaac layout of isaac_fleet_env.py): pos, goal offset, known-hazard offset and radius,
+    siren, known flag, then the network features queued frames, AoI, SNR (the Isaac default FLEET_OBS order).
+    examples/fleet_task.py (pure torch) keeps its own order, with the known flag last.
 Network: net_level "off" (ideal: detections known the same step, zero network features) or any make_engine level
 on any backend it has, through isaac_net.mjx.NetModuleMJX (one torch NetModule for the E envs, stepped from
 inside the vmapped, jitted env step by a buffer_callback).
@@ -211,7 +212,7 @@ class MJXFleetEnv(mjx_env.MjxEnv):
         hr = jnp.broadcast_to(radius / L, (R,)) * kf
         siren = jnp.broadcast_to((task["h_on"] & (task["tt"] - task["h_start"] < SIREN)).astype(jnp.float32), (R,))
         cols = [pos / L, (task["goal"] - pos) / L, hrel] + \
-            [x[:, None] for x in (hr, siren, feats[:, 2], feats[:, 0], feats[:, 1], kf)]
+            [x[:, None] for x in (hr, siren, kf, feats[:, 2], feats[:, 0], feats[:, 1])]   # queue, aoi, sinr
         return jnp.concatenate(cols, -1).reshape(R * OBS_PER_ROBOT)
 
 
