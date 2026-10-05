@@ -85,6 +85,7 @@ class MacLink:
         self.sinr_hook = None      # same-slot inter-cell interference, see slot()
         self.member = None         # [E,C,R] serving-cell membership (multi-cell only)
         self.sched_ok = None       # [E,R] schedulable (outside a handover interruption; multi-cell only)
+        self.slot_nsym = 14        # data symbols of the slot being processed (set by slot(), read by SINR hooks)
         self.n_cells = 1
         self.rng = None            # nr_rng.NRRng (cfg.rng="engine"; set by NRNet)
         self._bler_site = BLER[self.dir]
@@ -163,6 +164,7 @@ class MacLink:
         inside the control step (engine RNG stream)."""
         cfg, E, R, S, P, d, phy = self.cfg, self.E, self.R, self.S, self.P, self.dev, self.phy
         gh = g if gh is None else gh
+        self.slot_nsym = nsym
         w = self.sb_prb
         unsent = self.unsent()
         # DL processes whose ACK has reached the gNB become free

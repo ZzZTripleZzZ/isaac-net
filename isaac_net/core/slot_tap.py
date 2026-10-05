@@ -8,7 +8,9 @@ unchanged, so the engine's outputs stay bitwise the same. Per control step it ac
   ul_slots [E,R]    UL data slots in which the robot sent a transport block (new or retransmission)
   ul_prb   [E,R]    PRB-slots of those transmissions
   ul_tx_j  [E,R]    radiated energy of those transmissions (J): the per-slot transmit power after the power split
-                    and fractional power control (UlMac._split) times the slot duration
+                    and fractional power control (UlMac._split) times the PUSCH duration, i.e. the slot duration
+                    scaled by the slot's UL data symbols / 14 (cfg.ul_data_symbols in a U slot, the special slot's
+                    UL symbols in an S slot with special_ul_data; MacLink.slot_nsym, the nsym of MacLink.slot)
   dl_slots [E,R]    DL data slots in which the robot was scheduled (it receives a transport block)
 
 One tap serves every wrapper of an engine (SlotTap.of). begin() zeroes the counters before a step. A user hook set
@@ -64,7 +66,8 @@ class SlotTap:
                 self.ul_prb += n_prb * txf
                 n = n_prb.clamp(min=1.0)
                 p_dbm = self.ue_tx_dbm - self.ref_db - link._split(n_prb) + 10 * torch.log10(n)
-                self.ul_tx_j += torch.where(tx, 10 ** ((p_dbm - 30.0) / 10.0) * self.slot_s, torch.zeros_like(n))
+                dur = self.slot_s * link.slot_nsym / 14.0                # PUSCH symbols of this slot
+                self.ul_tx_j += torch.where(tx, 10 ** ((p_dbm - 30.0) / 10.0) * dur, torch.zeros_like(n))
             else:
                 self.dl_slots += txf
             return act if prev is None else prev(g, d, won, n_prb, act)
