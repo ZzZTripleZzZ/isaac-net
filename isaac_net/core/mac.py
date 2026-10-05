@@ -45,6 +45,7 @@ from .phy import PHY
 from .queues import FrameQueue, env_mask, onehot, reset_where
 
 BIG = 2 ** 62
+AVG_MIN = 1e-9             # floor of the PF average (bytes per slot), as 5G-LENA's PF metric max(1e-9, avg)
 BSR_DEPTH = 4              # ul_grant_model="bsr": buffer status reports in flight per robot ("K" state dims)
 
 
@@ -198,7 +199,7 @@ class MacLink:
         elif sched == "rr":                    # age of the last transmission, the same on every RBG
             metric_sb = (g - self.last_tx).float()[..., None].expand_as(rate_sb)
         else:
-            metric_sb = rate_sb / self.avg[..., None]
+            metric_sb = rate_sb / self.avg.clamp(min=AVG_MIN)[..., None]
         # retransmission admission: rank pending retx per cell (PF metric) and admit them while their
         # RBG counts fit the carrier, so no retx is left with a partial (unusable) allocation
         M = self.member
@@ -237,8 +238,14 @@ class MacLink:
             admitted = torch.zeros_like(rx_c).scatter(-1, order, adm_sorted).any(1)
         has_rx = admitted
         want_cnt = torch.where(has_rx, rx_nsb, torch.where(new_el, n_max, torch.zeros_like(n_max)))
-        prio = (1e9 if cfg.retx_priority else 0.0) * has_rx.float()
+        lex = cfg.retx_priority
+        prio = (1e9 if lex else 0.0) * has_rx.float()
         # ---- PF allocation, RBG by RBG (greedy; stops when the need is covered) ----
+        # retx_priority: an admitted retransmission that still wants RBGs wins RBG s over all new data (lexicographic
+        # priority: while one wants it, the new-data robots of its cell are masked out). Among retransmissions the key
+        # stays metric + 1e9 in float32, as before, so whenever every metric is below 1e9 the choice is unchanged; the
+        # mask only matters when a PF metric (rate / tiny average) reaches the 1e9 bonus, where a new-data robot used
+        # to take RBGs an admitted retransmission needed, leaving it short of its RBG count and unable to send.
         cnt = torch.zeros(E, R, dtype=torch.long, device=d)
         left = need.float()
         cols = []
@@ -251,11 +258,18 @@ class MacLink:
             want = (cnt < want_cnt) & (has_rx | (left > 0))
             ms = rate_sb[..., s] / (base + wwin * got).clamp(min=1e-9) if rbg_pf else metric_sb[..., s]
             m = torch.where(want, ms + prio, torch.full_like(left, -1.0))
+            wr = want & has_rx if lex else None
             if M is None:
+                if lex:
+                    m = torch.where(wr.any(-1, keepdim=True) & ~wr, torch.full_like(m, -1.0), m)
                 best, wi = m.max(-1)
                 oh = onehot(wi, R) & (best >= 0)[:, None]
             else:               # one PF scheduler per cell on RBG s
-                best, wi = torch.where(M, m[:, None, :], torch.full_like(m[:, None, :], -1.0)).max(-1)   # [E,C]
+                mc = torch.where(M, m[:, None, :], torch.full_like(m[:, None, :], -1.0))               # [E,C,R]
+                if lex:
+                    wr_c = wr[:, None, :] & M
+                    mc = torch.where(wr_c.any(-1, keepdim=True) & ~wr_c, torch.full_like(mc, -1.0), mc)
+                best, wi = mc.max(-1)                                                                   # [E,C]
                 oh = (onehot(wi, R) & (best >= 0)[..., None]).any(1)
             cols.append(oh)
             cnt = cnt + oh.long()
@@ -385,11 +399,14 @@ class MacLink:
         slot (need > 0, no retransmission admitted) update their average (5G-LENA's active list)."""
         cfg = self.cfg
         if cfg.pf_update == "slot" and cfg.pf_avg_idle == "decay":
-            self.avg = (1 - 1 / cfg.pf_window) * self.avg + (1 / cfg.pf_window) * served
+            # floored at AVG_MIN: an idle robot's average decays geometrically and would underflow float32 to 0
+            # (an infinite PF metric); the floor binds only after about 2,500 idle slots at pf_window=100, where
+            # rate / avg already exceeded the 1e9 retransmission bonus for any RBG carrying a byte
+            self.avg = ((1 - 1 / cfg.pf_window) * self.avg + (1 / cfg.pf_window) * served).clamp(min=AVG_MIN)
         else:
             wwin = 1.0 / cfg.pf_window
             upd = (tbs_new // 8).float() * tx_new if cfg.pf_update == "rbg" else served.float()
-            new_avg = (1 - wwin) * self.avg + wwin * upd
+            new_avg = ((1 - wwin) * self.avg + wwin * upd).clamp(min=AVG_MIN)
             if cfg.pf_avg_idle == "freeze":
                 self.avg = torch.where((need > 0) & ~has_rx, new_avg, self.avg)
             else:

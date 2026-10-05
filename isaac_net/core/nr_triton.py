@@ -17,6 +17,7 @@ from .proto.rng_triton import uniform as rng_uniform
 # mac.MacLink.slot, mac_ul.UlMac, mac_dl.DlMac and nr_engine.NRNet.step at one cell; see NRTritonEngine in
 # nr_fast.py for what runs outside the kernel and for the equivalence methodology.
 NEG_INF = float("-inf")
+AVG_MIN = tl.constexpr(1e-9)   # mac.AVG_MIN: floor of the PF average (as 5G-LENA's max(1e-9, avg))
 
 
 @triton.jit
@@ -149,9 +150,9 @@ def _sr_step(enq, sent, bsr, sr_t, g):
 
 @triton.jit
 def _pf_update(avg, served, PF_A: tl.constexpr, PF_B: tl.constexpr):
-    """PF average after a data slot (MacLink.slot): EWMA of the served bytes of every robot. Kept separate so
-    per-RBG / frozen-while-idle variants plug in here (as in mac.py)."""
-    return PF_A * avg + PF_B * served.to(tl.float32)
+    """PF average after a data slot (MacLink._pf_update): EWMA of the served bytes of every robot, floored at AVG_MIN.
+    Kept separate so per-RBG / frozen-while-idle variants plug in here (as in mac.py)."""
+    return tl.maximum(PF_A * avg + PF_B * served.to(tl.float32), AVG_MIN)
 
 
 @triton.jit
@@ -260,7 +261,7 @@ def _mac_slot(
     elif SCHED == 2:
         metric = (g - last_tx).to(tl.float32)[:, None] + 0.0 * rate
     else:
-        metric = rate / avg[:, None]
+        metric = rate / tl.maximum(avg, AVG_MIN)[:, None]
     metric = tl.where(sm[None, :], metric, 0.0)
     # ---- retransmission admission: rank by the metric sum, admit while the RBG counts fit ----
     n_block = 0.0
@@ -296,6 +297,9 @@ def _mac_slot(
         else:
             msc = _col(metric, sidx, s)
         ms = tl.where(want, msc + prio, -1.0)
+        if RETX_PRIO:      # lexicographic: while an admitted retx wants RBG s, new data is masked out (MacLink.slot)
+            wr = want & has_rx
+            ms = tl.where((tl.max(wr.to(tl.int32), axis=0) > 0) & (~wr), -1.0, ms)
         best = tl.max(ms, axis=0)
         wi = tl.argmax(ms, axis=0)
         sel = (ridx == wi) & (best >= 0)
@@ -457,7 +461,7 @@ def _mac_slot(
             upd = (tbs_new // 8).to(tl.float32) * tx_new.to(tl.float32)
         else:
             upd = served.to(tl.float32)
-        new_avg = PF_A * avg + PF_B * upd
+        new_avg = tl.maximum(PF_A * avg + PF_B * upd, AVG_MIN)
         if PF_FREEZE:
             avg = tl.where((need > 0) & (~has_rx), new_avg, avg)
         else:
