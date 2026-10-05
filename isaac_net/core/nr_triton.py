@@ -14,8 +14,10 @@ from .proto.rng_triton import uniform as rng_uniform
 # ---------------------------------------------------------------------------------------------- fused step kernel
 # One program per env runs every scheduled slot of one control step (fading evolution, SR, UL and optionally DL data
 # slots and CQI reports) with the robot x {HARQ process, frame, subband, MCS} state in registers. Semantics follow
-# mac.MacLink.slot, mac_ul.UlMac, mac_dl.DlMac and nr_engine.NRNet.step at one cell; see NRTritonEngine in
-# nr_fast.py for what runs outside the kernel and for the equivalence methodology.
+# mac.MacLink.slot, mac_ul.UlMac, mac_dl.DlMac and nr_engine.NRNet.step at one cell, plus the per-slot gate of
+# access.AccessStage (ACCESS), the UL and DL traffic arrival gates of engine.NREngine (GATE, DLGATE) and the paired DL
+# carrier of FDD (FDD); see NRTritonEngine in nr_fast.py for what runs outside the kernel and for the equivalence
+# methodology.
 NEG_INF = float("-inf")
 AVG_MIN = tl.constexpr(1e-9)   # mac.AVG_MIN: floor of the PF average (as 5G-LENA's max(1e-9, avg))
 
@@ -162,6 +164,45 @@ def _gather_p(x, pidx, p):
 
 
 @triton.jit
+def _fmod(x, c):
+    """x mod c (c > 0) with the sign of c, as torch's % (Triton's integer % keeps the sign of x)."""
+    m = x % c
+    return tl.where(m < 0, m + c, m)
+
+
+@triton.jit
+def _busy(enq, sent, h_st):
+    """AccessStage._busy: [RB] the link has bytes not sent yet, or a HARQ process waiting for a retransmission."""
+    return (enq - sent > 0) | (tl.max((h_st == 1).to(tl.int32), axis=1) > 0)
+
+
+@triton.jit
+def _acc_gate(a_s, a_c, a_l, ubusy, g, ACCESS: tl.constexpr, A_INACT: tl.constexpr, A_CYC: tl.constexpr,
+              A_ON: tl.constexpr, A_SCYC: tl.constexpr, A_NSH: tl.constexpr, A_OFF: tl.constexpr,
+              A_ULW: tl.constexpr):
+    """AccessStage._ok / _awake at slot g -> (schedulable, connected, awake) [RB]. a_s: access state (IDLE 0, RACH 1,
+    CONNECTED 2; fixed during the slots), a_c: slot from which a robot in RACH is served, a_l: slot of the last
+    scheduling activity, ubusy: AccessStage._busy(net.ul) (drx_ul_wake="sr"). ACCESS 1: RACH only, awake = connected;
+    ACCESS 2: DRX (A_SCYC = 0: no short cycle)."""
+    conn = (a_s == 2) | ((a_s == 1) & (a_c <= g))
+    if ACCESS == 2:
+        awake = (g - a_l) < A_INACT
+        if A_SCYC > 0:     # short cycle for A_NSH cycles after the inactivity timer expires
+            short = (g - (a_l + A_INACT)) < A_NSH * A_SCYC
+            phase = tl.where(short, _fmod(g - A_OFF, A_SCYC), _fmod(g - A_OFF, A_CYC))
+        else:
+            phase = _fmod(g - A_OFF, A_CYC)
+        awake = awake | (phase < A_ON)
+        if A_ULW:
+            awake = awake | ubusy
+        ok = conn & awake
+    else:
+        awake = conn
+        ok = conn
+    return ok, conn, awake
+
+
+@triton.jit
 def _mac_slot(
         # per-robot state [RB] (lnp: PRBs of the last PUSCH, ul_amc_alloc="previous"; qw: class weight, scheduler="qos")
         sent, floor, olla, avg, bsr, sr_t, last_tx, enq, lnp, qw,
@@ -192,7 +233,9 @@ def _mac_slot(
         REF_PRBS: tl.constexpr, PHR_MIN: tl.constexpr, WB_DB: tl.constexpr, W0: tl.constexpr,
         OLLA_UP: tl.constexpr, OLLA_DN: tl.constexpr, PF_A: tl.constexpr, PF_B: tl.constexpr,
         PF_RBG: tl.constexpr, PF_FREEZE: tl.constexpr, RETX_TDMA: tl.constexpr, AMC_PREV: tl.constexpr,
-        LENA_CTR: tl.constexpr, QOS_G: tl.constexpr):
+        LENA_CTR: tl.constexpr, QOS_G: tl.constexpr,
+        # access gate (ACC != 0): schedulable robots of this slot [RB] (AccessStage, MacLink.sched_ok)
+        sok, ACC: tl.constexpr):
     BIG: tl.constexpr = 2 ** 62
     unsent = enq - sent
     # DL processes whose ACK has reached the gNB become free
@@ -211,6 +254,9 @@ def _mac_slot(
         need = unsent
     new_el = (tl.max(free.to(tl.int32), axis=1) > 0) & (need > 0) & (~has_rx) & rm
     has_rx = has_rx & rm
+    if ACC:                # access gate (MacLink.slot: has_rx & sched_ok, new_el & sched_ok; new_el already saw ~has_rx)
+        new_el = new_el & sok
+        has_rx = has_rx & sok
     pending = tl.max((h_st == 1).to(tl.int32), axis=1) > 0
     rx_nsb = _gather_p(h_nsb, pidx, rx_p).to(tl.int64)
     # ---- scheduler estimate ----
@@ -642,7 +688,17 @@ def nr_step_kernel(
         GNB_PROC: tl.constexpr, REF_PRBS: tl.constexpr, PHR_MIN: tl.constexpr, WB_DB: tl.constexpr,
         W0: tl.constexpr, OLLA_UP: tl.constexpr, OLLA_DN: tl.constexpr, PF_A: tl.constexpr, PF_B: tl.constexpr,
         PF_RBG: tl.constexpr, PF_FREEZE: tl.constexpr, RETX_TDMA: tl.constexpr, AMC_PREV: tl.constexpr,
-        LENA_CTR: tl.constexpr, QOS_G: tl.constexpr):
+        LENA_CTR: tl.constexpr, QOS_G: tl.constexpr,
+        # access gate (ACCESS, core/access.py AccessStage): state, served-from slot, last scheduling activity (in/out),
+        # sleeping slots of the step (in/out) [E,R]; A_UB: AccessStage._busy(net.ul) [E,R] uint8 when the UL does not run
+        a_st, a_conn, a_la, a_slp, a_ub,
+        # DL traffic arrival gate (DLGATE): per-message DL stream ends [E,R,NMSG_D], arrival slots, base [E,R]
+        dg_e_ptr, dg_s_ptr, dg_b_ptr, NMSG_D,
+        # FDD with a DL carrier of its own width: PRBs per DL RBG [S] (dl.sb_prb)
+        wd_ptr,
+        ACCESS: tl.constexpr, A_INACT: tl.constexpr, A_CYC: tl.constexpr, A_ON: tl.constexpr,
+        A_SCYC: tl.constexpr, A_NSH: tl.constexpr, A_OFF: tl.constexpr, A_ULW: tl.constexpr, A_UB: tl.constexpr,
+        FDD: tl.constexpr, NPRB_D: tl.constexpr, DLGATE: tl.constexpr, MMB_D: tl.constexpr):
     e = tl.program_id(0).to(tl.int64)
     ridx = tl.arange(0, RB)
     rm = ridx < R
@@ -731,6 +787,26 @@ def nr_step_kernel(
         d_hok = tl.zeros([HB], tl.float32)
         d_htx = tl.zeros([HB], tl.float32)
         d_hfl = tl.zeros([HB], tl.float32)
+        if DLGATE:         # the DL stream opens message by message at the arrival slots (DL traffic models)
+            dmi = tl.arange(0, MMB_D)
+            o_dm = er[:, None] * NMSG_D + dmi[None, :]
+            m_dm = rm[:, None] & (dmi[None, :] < NMSG_D)
+            dg_base = tl.load(dg_b_ptr + er, mask=rm, other=0)
+            dg_end = tl.load(dg_e_ptr + o_dm, mask=m_dm, other=0)
+            dg_slot = tl.load(dg_s_ptr + o_dm, mask=m_dm, other=2 ** 30)
+    if FDD:                # paired DL carrier of its own width: its PRBs per RBG (NREngine._install_fdd_dl_carrier)
+        w_d = tl.load(wd_ptr + sidx, mask=sm, other=0.0)
+        lw_d = tl.where(sm, libdevice.log(tl.maximum(w_d, 1e-30)), float("-inf"))
+    else:
+        w_d = w
+        lw_d = lw_all
+    if ACCESS:             # AccessStage state of this step (pre() ran in torch before the launch)
+        a_s = tl.load(a_st + er, mask=rm, other=0)
+        a_c = tl.load(a_conn + er, mask=rm, other=0)
+        a_l = tl.load(a_la + er, mask=rm, other=0)
+        a_z = tl.load(a_slp + er, mask=rm, other=0.0)
+        if A_UB:           # the UL does not run: its busy state is the same in every slot
+            a_ub0 = tl.load(a_ub + er, mask=rm, other=0) != 0
     for k in range(K):
         rel = tl.load(itab_ptr + k * 10 + 0)
         dls = tl.load(itab_ptr + k * 10 + 1)
@@ -795,6 +871,21 @@ def nr_step_kernel(
                         mi = tl.where(xs >= tl.load(d_thr + m), m, mi)
                 d_s_csi = tl.load(d_thr + mi) - dref
             if dls != 0:
+                if DLGATE:     # NREngine._open_dl_gate (the hook on net.dl.slot)
+                    d_vis = tl.max(tl.where(dg_slot <= rel, dg_end, dg_base[:, None]), axis=1)
+                    d_s_enq = tl.maximum(dg_base, d_vis)
+                if ACCESS:     # AccessStage._gated on dl.slot, inside the DL gate hook: busy, then the mask of slot g
+                    a_bz = _busy(d_s_enq, d_s_sent, d_s_hst)
+                    if A_UB:
+                        a_ubz = a_ub0
+                    elif A_ULW:
+                        a_ubz = _busy(u_s_enq, u_s_sent, u_s_hst)
+                    else:
+                        a_ubz = a_bz
+                    a_ok, a_cn, a_aw = _acc_gate(a_s, a_c, a_l, a_ubz, g, ACCESS, A_INACT, A_CYC, A_ON, A_SCYC,
+                                                 A_NSH, A_OFF, A_ULW)
+                else:
+                    a_ok = rm
                 ub = mix32(base0 ^ salt(u32((3 << 16) | rel)))
                 ud = rng_uniform(ub, ridx)
                 (d_s_sent, d_s_olla, d_s_avg, d_s_bsr, d_s_srt, d_s_ltx, _lnp, d_s_csi, d_s_hst, d_s_hlo, d_s_hhi,
@@ -806,21 +897,34 @@ def nr_step_kernel(
                     d_s_htbs, d_s_hnsb, d_s_hcomb, d_s_hlexp, d_s_hnrb, d_s_cap, d_s_qs, d_s_qe, d_s_lost, d_s_fin,
                     d_cnt, d_hok, d_htx, d_hfl,
                     g, fin_val, re_d, nsi_d, 0, t * N + ackr, ud,
-                    ridx, rm, sidx, sm, pidx, midx, fidx, hidx, w, lw_all,
+                    ridx, rm, sidx, sm, pidx, midx, fidx, hidx, w_d, lw_d,
                     d_tab, d_thr, d_se, d_beta, d_rate, d_eq, lift_ptr, cax_ptr,
                     d_tbs, d_cbs, d_ncb, d_bg, d_ci0, d_cwi, S0, DS, C0, DC,
-                    1, S_, SB, M, MB, C, G, NL, EQW, NPRB, MODE, COMB, SCHED, WIDEBAND, HARQ_DROP, OLLA,
+                    1, S_, SB, M, MB, C, G, NL, EQW, NPRB_D, MODE, COMB, SCHED, WIDEBAND, HARQ_DROP, OLLA,
                     PHR_CAP, WHOLE_BAND, False, STEP, RETX_PRIO, MCS_MAX_DL, MAX_TX, TARGET, TB_OH, SR_DELAY,
                     UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B,
-                    PF_RBG, PF_FREEZE, False, False, LENA_CTR, QOS_G)
+                    PF_RBG, PF_FREEZE, False, False, LENA_CTR, QOS_G, a_ok, ACCESS)
+                if ACCESS:     # after the slot: last activity, sleeping slot (AccessStage._gated)
+                    a_l = tl.where(a_ok & a_bz, g, a_l)
+                    a_z += ((a_s == 0) | (a_cn & ~a_aw)).to(tl.float32)
         if UL:
+            if ACCESS:         # UL stream end that AccessStage._gated on ul.slot sees: the traffic-model gate hook on
+                a_ue = u_s_enq     # ul.slot is inside it (installed first), so only sr_step at this slot has opened it
             if GATE:
                 if (srf != 0) | (uls != 0):
                     vis = tl.max(tl.where(g_slot <= rel, g_end, g_base[:, None]), axis=1)
                     u_s_enq = tl.maximum(g_base, vis)
             if srf != 0:
+                if ACCESS:
+                    a_ue = u_s_enq
                 u_s_srt = _sr_step(u_s_enq, u_s_sent, u_s_bsr, u_s_srt, g)
             if uls != 0:
+                if ACCESS:     # AccessStage._gated on ul.slot: busy (also its drx_ul_wake term), then the mask
+                    a_bz = _busy(a_ue, u_s_sent, u_s_hst)
+                    a_ok, a_cn, a_aw = _acc_gate(a_s, a_c, a_l, a_bz, g, ACCESS, A_INACT, A_CYC, A_ON, A_SCYC,
+                                                 A_NSH, A_OFF, A_ULW)
+                else:
+                    a_ok = rm
                 ub = mix32(base0 ^ salt(u32((2 << 16) | rel)))
                 uu = rng_uniform(ub, ridx)
                 (u_s_sent, u_s_olla, u_s_avg, u_s_bsr, u_s_srt, u_s_ltx, u_s_lnp, u_s_csi, u_s_hst, u_s_hlo, u_s_hhi,
@@ -839,7 +943,13 @@ def nr_step_kernel(
                     0, S_, SB, M, MB, C, G, NL, EQW, NPRB, MODE, COMB, SCHED, WIDEBAND, HARQ_DROP, OLLA,
                     PHR_CAP, WHOLE_BAND, PC, STEP, RETX_PRIO, MCS_MAX_UL, MAX_TX, TARGET, TB_OH, SR_DELAY,
                     UL_RTT, RLC_RETX, GNB_PROC, REF_PRBS, PHR_MIN, WB_DB, W0, OLLA_UP, OLLA_DN, PF_A, PF_B,
-                    PF_RBG, PF_FREEZE, RETX_TDMA, AMC_PREV, LENA_CTR, QOS_G)
+                    PF_RBG, PF_FREEZE, RETX_TDMA, AMC_PREV, LENA_CTR, QOS_G, a_ok, ACCESS)
+                if ACCESS:
+                    a_l = tl.where(a_ok & a_bz, g, a_l)
+                    a_z += ((a_s == 0) | (a_cn & ~a_aw)).to(tl.float32)
+    if ACCESS:
+        tl.store(a_la + er, a_l, mask=rm)
+        tl.store(a_slp + er, a_z, mask=rm)
     if FADING and STORE_H:
         tl.store(h_ptr + o_h, hr, mask=m_rs)
         tl.store(h_ptr + o_h + 1, hi, mask=m_rs)
@@ -885,8 +995,29 @@ def _link_args(link):
     return out
 
 
-def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
-    """Run the fused kernel for one control step of NRTritonEngine eng, in place on the engine's buffers."""
+def _access_args(eng, UL_on):
+    """Kernel arguments of the access gate (core/access.py AccessStage; dummies and ACCESS=0 without it): the stage's
+    [E,R] state that the kernel reads (st, conn_at) and updates in place (last_act, sleep_cnt), and the constexprs."""
+    net, acc = eng.net, eng.access
+    hd = net.h
+    off = dict(ACCESS=0, A_INACT=0, A_CYC=1, A_ON=0, A_SCYC=0, A_NSH=0, A_OFF=0, A_ULW=False, A_UB=False)
+    if acc is None:
+        return (hd,) * 5, off
+    drx = bool(acc.drx)
+    ub = drx and acc.ul_wake and not UL_on        # UL off: AccessStage._busy(net.ul) is the same in every slot
+    ubusy = acc._busy(net.ul).byte().contiguous() if ub else hd
+    for x in (acc.st, acc.conn_at, acc.last_act, acc.sleep_cnt):
+        assert x.is_contiguous()
+    const = dict(off, ACCESS=2 if drx else 1)
+    if drx:
+        const.update(A_INACT=acc.inact, A_CYC=acc.cyc, A_ON=acc.on, A_SCYC=acc.scyc or 0, A_NSH=acc.n_short,
+                     A_OFF=acc.off, A_ULW=bool(acc.ul_wake), A_UB=ub)
+    return (acc.st, acc.conn_at, acc.last_act, acc.sleep_cnt, ubusy), const
+
+
+def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None, dgate=None):
+    """Run the fused kernel for one control step of NRTritonEngine eng, in place on the engine's buffers.
+    gate / dgate: the UL / DL traffic arrival gates (stream ends, arrival slots, base) or None."""
     net, cfg, tb = eng.net, eng.config, eng._tables
     ul, dl = net.ul, net.dl
     E, R = eng.E, eng.R
@@ -898,7 +1029,16 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
     # With both directions the step runs as two kernels, DL first: each replays the same fading trajectory (the same
     # start state and keyed draws, the same code), so the UL kernel sees exactly the gains the DL kernel saw, and
     # each carries only one link's state (half the registers). The UL kernel stores the fading state.
-    passes = [(True, True)] if not (UL_on and DL_on) else [(False, True), (True, False)]
+    # The access gate (AccessStage) couples the two directions inside the step (the DRX inactivity timer restarts on
+    # either link, drx_ul_wake reads the UL buffer in DL slots, the RRC release timer counts both), so with it the
+    # step runs as one kernel that carries both links.
+    a_args, a_const = _access_args(eng, UL_on)
+    passes = [(True, True)] if not (UL_on and DL_on) or a_const["ACCESS"] else [(False, True), (True, False)]
+    if dgate is not None:
+        for x in dgate:
+            assert x.is_contiguous()
+    dg_args = tuple(dgate) if dgate is not None else (net.h,) * 3
+    nmsg_d = dgate[0].shape[-1] if dgate is not None else 1
     rc = bool(net.rician)             # Rician fading: K and phasor inputs (read only; NRNet._rician_update ran before)
     if rc:
         for x in (net.k_lin, net.k_from, net.k_g0, net.spec):
@@ -927,4 +1067,7 @@ def launch_step(eng, uref, dref, pc, itab, ftab, K, gate=None):
             GATE=gate is not None, RHO_R=net.fading_rho_ms is not None, MMB=triton.next_power_of_2(gate[0].shape[-1]) if gate is not None else 1,
             RICIAN=rc, K_RAMP=net.k_ramp if rc else 0, K_RAMP_INV=1.0 / net.k_ramp if rc and net.k_ramp else 0.0,
             FCORR=fc,
-            **const, num_warps=eng._num_warps)
+            a_st=a_args[0], a_conn=a_args[1], a_la=a_args[2], a_slp=a_args[3], a_ub=a_args[4],
+            dg_e_ptr=dg_args[0], dg_s_ptr=dg_args[1], dg_b_ptr=dg_args[2], NMSG_D=nmsg_d,
+            wd_ptr=tb["wd"], DLGATE=dgate is not None, MMB_D=triton.next_power_of_2(nmsg_d),
+            **a_const, **const, num_warps=eng._num_warps)

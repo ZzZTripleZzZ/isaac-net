@@ -102,7 +102,7 @@ class _EagerReplay:
 
 TRITON_NOT_IMPLEMENTED = ("several cells (n_cells > 1: A3 handover, rlf), the SR / BSR grant pipeline "
                           "(ul_grant_model='bsr'), closed-loop UL power control (ul_tpc), the 38.214 CQI table, "
-                          "RACH / DRX (rach, drx), FDD (duplex='fdd'), DL traffic models, SINR hooks")
+                          "SINR hooks")
 
 
 class TritonUnsupported(NotImplementedError, ValueError):
@@ -478,7 +478,11 @@ class NRTritonEngine(NRGraphEngine):
     size and BLER-table index of every (symbols, PRBs, MCS) are exact tables precomputed with phy.py; EESM, BLER
     interpolation and HARQ combining run in the kernel in float32 (float64 where phy.py uses it). Reduction order and
     fused multiply-adds differ from ATen, so the engine equals the reference to float rounding, not bitwise.
-    The 5G-LENA MAC switches pf_update, pf_avg_idle, ul_retx_sched and ul_amc_alloc run in the kernel.
+    The 5G-LENA MAC switches pf_update, pf_avg_idle, ul_retx_sched and ul_amc_alloc run in the kernel, and so do
+    the access gate of RACH / DRX (AccessStage.pre / post run as torch code around the kernel, which evaluates the
+    per-slot schedulable mask and updates last_act and sleep_cnt; with it, UL and DL run in one kernel), FDD (the
+    schedule comes from the pattern helpers; a DL carrier of its own width gets its own PRBs per RBG and TBS table,
+    and the default DL SINR its shift) and the DL arrival gate of the DL traffic models (static buffers, as on graph).
     What the kernel does not implement is refused here, in __init__, before anything is built (refusals(); the
     backend table of docs/configurability.md lists the same features); SINR hooks, installed after construction,
     are refused at the first step. Robots are padded to a power of two (R up to about 256)."""
@@ -488,7 +492,6 @@ class NRTritonEngine(NRGraphEngine):
     @staticmethod
     def refusals(cfg: NRConfig):
         """[(feature, why)] of the config's features that the fused kernel does not implement (empty: it runs)."""
-        from .traffic import generates
         out = []
         if cfg.n_cells != 1:
             out.append(("several cells (n_cells > 1), and with them A3 handover and radio link failure (rlf)",
@@ -501,14 +504,6 @@ class NRTritonEngine(NRGraphEngine):
             out.append(("closed-loop UL power control (ul_tpc)", "it changes the per-slot loop of the kernel"))
         if cfg.cqi_table != "mcs":
             out.append(("the 38.214 CQI table (cqi_table='38214')", "it changes the per-slot loop of the kernel"))
-        if cfg.rach or cfg.drx:
-            out.append(("RACH / DRX (rach, drx)", "they block scheduling through MacLink.sched_ok, which the kernel "
-                        "does not read"))
-        if cfg.duplex == "fdd":
-            out.append(("FDD (duplex='fdd')", "the kernel assumes one TDD carrier for both directions (its PRB "
-                        "tables and slot schedule)"))
-        if generates(cfg.traffic, "dl"):
-            out.append(("DL traffic models (TrafficModel(..., direction='dl'))", "the kernel has no DL arrival gate"))
         return out
 
     def __init__(self, E, R, device, cfg: NRConfig, seed=None):
@@ -537,12 +532,16 @@ class NRTritonEngine(NRGraphEngine):
         M = phy.M
         MB = triton.next_power_of_2(M)
         NPRB = cfg.nprb
+        NPRB_D = cfg.dl_nprb if net.dl is not None else NPRB      # FDD: the paired DL carrier's PRBs
+        # FDD with a DL carrier of its own width: the DL MAC's PRBs per RBG (NREngine._install_fdd_dl_carrier)
+        fdd = net.dl is not None and cfg.duplex == "fdd" and cfg.dl_nprb != cfg.nprb
+        n_tab = {"ul": NPRB, "dl": NPRB_D}
         self._nsym = {"ul": sorted({cfg.slot_symbols(p)[1] for p in range(len(cfg.tdd_pattern))} - {0}) or [0],
                       "dl": sorted({cfg.slot_symbols(p)[0] for p in range(len(cfg.tdd_pattern))} - {0}) or [0]}
         tb = {}
         for dr, link in links.items():
             ph = link.phy
-            n = torch.arange(NPRB + 1, device=d, dtype=torch.float32)
+            n = torch.arange(n_tab[dr] + 1, device=d, dtype=torch.float32)
             parts = {k: [] for k in ("tbs", "cbs", "ncb", "bg", "ci0", "cwi")}
             for ns in self._nsym[dr]:
                 tbs = ph.tbs_all(n, ns, cfg.dmrs_re_per_prb, cfg.overhead_re_per_prb)          # [NPRB+1, M]
@@ -564,6 +563,7 @@ class NRTritonEngine(NRGraphEngine):
         tb["lift"] = torch.tensor(LIFTING, dtype=torch.float64, device=d)
         tb["cax"] = phy.cbs_axis.float().contiguous()
         tb["w"] = net.ul.sb_prb.float().contiguous()
+        tb["wd"] = net.dl.sb_prb.float().contiguous() if fdd else tb["w"]
         tb.update(S0=phy.s0, DS=phy.ds, C0=phy.c0, DC=phy.dc)
         self._tables = tb
         RB = max(16, triton.next_power_of_2(self.R))
@@ -590,7 +590,7 @@ class NRTritonEngine(NRGraphEngine):
             PF_A=1 - 1 / cfg.pf_window, PF_B=1 / cfg.pf_window,
             PF_RBG=cfg.pf_update == "rbg", PF_FREEZE=cfg.pf_avg_idle == "freeze",
             RETX_TDMA=cfg.ul_retx_sched == "tdma", AMC_PREV=cfg.ul_amc_alloc == "previous",
-            LENA_CTR=bool(net.ul._lena_mac), QOS_G=float(cfg.qos_gamma))
+            LENA_CTR=bool(net.ul._lena_mac), QOS_G=float(cfg.qos_gamma), FDD=fdd, NPRB_D=NPRB_D)
         self._num_warps = 16 if RB >= 128 else (8 if RB >= 64 else 4)
 
     def _sched_table(self, g0, sched, dt0):
@@ -625,17 +625,31 @@ class NRTritonEngine(NRGraphEngine):
     # ------------------------------------------------------------------ step
     def _region(self, T, kind, ins):
         net = self.net
+        # net.step may carry instance wrappers (AccessStage, the FDD DL carrier of NREngine): _triton_step does what
+        # they do, and they are put back afterwards (step_rx reaches _triton_step through self.step)
+        prev = net.__dict__.get("step")
         net.step = self._triton_step
         try:
             return super()._region(T, kind, ins)
         finally:
-            del net.step
+            if prev is None:
+                del net.step
+            else:
+                net.step = prev
 
     def _triton_step(self, t, snr_db, cur_hid=None, dl_snr_db=None, full=False):
         """NRNet.step with the slot loop in the fused kernel (same prologue and epilogue)."""
         net, cfg = self.net, self.config
         N, S = cfg.slots_per_step, cfg.n_subbands
         g0 = t * N
+        acc = self.access
+        corr = self.__dict__.get("dl_psd_corr_db")
+        if corr is not None and dl_snr_db is None and net.dl is not None:
+            # FDD DL carrier of its own width: the default DL SINR moves by -10 log10(dl_nprb / nprb), as the step
+            # wrapper of NREngine._install_fdd_dl_carrier (step_rx already shifted its DL path gain)
+            dl_snr_db = snr_db + cfg.dl_snr_offset_db + corr
+        if acc is not None:            # access state machine: releases, triggers, every RO of the step (AccessStage.pre)
+            acc.pre(t)
         tv, tf = net._times(t)
         net._qos_prepare(tf)           # scheduler="qos": class order and class weights qw for the kernel (as NRNet.step)
         if net.rician:                 # Rician K ramp state for this step (as NRNet.step); the kernel evaluates K(g)
@@ -655,20 +669,25 @@ class NRTritonEngine(NRGraphEngine):
             raise NotImplementedError("SINR hooks (user hooks, core.slot_tap wrappers such as energy / background) are "
                                       "bypassed by the fused kernel; use backend='graph'")
         own = set(vars(net.ul)) & {"sr_step", "slot"}
-        if own and not getattr(self, "_extras", False):
+        if own and not getattr(self, "_extras", False) and acc is None:     # the kernel mirrors these two
             raise NotImplementedError(f"hooks on net.ul ({', '.join(sorted(own))}) are bypassed by the fused kernel; "
                                       "use backend='graph'")
         gate = getattr(self, "_gate", None)
+        dgate = getattr(self, "_dl_gate", None)        # DL traffic models (static buffers, _static_dl_gate)
         if sched:
             fad = cfg.fading
             dt0 = (1 if net.last_g is None else g0 + sched[0][0] - net.last_g) if fad else 0
             itab, ftab, K, n_ul, n_dl = self._sched_table(g0, sched, dt0)
             self._nt.launch_step(self, ul_ref.contiguous() if cfg.ul else None, dl_ref, pc, itab, ftab, K,
-                                 None if gate is None else (gate[0], gate[1], gate[2]))
+                                 None if gate is None else (gate[0], gate[1], gate[2]),
+                                 dgate=None if dgate is None else (dgate[0], dgate[1], dgate[2]))
             if fad:
                 net.last_g = g0 + sched[-1][0]
             self._accumulate(n_ul, n_dl)
-        return net._finish(tv, cur_hid, full)
+            if acc is not None:        # AccessStage._gated counts every link slot (the kernel added the sleeping ones)
+                acc.vis_cnt = acc.vis_cnt + float(n_ul + n_dl)
+        out = net._finish(tv, cur_hid, full)
+        return out if acc is None else acc.post(t, out)
 
     def _accumulate(self, n_ul, n_dl):
         """Per-env kernel accumulators -> the links' counters (as MacLink.slot adds them)."""
