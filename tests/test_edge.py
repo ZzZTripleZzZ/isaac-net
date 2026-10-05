@@ -76,7 +76,7 @@ def test_fifo_single_server_deterministic():
     assert o["act_edge_delay"][0, :3].tolist() == pytest.approx([0.3, 0.6, 0.9])
     assert o["act_ul_delay"][0, :3].tolist() == [0.0, 0.0, 0.0] and o["act_ret_delay"][0, :3].tolist() == [0, 0, 0]
     assert math.isnan(float(o["act_time"][0, 3])) and int(o["act_cap"][0, 3]) == -1
-    assert o["act_age"][0].tolist() == [1.0, 1.0, 1.0, 2.0]
+    assert o["act_age"][0, :3].tolist() == [1.0, 1.0, 1.0] and math.isnan(float(o["act_age"][0, 3]))
     assert outs[1]["act_age"][0, :3].tolist() == [2.0, 2.0, 2.0] and not outs[1]["act_new"].any()
 
 

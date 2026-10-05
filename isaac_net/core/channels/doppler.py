@@ -23,7 +23,9 @@ C_LIGHT = 299_792_458.0     # as config.fading_rho_from_speed
 def rho_per_ms_from_speed(speed_mps, carrier_ghz, anchor_ms=2.5):
     """Tensor version of config.fading_rho_from_speed: speed [...] m/s -> AR(1) correlation per ms [...]."""
     fd = speed_mps * (carrier_ghz * 1e9 / C_LIGHT)
-    j0 = torch.special.bessel_j0(2 * math.pi * anchor_ms * 1e-3 * fd)
+    x = 2 * math.pi * anchor_ms * 1e-3 * fd
+    # rho = 0 from the first zero of J0 on (monotone in speed, as config.fading_rho_from_speed)
+    j0 = torch.where(x >= 2.404825557695773, torch.zeros_like(x), torch.special.bessel_j0(x))
     return j0.clamp(0.0, 1.0) ** (1 / anchor_ms)
 
 

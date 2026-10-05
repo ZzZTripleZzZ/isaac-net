@@ -63,7 +63,7 @@ class EdgeControlTask:
         cs = (out["act_cap"].clamp(min=0) % H)
         v = self.GAIN * (self.hist_tgt[e, r, cs] - self.hist_pos[e, r, cs])
         self.cmd = torch.where(new[..., None], v, self.cmd)
-        stale = out["act_age"] > self.max_age
+        stale = out["act_age"].nan_to_num(float("inf")) > self.max_age      # no action yet counts as stale
         apply = self.cmd if self.stale == "hold" else torch.where(stale[..., None], 0.0, self.cmd)
         n = apply.norm(dim=-1, keepdim=True).clamp(min=1e-9)
         self.pos = (self.pos + apply * (self.VMAX / n).clamp(max=1.0)).clamp(0, self.L)
@@ -84,8 +84,8 @@ def run(level="L1", return_path="delay", stale="hold", E=64, R=8, steps=200, dev
         rwd, out = task.step()
         if k >= steps // 4:
             rew.append(rwd.mean().item())
-            age.append(out["act_age"].mean().item())
-            stale_frac.append((out["act_age"] > max_age).float().mean().item())
+            age.append(out["act_age"].nanmean().item())
+            stale_frac.append((out["act_age"].nan_to_num(float("inf")) > max_age).float().mean().item())
             lat.append(out["act_latency"][out["act_new"]].float())
         done = torch.nonzero(torch.rand(E, device=device) < 0.01).squeeze(-1)
         if done.numel():
