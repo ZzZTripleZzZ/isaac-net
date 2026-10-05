@@ -102,7 +102,8 @@ class _EagerReplay:
 
 TRITON_NOT_IMPLEMENTED = ("several cells (n_cells > 1: A3 handover, rlf), the SR / BSR grant pipeline "
                           "(ul_grant_model='bsr'), closed-loop UL power control (ul_tpc), the 38.214 CQI table, "
-                          "RACH / DRX (rach, drx), FDD (duplex='fdd'), DL traffic models, SINR hooks")
+                          "RACH / DRX (rach, drx), FDD (duplex='fdd'), DL traffic models, mini-slot grants "
+                          "(ul_mini_slot_symbols), SINR hooks")
 
 
 class TritonUnsupported(NotImplementedError, ValueError):
@@ -507,6 +508,9 @@ class NRTritonEngine(NRGraphEngine):
         if cfg.duplex == "fdd":
             out.append(("FDD (duplex='fdd')", "the kernel assumes one TDD carrier for both directions (its PRB "
                         "tables and slot schedule)"))
+        if cfg.ul_mini_slot_symbols is not None:
+            out.append(("mini-slot grants (ul_mini_slot_symbols, mini_slot_dl)", "the kernel runs one scheduling "
+                        "occasion per slot (its schedule table has no occasion index)"))
         if generates(cfg.traffic, "dl"):
             out.append(("DL traffic models (TrafficModel(..., direction='dl'))", "the kernel has no DL arrival gate"))
         return out

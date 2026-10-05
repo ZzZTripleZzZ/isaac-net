@@ -67,7 +67,7 @@ FIELD_GROUPS = {
     "l1": ("l1_eta",),
     "frame": ("mu", "bandwidth_mhz", "n_prb", "rbg_size", "rbg_config", "tdd_pattern", "special_split",
               "special_dl_data", "special_ul_data", "dl_ctrl_symbols", "ul_data_symbols", "duplex", "dl_n_prb",
-              "dl_bandwidth_mhz"),
+              "dl_bandwidth_mhz", "ul_mini_slot_symbols", "mini_slot_dl"),
     "nr": ("dmrs_re_per_prb", "overhead_re_per_prb", "k1", "k2", "gnb_proc_slots", "sr_period_slots",
            "sr_grant_delay_slots", "ul_harq_rtt_slots", "cqi_period_slots", "proactive_grant", "proc_offset_ms",
            "n_harq", "max_harq_tx", "harq_combining", "harq_fail", "rlc_retx_slots", "discard", "mcs_table",
@@ -155,6 +155,23 @@ DRX_FIELDS = tuple(f for f in FIELD_GROUPS["access"] if f.startswith("drx_"))   
 NETSLOTMC_FRAME_FIELDS = ("mu", "tdd_pattern", "special_split", "special_ul_data", "ul_data_symbols")
 
 
+MINI_SLOT_SYMBOLS = (2, 4, 7)           # ul_mini_slot_symbols values (PUSCH / PDSCH mapping type B lengths)
+
+
+def occasion_symbols(nsym, m=None):
+    """Data symbols of the scheduling occasions of a slot with nsym data symbols (a tuple, empty when nsym = 0).
+    m None: one occasion (nsym,), the whole slot. m set: n = max(1, round(nsym / m)) occasions (an exact half rounds
+    down), the first n - 1 of m symbols and the last one with the rest, so the last occasion has more than m / 2 and
+    at most 3 m / 2 symbols and no data symbol is dropped (12 symbols: m = 2 -> 6 x 2, m = 4 -> 3 x 4, m = 7 -> 7 + 5;
+    a 2-symbol special slot with m = 4 -> one occasion of 2)."""
+    if nsym <= 0:
+        return ()
+    if m is None:
+        return (nsym,)
+    n = max(1, (2 * nsym + m - 1) // (2 * m))
+    return (m,) * (n - 1) + (nsym - (n - 1) * m,)
+
+
 def _obstacle_unread(cfg):
     """Obstacle fields (channels/los.py, channels/blockage.py) that cfg's switches leave unread."""
     off = set()
@@ -204,6 +221,10 @@ def _switch_unread(cfg, nr):
     if cfg.gnb_antenna != "sector":
         off |= set(ANTENNA_FIELDS)
     if nr:
+        if not cfg.dl:
+            off.add("mini_slot_dl")
+        if not (cfg.ul or (cfg.dl and cfg.mini_slot_dl)):
+            off.add("ul_mini_slot_symbols")               # no direction is split into occasions
         if not cfg.ul_tpc:
             off |= set(UL_TPC_FIELDS)
         if cfg.scheduler != "qos":
@@ -366,6 +387,11 @@ class NRConfig:
     special_ul_data: bool = False        # S slot UL symbols carry PUSCH (LENA: no)
     dl_ctrl_symbols: int = 1             # PDCCH symbols at the start of D / S slots
     ul_data_symbols: int = 12            # PUSCH symbols in a U slot (14 - PUCCH - SRS)
+    ul_mini_slot_symbols: int | None = None   # mini-slot (type B) grants, NR engine: None = one scheduling occasion
+                                         # per slot; 2, 4 or 7 = every UL data slot is split into occasions of that
+                                         # many symbols (occasion_symbols), each its own grant, TB and decode
+                                         # (docs/configurability.md "Mini-slot grants")
+    mini_slot_dl: bool = False           # split the DL data slots into occasions of ul_mini_slot_symbols too
     dmrs_re_per_prb: int = 12            # N_DMRS^PRB in the 38.214 TBS formula (1 DMRS symbol, type 1)
     overhead_re_per_prb: int = 0         # N_oh^PRB (xOverhead)
     # ---- MAC timing (slots) ----
@@ -754,6 +780,23 @@ class NRConfig:
                 assert self.o2i_model in allowed, (
                     f"O2I model {self.o2i_model!r} is not defined for {self.tr38901_scenario} (allowed: {allowed})")
 
+        m = self.ul_mini_slot_symbols
+        if self.mini_slot_dl and m is None:
+            raise ValueError("mini_slot_dl splits the DL slots into occasions of ul_mini_slot_symbols symbols: set "
+                             "ul_mini_slot_symbols (2, 4 or 7)")
+        if m is not None:
+            if m not in MINI_SLOT_SYMBOLS:
+                raise ValueError(f"ul_mini_slot_symbols must be None or one of {MINI_SLOT_SYMBOLS}, not {m!r}")
+            P = 1 if self.duplex == "fdd" else len(self.tdd_pattern)
+            occ = [o for p in range(P) for o in self.slot_occasions(p)]
+            short = min(L for o in occ for L in o)
+            if 12 * short - self.dmrs_re_per_prb - self.overhead_re_per_prb <= 0:
+                raise ValueError(f"a {short}-symbol occasion has no data RE left after dmrs_re_per_prb="
+                                 f"{self.dmrs_re_per_prb} and overhead_re_per_prb={self.overhead_re_per_prb} per PRB")
+            if self.slots_per_step * max(len(o) for o in occ) >= 1 << 16:
+                raise ValueError("ul_mini_slot_symbols: too many occasions per control step for the engine RNG's "
+                                 "16-bit slot key (shorten control_step_ms)")
+
     @property
     def rician_mode(self):
         """Rician K source of the NR engine: None (Rayleigh: fading off, fading_rician off, or K = 0 because
@@ -864,6 +907,19 @@ class NRConfig:
         dl = self.special_split[0] - self.dl_ctrl_symbols if self.special_dl_data else 0
         ul = self.special_split[2] if self.special_ul_data else 0
         return max(dl, 0), ul
+
+    def slot_occasions(self, pos):
+        """(DL occasions, UL occasions) of the slot at pattern position pos: the data symbols of every scheduling
+        occasion (occasion_symbols of slot_symbols(pos)). Without ul_mini_slot_symbols every direction with data
+        symbols has one occasion, the whole slot; mini_slot_dl splits the DL side too."""
+        dls, uls = self.slot_symbols(pos)
+        m = self.ul_mini_slot_symbols
+        return occasion_symbols(dls, m if self.mini_slot_dl else None), occasion_symbols(uls, m)
+
+    @property
+    def ul_occasions_per_step(self):
+        """UL scheduling occasions per control step (ul_slots_per_step without mini-slots)."""
+        return sum(len(self.slot_occasions(g)[1]) for g in range(self.slots_per_step))
 
     def ul_capable(self, pos):
         """Slot carries UL symbols (PUCCH for SR / HARQ-ACK / CQI) even if no PUSCH data (FDD: every slot)."""

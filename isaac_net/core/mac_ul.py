@@ -89,6 +89,8 @@ class UlMac(MacLink):
                                    # snr_ref_prbs PRBs, ue_tx - (P0 + alpha PL); set per slot by NRNet
         self.phr_snr = None        # [E,R] SNR against noise only for the PHR cap (several cells: power headroom
                                    # does not depend on interference); None = sinr_ref.mean(-1)
+        self._occ = None           # mini-slot grants: per-slot state while NRNet runs the occasions of one slot
+                                   # (occ_begin / occ_end); None = whole-slot operation
         P = len(cfg.tdd_pattern)
         self._pg_pos = next(p for p in range(P) if cfg.slot_symbols(p)[1] > 0)
         self._tpc = bool(cfg.ul_tpc)
@@ -107,11 +109,35 @@ class UlMac(MacLink):
             return self.pc_backoff - self.tpc_f
         return self.pc_backoff
 
+    # ---------------- mini-slot occasions (NRConfig.ul_mini_slot_symbols) ----------------
+    def occ_begin(self):
+        """Before the occasions of one UL data slot. The occasions share the slot's timing: SR grants, proactive
+        grants and every report a PUSCH carries (lumped BSR, the CSI of the PUSCH / SRS) take effect per slot, so the
+        occasions of slot g are scheduled with what the gNB knew at the start of slot g, minus the bytes it already
+        granted in the earlier occasions of the slot (the ul_grant_model="bsr" pipeline does this by itself: its
+        reports mature bsr_delay_slots >= 1 slots after the PUSCH and its estimate drops by every grant)."""
+        self._occ = {"j": 0, "sent": self.sent, "tx": torch.zeros_like(self.sent, dtype=torch.bool), "csi": None}
+
+    def occ_end(self):
+        """After the last occasion: the reports of the slot's PUSCHs take effect as after a whole-slot PUSCH."""
+        o, self._occ = self._occ, None
+        if not self._bsr_model:
+            self.bsr = torch.where(o["tx"], self.unsent(), o["bsr"])
+        self.csi = o["csi"]
+
     def _pre_slot(self, g, gh):
         if self._tpc:                  # TPC commands due by this slot take effect
             self._tpc_apply(g)
         if self._bsr_model:
             return self._pre_slot_bsr(g)
+        o = self._occ
+        if o is not None and o["j"] > 0:          # later occasion of the slot: the slot's grants are already issued
+            return
+        self._pre_slot_lumped(g, gh)
+        if o is not None:
+            o["bsr"] = self.bsr                   # the gNB's buffer view for every occasion of this slot
+
+    def _pre_slot_lumped(self, g, gh):
         cfg = self.cfg
         if cfg.proactive_grant == "every_ul_slot" or (
                 cfg.proactive_grant == "per_period" and gh % len(cfg.tdd_pattern) == self._pg_pos):
@@ -193,13 +219,21 @@ class UlMac(MacLink):
         return 0, g, g + self.cfg.ul_rtt          # gNB decodes: process free at once; retx after proc + K2
 
     def _post_slot(self, tx, gain_now, g=None, tx_new=None, tbs_new=None):
+        o = self._occ
         if self._bsr_model:
             self._post_slot_bsr(g, tx, tx_new, tbs_new)
+        elif o is not None:            # mini-slot occasion: slot-start BSR minus the bytes granted since
+            o["tx"] = o["tx"] | tx
+            self.bsr = (o["bsr"] - (self.sent - o["sent"])).clamp(min=0)
         else:
             self.bsr = torch.where(tx, self.unsent(), self.bsr)     # BSR rides every PUSCH
         if self._tpc:
             self._tpc_issue(g, tx)
-        self.csi = gain_now                                     # PUSCH/SRS measurement for the next decision
+        if o is not None:              # the measurement is used from the next slot on (occ_end)
+            o["csi"] = gain_now
+            o["j"] += 1
+        else:
+            self.csi = gain_now                                 # PUSCH/SRS measurement for the next decision
 
     def handover(self, ho, flush=False):
         """As MacLink.handover; the buffer status reaches the target with the handover-complete message, and a

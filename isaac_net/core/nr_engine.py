@@ -57,7 +57,7 @@ import math
 
 import torch
 
-from .config import NRConfig
+from .config import NRConfig, occasion_symbols
 from .mac_dl import DlMac
 from .mac_ul import UlMac
 from .nr_rng import DSPR, FADING, H0, KFAC, KPHI, make_rng
@@ -198,6 +198,7 @@ class NRNet:
         self.log_stats = False
         self.log_cap_max = 10 ** 9
         self._sched_cache = {}
+        self._occ_cache = {}
         self.trace_frames = None
         self.trace_frames_dl = None
         self.log_sinr = False      # multi-cell: per-TB SINR samples in self.sinr_log (host copies; sweeps only)
@@ -511,6 +512,51 @@ class NRNet:
             self._sched_cache[key] = out
         return self._sched_cache[key]
 
+    def _occasions(self, d, nsym):
+        """Scheduling occasions of a data slot of direction d ("ul" / "dl") with nsym data symbols: a tuple of
+        (symbols, end, j), end = completion time of the occasion as a fraction of the slot (None = the slot end, the
+        whole-slot path) and j = occasion index. Occasions fill the data symbols back to back and the last one ends
+        at the slot end (as a whole-slot TB), so occasion j ends sum(symbols of the later occasions) / 14 slots
+        earlier. Without mini-slots: ((nsym, None, 0),)."""
+        key = (d, nsym)
+        occ = self._occ_cache.get(key)
+        if occ is None:
+            cfg = self.cfg
+            m = cfg.ul_mini_slot_symbols if d == "ul" or cfg.mini_slot_dl else None
+            sym = occasion_symbols(nsym, m)
+            if len(sym) == 1:
+                occ = ((nsym, None, 0),)
+            else:
+                occ = tuple((L, 1.0 - sum(sym[j + 1:]) / 14.0, j) for j, L in enumerate(sym))
+            self._occ_cache[key] = occ
+        return occ
+
+    def _occ_slot(self, link, d, nsym, gv, tf, rel, N, *args, gh):
+        """MacLink.slot of every scheduling occasion of this data slot (one call without mini-slots, bitwise the
+        whole-slot call). Occasion j completes at slot rel + end_j and draws its TB decodes from the engine RNG slot
+        key rel + j N (j = 0 keeps the whole-slot key; the keys stay distinct over the step). The occasions share
+        the slot's timing: link adaptation uses the OLLA offset of the slot start in every occasion (the HARQ
+        feedback of an occasion moves it from the next slot on), and the UL side freezes its BSR and CSI the same
+        way (UlMac.occ_begin)."""
+        occ = self._occasions(d, nsym)
+        if len(occ) == 1:
+            link.slot(gv, self._frac(tf, rel, N), nsym, *args, gh=gh, rel=rel)
+            return
+        ul = d == "ul"
+        if ul:
+            link.occ_begin()
+        olla0 = link.olla
+        for ns, end, j in occ:
+            if j:
+                seq, link.olla = link.olla, olla0
+            link.occ_share = ns / nsym
+            link.slot(gv, tf + (rel + end) / N, ns, *args, gh=gh, rel=rel + j * N)
+            if j:                                  # this occasion's OLLA steps, applied after the earlier ones
+                link.olla = (seq + (link.olla - olla0)).clamp(-10, 10)
+        link.occ_share = 1.0
+        if ul:
+            link.occ_end()
+
     def _evolve(self, g, rel=0):
         """AR(1) fading step to slot g (host int); rel = slot index inside the control step (engine RNG stream).
         With self.fading_rho_ms [E,R] set (per-robot Doppler) every robot uses its own correlation per ms."""
@@ -601,15 +647,14 @@ class NRNet:
             g, gv = g0 + rel, g0v + rel
             self._evolve(g, rel)
             gain = self._gain(gv) if self.rician else self._gain()
-            frac = self._frac(tf, rel, N)
             if cqi:
                 self.dl.cqi_report(dl_ref, gain)
             if dls:
-                self.dl.slot(gv, frac, dls, dl_ref, gain, g0v + ack, gh=g, rel=rel)
+                self._occ_slot(self.dl, "dl", dls, gv, tf, rel, N, dl_ref, gain, g0v + ack, gh=g)
             if sr:
                 self.ul.sr_step(gv)
             if uls:
-                self.ul.slot(gv, frac, uls, ul_ref, gain, 0, gh=g, rel=rel)
+                self._occ_slot(self.ul, "ul", uls, gv, tf, rel, N, ul_ref, gain, 0, gh=g)
         return self._finish(tv, cur_hid, full)
 
     # ---- several cells ----
@@ -703,14 +748,13 @@ class NRNet:
             for link in links:
                 link.member, link.sched_ok = member, ok
             pg_s = pick(pathgain_db, serv)[..., None]
-            frac = self._frac(tf, rel, N)
             if cqi or dls:
                 self._ni_la_dl = 10 * torch.log10(self.ni_dl)
                 dl_ref = self.dl_psd_db + pg_s - self._ni_la_dl
             if cqi:
                 self.dl.cqi_report(dl_ref, gain)
             if dls:
-                self.dl.slot(gv, frac, dls, dl_ref, gain, g0v + ack, gh=g, rel=rel)
+                self._occ_slot(self.dl, "dl", dls, gv, tf, rel, N, dl_ref, gain, g0v + ack, gh=g)
             if sr:
                 self.ul.sr_step(gv)
             if uls:
@@ -720,7 +764,7 @@ class NRNet:
                 self.ul.phr_snr = rx_s - cfg.subband_noise_dbm
                 if cfg.ul_pc_on:
                     self.ul.pc_backoff = self._pc_backoff(rx_s)
-                self.ul.slot(gv, frac, uls, ul_ref, gain, 0, gh=g, rel=rel)
+                self._occ_slot(self.ul, "ul", uls, gv, tf, rel, N, ul_ref, gain, 0, gh=g)
         if rlf:
             late = self._rlf_events(g0v + N - 1, k_ho, fired, g_ho, rx, sinr_c)[0]
         else:
