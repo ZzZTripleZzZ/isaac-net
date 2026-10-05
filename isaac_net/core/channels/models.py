@@ -35,6 +35,8 @@ class TR38901Channel:
         self.fc = cfg.carrier_ghz
         self.h_bs = float(cfg.gnb_height_m) if cfg.gnb_height_m is not None else sc.h_bs
         self.h_ut = float(cfg.ue_height_m)
+        if not self.scn.startswith("InF"):      # InF-SH/DH heights are checked with the clutter height below
+            tr.check_heights(self.scn, self.h_bs, self.h_ut)
         self.gnb = gnb_xy
         K = cfg.shadow_modes
         los_corr = sc.los_corr_m

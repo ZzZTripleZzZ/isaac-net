@@ -52,9 +52,8 @@ def test_rma_range_and_bs_height():
 
 
 def test_uma_low_ue_raises_through_radio():
-    r = RadioMC(NRConfig(channel="tr38901_uma", ue_height_m=0.5), 2, "cpu", R=3)
-    with pytest.raises(ValueError, match="UMa"):
-        r.rx_dbm(torch.full((2, 3, 2), 60.0))
+    with pytest.raises(ValueError, match="UMa"):                # checked when the channel is built
+        RadioMC(NRConfig(channel="tr38901_uma", ue_height_m=0.5), 2, "cpu", R=3)
     ok = RadioMC(NRConfig(channel="tr38901_uma"), 2, "cpu", R=3).rx_dbm(torch.full((2, 3, 2), 60.0))
     assert torch.isfinite(ok).all()
 
