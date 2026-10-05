@@ -64,10 +64,10 @@ One `NRConfig` dataclass (`isaac_net/core/config.py`) configures every module, a
 | SR to grant delay (legacy) | `proto/netsim.py:31` | 2 UL slots | NR: `sr_period_slots`, `sr_grant_delay_slots`; legacy fixed | constexpr |
 | HARQ RTT, max transmissions, RLC retry (legacy) | `proto/netsim.py:32-34` | 4 UL slots, 4 tx, +10 UL slots | NR: `ul_harq_rtt_slots`, `max_harq_tx`, `n_harq`, `harq_fail`, `rlc_retx_slots`; legacy fixed | constexpr |
 | Power-headroom cap | `proto/netsim.py:38` | 3 dB per subband | NR `phr_cap`, `phr_min_db`; legacy fixed | constexpr (`PHR`) |
-| UL power control | `mac_ul.py` (`pc_backoff`, `_pc`), `proto/netsim_mc.py:222-224` | fractional open loop, on by default with more than one cell; closed-loop TPC off | `ul_pc*` (`L2` and multi-cell legacy); closed loop `ul_tpc*` (`L2`, see [below](#closed-loop-power-control-cqi-table-and-sector-antennas)) | open loop: every backend; `ul_tpc`: reference and graph (`triton` refuses it) |
+| UL power control | `mac_ul.py` (`pc_backoff`, `_pc`), `proto/netsim_mc.py:222-224` | fractional open loop, on by default with more than one cell; closed-loop TPC off | `ul_pc*` (`L2` and multi-cell legacy); closed loop `ul_tpc*` (`L2`, see [below](#closed-loop-power-control-cqi-table-and-sector-antennas)) | every backend |
 | Retransmission priority | `mac.py:243-290` | admitted retransmissions win RBGs before new data (`retx_priority`); off: they compete on the PF metric and RBGs of short ones are released | `retx_priority` on/off | same rule in the `triton` kernel |
 | Duplexing | `config.py` pattern helpers (`slot_symbols`, `ul_capable`, `next_ul_capable`) | TDD, one carrier for both directions | `duplex="fdd"` with `dl_n_prb` / `dl_bandwidth_mhz` (`L2`); see [Duplexing](#duplexing-tdd-and-fdd) | reference and graph; `triton` refuses FDD |
-| DL CQI | `mac_dl.py` (`cqi_report`), `phy.py` (`CQI_T1`, `CQI_T2`, `cqi_tables`) | best MCS per subband, mapped back to its threshold, reported every 10 slots | `cqi_period_slots`; `cqi_table="38214"` quantizes to the 4-bit CQI of TS 38.214 Table 5.2.2.1-2 / -3 instead | `"mcs"`: every backend; `"38214"`: reference and graph (`triton` refuses it) |
+| DL CQI | `mac_dl.py` (`cqi_report`), `phy.py` (`CQI_T1`, `CQI_T2`, `cqi_tables`) | best MCS per subband, mapped back to its threshold, reported every 10 slots | `cqi_period_slots`; `cqi_table="38214"` quantizes to the 4-bit CQI of TS 38.214 Table 5.2.2.1-2 / -3 instead | every backend |
 
 ### Fidelity levels, surrogates and bounds
 
@@ -104,7 +104,7 @@ The comparison was checked line by line against the official documentation of ns
 | HARQ | multi-process, chase or IR, max tx | IR and CC, multi-process, max retx | ACK/NACK feedback to link adaptation, no retransmissions | yes (processes, max retx) | **have** (`L2`) |
 | RLC | AM retry or UM loss, PDCP discard | UM, AM, TM | none | UM, AM, TM | **partial**: no RLC segmentation timers or status reports |
 | Link adaptation | BLER target, OLLA, MCS caps; DL CQI per MCS or on the 38.214 4-bit CQI table (`cqi_table`) | AMC, error-model or Shannon based | inner and outer loop | CQI-based AMC | **have**; OLLA clamp and legacy steps fixed |
-| Power control | UL fractional open loop (`L2` and legacy multi-cell) and closed-loop TPC, accumulated or absolute (`ul_tpc`, `L2`) | UL open and closed loop; DL uniform power allocation only | UL open loop, DL fair power | none documented (fixed transmit powers) | **have** UL open loop (`ul_pc`) and closed-loop TPC (`ul_tpc`, `L2` reference and `graph`); **missing**: DL power control, PUCCH / SRS loops, TPC on the `triton` backend |
+| Power control | UL fractional open loop (`L2` and legacy multi-cell) and closed-loop TPC, accumulated or absolute (`ul_tpc`, `L2`) | UL open and closed loop; DL uniform power allocation only | UL open loop, DL fair power | none documented (fixed transmit powers) | **have** UL open loop (`ul_pc`) and closed-loop TPC (`ul_tpc`, `L2`, every backend); **missing**: DL power control, PUCCH / SRS loops |
 | Antenna patterns | gNB sector element of TR 38.901 Table 7.3-1 per cell, boresight and downtilt (`gnb_antenna`); UE isotropic | 3GPP UPAs, dual polarization, multi-panel, isotropic / cosine / parabolic | antenna arrays and patterns via Sionna PHY | isotropic or directional per node | **have** (`gnb_antenna="sector"`, every backend): one element per cell; **missing**: arrays and beamforming; the Sionna RT bake applies the pattern per grid point along the direct direction, not per traced ray ([scene-radio-map.md](scene-radio-map.md#sector-antennas-at-bake-time)) |
 | MIMO / beamforming | none (one layer) | SU-MIMO up to rank 4, analog beamforming | SU-MIMO streams; precoding via Sionna PHY | none (incomplete MIMO removed in v1.4.3) | **missing**: layers could scale TBS and SINR (moderate); beamforming is large |
 | Channel model | log-distance with correlated and white shadowing; TR 38.901 RMa, UMa, UMi, InH, InF-SL/DL/SH/DH path loss with spatially consistent LOS state and O2I; precomputed radio maps (Sionna RT baking tool); robot-body blockage (obstacles and the TR 38.901 blockage models: next row); AR(1) Rayleigh with per-robot Doppler and an optional Rician K-factor (row after next) | 3GPP TR 38.901 (RMa, UMa, UMi, InH, V2V, NTN), NYUSIM (incl. InF), FTR, Sionna RT | TR 38.901 via Sionna PHY (UMi, UMa, RMa, InH, InF); ray tracing via Sionna RT | 3GPP TR 36.814, 36.873, 38.901 path loss, shadowing, Rayleigh or Jakes fading | **have** large-scale models ([channels.md](channels.md)); **missing**: 38.901 cluster fast fading, online ray tracing |
@@ -207,14 +207,13 @@ Limits: `proactive_grant="per_period"` needs a TDD period and is refused with FD
 |:---|:---|:---|:---|
 | several cells (`n_cells > 1`), so A3 handover and radio link failure (`rlf`) | yes | yes | refused |
 | SR / BSR grant pipeline (`ul_grant_model="bsr"`, the presets `lena_match_v2`, `lena_validation_v2`) | yes | yes | refused |
-| closed-loop UL power control (`ul_tpc`) | yes | yes | refused |
-| 38.214 CQI table (`cqi_table="38214"`) | yes | yes | refused |
 | RACH and DRX (`rach`, `drx`) | yes | yes | refused |
 | FDD (`duplex="fdd"`) | yes | yes | refused |
 | DL traffic models (`TrafficModel(..., direction="dl")`) | yes | yes | refused |
 | SINR hooks (`set_sinr_hook`, `core.slot_tap` wrappers such as energy and background) | yes | yes | refused at the first step |
 | debug traces (`trace_frames`, `log_sinr`, link traces) | yes | no | no |
 | the other 5G-LENA MAC switches (`pf_update`, `pf_avg_idle`, `ul_retx_sched`, `ul_amc_alloc`), Rician fading, the gNB sector antenna, UL traffic models | yes | yes | yes |
+| closed-loop UL power control (`ul_tpc`), the 38.214 CQI table (`cqi_table="38214"`) | yes | yes | yes |
 
 Mirrors of the refused features in the fused kernel are open work ([STATUS.md](STATUS.md), items 1 and 21).
 
@@ -239,7 +238,7 @@ The offset enters wherever the open-loop backoff `pc_backoff` already did (`UlMa
 
 **gNB sector antenna** (`gnb_antenna="sector"`, `channels/antenna.py`, applied in `RadioMC.rx_dbm`): see [channels.md](channels.md#antenna-patterns). Fields: `cell_azimuth_deg` (one boresight per cell; `None` = 30, 150 and 270 degrees cycled over the cells), `cell_tilt_deg` (one downtilt or one per cell, degrees below the horizon) and `gnb_antenna_gain_dbi` (8 dBi).
 
-**Backends.** The antenna changes only the path gain the engine receives, so it runs on every backend. `ul_tpc` and `cqi_table="38214"` change the per-slot loop. They run on the reference and on the `graph` backend, which captures the reference step, and the `triton` backend refuses them ([NR engine backends](#nr-engine-backends)) until the fused kernel mirrors them (the kernel recomputes the power split from a per-step `pc` input and the CQI from the MCS thresholds).
+**Backends.** All three switches run on every backend ([NR engine backends](#nr-engine-backends)). The antenna changes only the path gain the engine receives. `ul_tpc` and `cqi_table="38214"` change the per-slot loop: the `graph` backend captures the reference step, and the fused `triton` kernel mirrors both. For TPC the kernel loads the robots' TPC state once per control step, applies the commands due at each UL data slot, uses `pc_backoff - f` wherever it used the open-loop backoff (scheduler estimate and power split), measures each PUSCH as `UlMac` does and issues the next command, and stores the state back. For the CQI table it counts the per-CQI thresholds of `phy.cqi_tables` and maps the CQI to its MCS. As for the rest of the kernel, the target is equality with the reference to float rounding. The check is the teacher-forced GPU test `tests/test_nr_fast.py` G2 on the configs `ul_tpc`, `ul_tpc_abs`, `ul_dl_cqi38214` and `ul_tpc_cqi` of `tests/nr_equiv.py`.
 
 ## QoS scheduling
 

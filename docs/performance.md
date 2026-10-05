@@ -85,7 +85,8 @@ The NR engine has three backends, all behind `make_engine("L2", ..., backend=...
     - OLLA
     - RLC-AM retransmission or RLC-UM loss
     - in-order delivery
-    - DL CQI
+    - DL CQI, from the MCS thresholds or the 38.214 CQI table
+    - closed-loop UL power control (`ul_tpc`)
     - the traffic arrival gate
     - per-robot Doppler
   - With a downlink the step runs as two kernels, DL then UL. Both replay the same fading trajectory from the same start state and keyed draws, so each carries only one link's state.
