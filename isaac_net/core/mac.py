@@ -19,8 +19,9 @@ rlc_retx_slots; "drop" marks overlapping frames lost (RLC UM).
 
 Schedulers (cfg.scheduler): "pf" proportional fair on the per-RBG rate estimate over the EWMA throughput (wideband
 rate with pf_metric="wideband"), "pf_wideband" the same with the wideband rate, "maxci" the rate estimate alone, "rr"
-round robin (the robot whose last transmission is oldest first, channel-blind). Every scheduler keeps the same
-retransmission admission and the same greedy RBG-by-RBG filling up to the need or the power-headroom cap.
+round robin (the robot whose last transmission is oldest first, channel-blind), "qos" the 5G-LENA QoS scheduler
+(NrMacSchedulerOfdmaQos, see qos_prepare): the PF metric r^gamma / avg times a per-robot class weight. Every scheduler
+keeps the same retransmission admission and the same greedy RBG-by-RBG filling up to the need or the power-headroom cap.
 
 5G-LENA MAC behavior under load (docs/fidelity-load-gap.md; defaults reproduce the engine before them bitwise):
 pf_update="rbg" updates the RBG winner's PF average with its granted bytes after every RBG (5G-LENA OFDMA PF, so RBGs
@@ -36,6 +37,8 @@ decisions that are fixed by the TDD pattern. Random draws: torch.rand_like (cfg.
 counter-based streams (self.rng, nr_rng.py).
 """
 from __future__ import annotations
+
+import math
 
 import torch
 
@@ -104,6 +107,54 @@ class MacLink:
         self.rv_tx = torch.zeros(E, cfg.max_harq_tx + 1, device=device)   # per env: TBs sent as transmission k
         self.rv_fail = torch.zeros(E, cfg.max_harq_tx + 1, device=device) # of which failed
         self.prb_used_env = torch.zeros(E, device=device)                 # per env: PRBs granted
+        self.qos = cfg.scheduler == "qos"
+        if self.qos:               # per-message class from the queue's priority extra; weights set by qos_prepare
+            self.q.enable_extras()
+            P = cfg.qos_priority
+            self._qos_rank = torch.tensor(sorted(range(len(P)), key=lambda c: (P[c], c)), device=device).argsort()
+            self.qw = torch.full((E, R), float(100 - max(P)), device=device)
+
+    def qos_prepare(self, tf):
+        """scheduler="qos", once per control step before its slots (NRNet.step / step_cells, and before the fused
+        kernel of the triton backend), at step start time tf (control steps; a 0-dim float64 tensor when captured).
+
+        Byte assignment by class (5G-LENA NrMacSchedulerLcQos): the robot's queued frames whose bytes are all unsent
+        and visible are reordered by class priority, stably (FrameQueue.reorder), so a TB takes the bytes of the
+        most important class first and each class stays in arrival order. Frames with bytes already in a HARQ
+        process keep their place: one queue per robot, in-order RLC delivery, no pre-emption of sent bytes.
+
+        Class weight qw [E,R] (5G-LENA NrMacSchedulerUeInfoQos), from the classes c with unsent visible bytes: DL
+        (CalculateDlWeight) the sum over those classes of (100 - P_c) * D_c; UL (CompareUeWeightsUl, the gNB knows
+        the logical-channel groups from the BSR) (100 - P_c) * D_c of the class with the lowest priority level P_c.
+        D_c is the delay-budget factor of CalculateDelayBudgetFactor: PDB / (PDB - HOL) while the head-of-line age
+        HOL of class c (age of its oldest frame with unsent bytes, ms, at tf) is below PDB, PDB / 0.1 from then on;
+        D_c = 1 when qos_pdb_ms[c] is inf (5G-LENA applies D to DC-GBR flows only; the UL factor is an extension,
+        5G-LENA UL has none). A robot with no such class (BSR padding grants) gets the lowest class weight."""
+        cfg, q = self.cfg, self.q
+        Q = cfg.qos_classes
+        self.sent = q.reorder(self.sent, self._qos_rank[q.prio.clamp(0, Q - 1)], Q)
+        cls = q.prio.clamp(0, Q - 1)                    # after the reorder (the frames moved)
+        act_f = (q.cap >= 0) & (q.end > self.sent[..., None]) & (q.start < q.enq[..., None])
+        age = ((tf - q.cap.double() - q.off) * cfg.control_step_ms).float()
+        acc = torch.zeros(self.E, self.R, device=self.dev)
+        best_p = torch.full((self.E, self.R), 100, dtype=torch.long, device=self.dev)
+        for c in range(Q):
+            m = act_f & (cls == c)
+            act = m.any(-1)
+            pc, pdb = cfg.qos_priority[c], cfg.qos_pdb_ms[c]
+            if math.isfinite(pdb):
+                hol = torch.where(m, age, torch.zeros_like(age)).max(-1).values
+                wc = (100 - pc) * (pdb / torch.where(hol >= pdb, torch.full_like(hol, 0.1), pdb - hol))
+            else:
+                wc = torch.full_like(acc, float(100 - pc))
+            if self.dir == "dl":
+                acc = acc + torch.where(act, wc, torch.zeros_like(wc))
+            else:
+                better = act & (pc < best_p)
+                best_p = torch.where(better, pc, best_p)
+                acc = torch.where(better, wc, acc)
+        none = ~act_f.any(-1)
+        self.qw = torch.where(none, torch.full_like(acc, float(100 - max(cfg.qos_priority))), acc)
 
     def reset(self, env_ids=None):
         """Partial reset: every per-robot state tensor of the given envs back to its initial value.
@@ -200,6 +251,9 @@ class MacLink:
             metric_sb = rate_sb
         elif sched == "rr":                    # age of the last transmission, the same on every RBG
             metric_sb = (g - self.last_tx).float()[..., None].expand_as(rate_sb)
+        elif sched == "qos":                   # 5G-LENA QoS: r^gamma / avg times the class weight (qos_prepare)
+            rate_q = rate_sb if cfg.qos_gamma == 1.0 else rate_sb ** cfg.qos_gamma
+            metric_sb = rate_q / self.avg.clamp(min=AVG_MIN)[..., None] * self.qw[..., None]
         else:
             metric_sb = rate_sb / self.avg.clamp(min=AVG_MIN)[..., None]
         # retransmission admission: rank pending retx per cell (PF metric) and admit them while their
@@ -258,7 +312,7 @@ class MacLink:
             got = torch.zeros(E, R, device=d)                  # bytes granted so far in this slot
         for s in range(S):
             want = (cnt < want_cnt) & (has_rx | (left > 0))
-            ms = rate_sb[..., s] / (base + wwin * got).clamp(min=1e-9) if rbg_pf else metric_sb[..., s]
+            ms = self._rbg_metric(s, rate_sb, base, wwin, got) if rbg_pf else metric_sb[..., s]
             m = torch.where(want, ms + prio, torch.full_like(left, -1.0))
             wr = want & has_rx if lex else None
             if M is None:
@@ -291,7 +345,7 @@ class MacLink:
             cols = []
             for s in range(S):
                 want = (cnt < want_cnt) & new_el & (left > 0)
-                ms = rate_sb[..., s] / (base + wwin * got).clamp(min=1e-9) if rbg_pf else metric_sb[..., s]
+                ms = self._rbg_metric(s, rate_sb, base, wwin, got) if rbg_pf else metric_sb[..., s]
                 m = torch.where(want, ms, torch.full_like(left, -1.0))
                 if M is None:
                     best, wi = m.max(-1)
@@ -420,6 +474,14 @@ class MacLink:
         q = self.q
         done = (q.cap >= 0) & (q.end <= ack[..., None]) & ~q.lost & torch.isinf(q.fin)
         q.fin = torch.where(done, frac + cfg.proc_offset_ms / cfg.control_step_ms, q.fin)
+
+    def _rbg_metric(self, s, rate_sb, base, wwin, got):
+        """pf_update="rbg": metric of RBG s with the average moved by the bytes granted so far in this slot (qos: the
+        rate to the power qos_gamma, times the class weight)."""
+        if not self.qos:
+            return rate_sb[..., s] / (base + wwin * got).clamp(min=1e-9)
+        r = rate_sb[..., s] if self.cfg.qos_gamma == 1.0 else rate_sb[..., s] ** self.cfg.qos_gamma
+        return r / (base + wwin * got).clamp(min=1e-9) * self.qw
 
     def _pf_update(self, g, served, tx, won, need=None, has_rx=None, tbs_new=None, tx_new=None):
         """Scheduler state after a data slot: PF average and, for round robin, the slot of the last transmission.

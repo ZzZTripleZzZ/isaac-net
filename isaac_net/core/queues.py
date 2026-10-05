@@ -109,6 +109,34 @@ class FrameQueue:
         for n in self.fields:
             setattr(self, n, getattr(self, n).gather(-1, order))
 
+    def reorder(self, sent, key, nkeys):
+        """Class-ordered byte assignment (NRConfig.scheduler="qos"): reorder the frames whose bytes are all unsent
+        and visible (start >= sent, end <= enq) by key [E,R,F] (long in [0, nkeys), smaller first), stably, and lay
+        their bytes out again contiguously so that the last one ends at enq. Frames with sent bytes (start < sent)
+        keep their place and range, and so do frames beyond enq (not arrived yet behind the traffic-model gate), so
+        no HARQ process and no stream offset outside the reordered block changes; slot order stays byte order.
+        Bytes of the block that belong to no frame (frames purged out of the middle of the stream) end up in front
+        of it; when no frame has unsent bytes below the block they are skipped. Returns the new send pointer [E,R]
+        (fixed shape, no host sync)."""
+        F = self.F
+        idx = torch.arange(F, device=self.dev)
+        s_ = sent[..., None]
+        valid = self.cap >= 0
+        mov = valid & (self.start >= s_) & (self.end <= self.enq[..., None])
+        pre = valid & (self.start < s_)
+        k = torch.where(mov, (1 + key) * F, torch.where(pre, torch.zeros_like(key), torch.full_like(key, (nkeys + 1) * F)))
+        order = (k + idx).argsort(-1)
+        for n in self.fields:
+            setattr(self, n, getattr(self, n).gather(-1, order))
+        mov = mov.gather(-1, order)
+        ln = (self.end - self.start) * mov
+        b0 = self.enq - ln.sum(-1)
+        end = b0[..., None] + ln.cumsum(-1)
+        self.start = torch.where(mov, end - ln, self.start)
+        self.end = torch.where(mov, end, self.end)
+        tail = torch.where(pre.gather(-1, order), self.end, torch.zeros_like(self.end)).max(-1).values
+        return torch.where(tail <= sent, torch.maximum(sent, b0), sent)
+
     def floor(self):
         """Stream offset below which every byte belongs to a frame that has left the queue."""
         head = self.cap[..., 0] >= 0

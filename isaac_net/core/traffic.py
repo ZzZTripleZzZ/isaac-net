@@ -54,10 +54,11 @@ class TrafficModel:
 
     Common optional extras (every constructor): tag (int, carried by the queue and reported per message; default
     = 1 + the model's position in NRConfig.traffic, 0 is the policy's), priority (int, carried and reported; the
-    MAC is FIFO per robot and does not use it), deadline_ms (reported as `deadline_miss`; inf = none),
-    max_msgs_per_step (the fixed number of arrivals per robot per step the model reserves; more arrivals than
-    that are deferred to the next step, never dropped, and counted in TrafficGen.deferred), direction ("ul", the
-    default, or "dl": the messages go to the robot's downlink queue; see downlink()).
+    message class of NRConfig(scheduler="qos"), the other schedulers serve each robot FIFO), deadline_ms (reported
+    as `deadline_miss`; inf = none), max_msgs_per_step (the fixed number of arrivals per robot per step the model
+    reserves; more arrivals than that are deferred to the next step, never dropped, and counted in
+    TrafficGen.deferred), direction ("ul", the default, or "dl": the messages go to the robot's downlink queue; see
+    downlink()).
     """
 
     kind: str
