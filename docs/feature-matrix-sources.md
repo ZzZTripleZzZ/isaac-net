@@ -70,11 +70,11 @@ Abbreviations in the table: `LENA/x.rst` is `https://gitlab.com/cttc-lena/nr/-/b
 
 ## Rows added after the 2026-09-29 check
 
-The feature branches merged on 2026-10-05 added six rows to the matrix. Their 5G-LENA, Sionna SYS and Simu5G cells were written with the features and have not been checked against the pinned documentation yet, so every cell below is *unverified* or *not assessed* until someone does that check.
+The feature branches merged on 2026-10-05 added six rows to the matrix. Their 5G-LENA, Sionna SYS and Simu5G cells were written with the features and have not been checked against the pinned documentation yet, so every cell below is *unverified* or *not assessed* until someone does that check. The 5G-LENA obstacles cell was checked against the ns-3-dev source on 2026-10-05.
 
 | Tool | Feature | Status | What the matrix states | Basis | Section to check |
 |:---|:---|:---|:---|:---|:---|
-| 5G-LENA | Obstacles / LOS blockage | *unverified* | LOS from `Building` boxes (`BuildingsChannelConditionModel`); blockage model A in `ThreeGppChannelModel` (`Blockage`, `NumNonselfBlocking`, `BlockerSpeed`); model B not found | [obstacles.md](obstacles.md#comparison-with-ns-3-buildingschannelconditionmodel) | ns-3 buildings module; ns-3 propagation `ThreeGppChannelModel` attributes |
+| 5G-LENA | Obstacles / LOS blockage | supported (source only) | LOS from `Building` boxes (`BuildingsChannelConditionModel`); blockage model A in `ThreeGppChannelModel` (`Blockage` "Enable blockage model A (sec 7.6.4.1)", default false; `NumNonselfBlocking` default 4; `PortraitMode`; `BlockerSpeed` default 1 m/s); no model B (§7.6.4.2) code found | ns-3-dev `src/spectrum/model/three-gpp-channel-model.cc` (`GetTypeId` attributes) and `src/buildings/model/buildings-channel-condition-model.h`, master read on 2026-10-05, not the pinned 5G-LENA docs | ns-3 buildings module; ns-3 propagation `ThreeGppChannelModel` attributes |
 | 5G-LENA | Rician fading / K-factor | *unverified* | K-factor inside the TR 38.901 cluster model | [channels.md](channels.md#rician-fading) | LENA/helpers.rst (NR Channel Helper) |
 | 5G-LENA | Antenna patterns | *unverified* | 3GPP UPAs, dual polarization, multi-panel, isotropic / cosine / parabolic elements | the matrix cell only | LENA/phy-layer.rst (antenna and beamforming model) |
 | 5G-LENA | Radio link failure | *unverified* | RLF via the ns-3 LTE RRC; A3 `MinTargetRsrpDbm` | [multicell.md](multicell.md#radio-link-failure) | LENA/rrc-layer.rst; ns-3 LTE `NrA3RsrpHandoverAlgorithm` attributes |

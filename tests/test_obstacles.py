@@ -326,6 +326,28 @@ def test_model_a_statistics():
     assert not h_hi.any() and l_hi.mean() < 3.0
 
 
+def test_model_a_window():
+    """TR 38.901 V17.0.0 text below eq. 7.6-22: a region attenuates only when |phi_AOA - phi_k| < x_k and
+    |theta_ZOA - theta_k| < y_k, otherwise 0 dB."""
+    from isaac_net.core.channels.fields import uniform_from_field
+    E = 200
+    cfg = NRConfig(blockage=True, blockage_model="stochastic", cell_positions_m=((10.0, 0.0),), gnb_height_m=1.5)
+    b = BlockageA(cfg, E, "cpu", rng=CounterRNG(3, E, "cpu"))
+    b.advance(0.5)
+    a3 = torch.tensor([0.0, 0.0, 1.5]).expand(E, 1, 3)
+    for g in ([[10.0, 0.0, 1.5]], [[0.0, 10.0, 1.5]], [[3.0, 0.0, 1.9]]):
+        g3 = torch.tensor(g)
+        loss, _ = b.loss_db(a3, g3, 40.0)
+        d = g3[0] - a3[:, 0]
+        az = torch.rad2deg(torch.atan2(d[:, 1], d[:, 0]))[:, None]
+        zen = 90.0 - torch.rad2deg(torch.atan2(d[:, 2], d[:, :2].norm(dim=-1)))[:, None]
+        phik = 360.0 * uniform_from_field(b.field(a3[..., :2] + (b.vel * b.t[:, None])[:, None, :]), b.table)[:, 0]
+        da = torch.remainder(az - phik + 180.0, 360.0) - 180.0
+        win = ((da.abs() < b.xk) & ((zen - 90.0).abs() < b.yk)).any(-1)
+        assert (loss[:, 0, 0][~win] == 0).all() and (loss[:, 0, 0][win] > 0).all()
+        assert win.any() and (~win).any()
+
+
 def test_model_a_in_radio_reset_keyed():
     cfg = NRConfig(blockage=True, blockage_model="stochastic", gnb_height_m=1.5)
     r3 = RadioMC(cfg, 3, "cpu", R=2, rng=CounterRNG(9, 3, "cpu"))

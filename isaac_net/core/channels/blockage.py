@@ -13,14 +13,17 @@ Sphere test, fixed-shape pairwise [E, R, R, C] (blockers j of link (i, c)): with
 w = centre of robot j - a, the projection t = (w . d) / |d|^2 must lie strictly inside (0, 1) and the distance
 |w - t d| must be below r. The robot itself (j = i) never blocks. Cost O(E R^2 C) per call.
 
-Model B knife-edge formulas (TR 38.901 V17 eq. 7.6-29 / 7.6-30, from memory of the spec text, see the [verify]
-notes below): per screen
+Model B knife-edge formulas (TR 38.901 V17.0.0 Sec. 7.6.4.2, eq. 7.6-29 and the LOS-direct-path case of eq. 7.6-30,
+checked against ETSI TR 138 901 V17.0.0 (2022-04), p. 60-61): per screen
     L_dB = -20 log10(1 - (F_h1 + F_h2)(F_w1 + F_w2)),
     F_k  = atan(+-(pi / 2) sqrt((pi / lambda)(D1_k + D2_k - r))) / pi,
 with D1_k, D2_k the distances from the two antennas to edge k (projected onto the screen at the height / lateral
-position of the direct path), r the direct distance, and the sign + when the direct path lies on the screen side of
-edge k (inside the shadow of that edge) and - otherwise. Losses of several screens add in dB and are clamped at
-blockage_max_db. Grazing one edge of a wide screen gives 6 dB; a path that passes far outside gives 0 dB.
+position of the direct path), r the direct distance. Sign rule (text below eq. 7.6-30): if the path intersects the
+screen in a view (side view for h1 / h2, top view for w1 / w2), both edges of that view take +; otherwise the edge with
+the shorter D1 + D2 takes - and the other +. Here that is "+ when the direct path lies on the screen side of edge k"
+(the nearer edge of a screen that the path misses is the only one with the path outside). Losses of several screens
+add in dB ("summing the losses of each contributing screen in dB units") and are clamped at blockage_max_db. Grazing
+one edge of a wide screen gives 6 dB; a path that passes far outside gives 0 dB.
 """
 from __future__ import annotations
 
@@ -32,8 +35,9 @@ from .fields import PlaneWaveField, sum_of_cosines_cdf_table, uniform_from_field
 from .tr38901 import C_LIGHT
 
 BLOCKAGE_MODELS = ("sphere", "screen", "stochastic")
-# Table 7.6.4.2-5 (model B blocker sizes, w x h m): human 0.3 x 1.7, vehicle 4.8 x 1.4 [verified against the
-# feature-gap notes, which confirmed the table on a TR 38.901 mirror]; class 0 (a robot body) is ours.
+# TR 38.901 V17.0.0 Table 7.6.4.2-5 (recommended model B blockers, w x h): human 0.3 x 1.7 m ("stationary or up to
+# 3 km/h", indoor / outdoor / InF), vehicle 4.8 x 1.4 m (outdoor, up to 100 km/h); the table also lists an InF AGV
+# (3 x 1.5 m) and an InF industrial robot (2 x 0.2 m). Class 0 (a robot body) is ours.
 BLOCKER_CLASSES = ("robot", "human", "vehicle")
 
 
@@ -94,12 +98,15 @@ def screen_loss_db(a3, g3, bxy, size, active, lam, max_db, exclude=None):
     return loss.sum(-1).clamp(max=max_db), hit.any(-1)
 
 
-# Table 7.6.4.1-2 (model A, non-self-blocking regions), per scenario family:
-#   (azimuth span x_k range deg, elevation span y_k range deg, distance r m, correlation distance m)
-# InH: phi_k ~ U[0, 360), x_k ~ U[15, 45], theta_k = 90, y_k ~ U[5, 15], r = 2 m; UMi / UMa / RMa: x_k ~ U[5, 15],
-# y_k = 5, r = 10 m. Region centres in azimuth are uniform. [verify: the spans and r are from memory of the table;
-# the correlation distances (5 m indoor, 10 m outdoor) and the 3 km/h blocker speed are from memory of the
-# spatial-consistency text of Sec. 7.6.4.1 and the ns-3 ThreeGppChannelModel defaults, not checked against the spec]
+# Model A, TR 38.901 V17.0.0 Sec. 7.6.4.1 (checked against ETSI TR 138 901 V17.0.0, p. 58-60), per scenario family:
+#   (azimuth span x_k range deg, elevation span y_k range deg, distance r m, correlation distance d_corr m)
+# Table 7.6.4.1-2, k = 1..4: InH phi_k ~ U[0, 360), x_k ~ U[15, 45], theta_k = 90, y_k ~ U[5, 15], r = 2 m;
+# UMi / UMa / RMa phi_k ~ U[0, 360), x_k ~ U[5, 15], theta_k = 90, y_k = 5, r = 10 m.
+# Table 7.6.4.1-4 (d_corr of the blocker-centre variable): UMi / UMa / RMa 10 m LOS and NLOS (5 m O2I, not modelled
+# here), InH 5 m. The table has no InF column; InF uses the InH row (approximation, see model_a_family).
+# Self-blocking (Table 7.6.4.1-1: portrait phi'_sb 260, x_sb 120, theta'_sb 100, y_sb 80 deg; landscape 40 / 160 /
+# 110 / 75 deg; 30 dB) is not implemented. Blocker speed: eq. 7.6-28 uses t_corr = d_corr / v with v "the speed of
+# the moving blocker" but Sec. 7.6.4.1 gives no value; we take the human speed of Table 7.6.4.2-5 (up to 3 km/h).
 MODEL_A = {"indoor": ((15.0, 45.0), (5.0, 15.0), 2.0, 5.0), "outdoor": ((5.0, 15.0), (5.0, 5.0), 10.0, 10.0)}
 MODEL_A_REGIONS = 4
 BLOCKER_SPEED_MPS = 3.0 / 3.6
@@ -118,7 +125,8 @@ def _wrap_deg(a):
 
 
 def _angle_f(delta_deg, inside, r, lam):
-    """Model A F term (eq. 7.6-22): atan(+-(pi/2) sqrt((pi/lambda) r (1/cos(delta) - 1))) / pi."""
+    """Model A F term (eq. 7.6-23): atan(+-(pi/2) sqrt((pi/lambda) r (1/cos(delta) - 1))) / pi, sign + when inside
+    (Table 7.6.4.1-3)."""
     c = torch.cos(torch.deg2rad(delta_deg.abs().clamp(max=89.9)))
     a = (math.pi / 2) * torch.sqrt((math.pi / lam) * r * (1 / c - 1).clamp(min=0.0))
     return torch.atan(torch.where(inside, a, -a)) / math.pi
@@ -133,7 +141,11 @@ class BlockageA:
     family's correlation distance) and v_b a per-env drift velocity of 3 km/h in a random direction, so a still
     robot sees its regions move with a temporal correlation of about d_corr / v_b. Every robot-gNB link takes the
     loss of eq. 7.6-22 at the azimuth and zenith of its direct path (isaac_net has no clusters, so the loss of the
-    LOS cluster is applied to the whole link), summed over the regions and clamped at blockage_max_db.
+    LOS cluster is applied to the whole link), summed over the regions and clamped at blockage_max_db. As the spec
+    states below eq. 7.6-22, a region attenuates only when |phi_AOA - phi_k| < x_k and |theta_ZOA - theta_k| < y_k
+    (0 dB otherwise); A1, A2, Z1, Z2 follow eq. 7.6-24 to 7.6-27 and the signs Table 7.6.4.1-3. The spec's ACF
+    (eq. 7.6-28) is exp(-(dx / d_corr + dt / t_corr)); the drift x + v_b t gives exactly exp(-dt / t_corr) for a still
+    robot and exp(-dx / d_corr) for a frozen clock, and a field of the combined displacement in between.
 
     advance(dt_s) moves the env clocks; RadioMC advances them by control_step_ms on every rx_dbm call (one call per
     control step in the engines). Randomness: engine CounterRNG streams stream .. stream + 2 (the field), + 3, + 4
@@ -202,6 +214,8 @@ class BlockageA:
         fz1 = _angle_f(z1, z1 < 0, self.r, self.lam)
         fz2 = _angle_f(z2, z2 > 0, self.r, self.lam)
         arg = (1 - (fa1 + fa2) * (fz1 + fz2)).clamp(min=1e-6)
-        loss = (-20 * torch.log10(arg)).clamp(min=0.0).sum(-1).clamp(max=max_db)
+        win = (da.abs() < xk) & ((zen - 90.0).abs() < yk)        # eq. 7.6-22 applies only in this window
+        lk = (-20 * torch.log10(arg)).clamp(min=0.0)
+        loss = torch.where(win, lk, torch.zeros_like(lk)).sum(-1).clamp(max=max_db)
         hit = ((a1 < 0) & (a2 > 0) & (z1 < 0) & (z2 > 0)).any(-1)
         return loss, hit

@@ -18,10 +18,13 @@ from .radio_map import SYNTHETIC_MAP, RadioMap
 def soft_los(u, p, lam):
     """TR 38.901 Sec. 7.6.3.3 soft LOS state in [0, 1] from the LOS-state uniform u and Pr_LOS p:
     1/2 + atan(sqrt(20 / lambda) (F - G)) / pi, F = sqrt(2) erfinv(2 p - 1), G = sqrt(2) erfinv(2 u - 1), so it
-    tends to the hard state u < p as lambda -> 0 and is continuous in p. [verify: the spec writes the argument as
-    sqrt(20 / lambda) (G + F) with G its own zero-mean Gaussian; with G -> -G (same law) this is that form; the
-    scale sqrt(20 / lambda), lambda in m, is taken from the task statement and memory, not checked against the
-    spec text]"""
+    tends to the hard state u < p as lambda -> 0 and is continuous in p. Checked against ETSI TR 138 901 V17.0.0,
+    eq. 7.6-18: LOS_soft = 1/2 + (1/pi) arctan(sqrt(20 / lambda) (G + F(d))), F(d) = sqrt(2) erf^-1(2 Pr_LOS(d) - 1),
+    G a spatially consistent Gaussian with the LOS-state correlation distance of Table 7.6.3.1-2 (RMa 60, UMi 50,
+    UMa 50, Indoor 10 m, InF d_clutter / 2). Our G is -G of the spec (same law), so that u < p <=> LOS_soft > 1/2.
+    lambda in m (the clause names no unit; m is the TR's length unit). Eq. 7.6-19 mixes the channel matrices as
+    H_LOS LOS_soft + H_NLOS sqrt(1 - LOS_soft^2); the callers mix path loss and shadow fading linearly in dB with
+    weight LOS_soft instead (a large-scale approximation)."""
     eps = 1e-6
     F = math.sqrt(2) * torch.erfinv((2 * p - 1).clamp(-1 + eps, 1 - eps))
     G = math.sqrt(2) * torch.erfinv((2 * u - 1).clamp(-1 + eps, 1 - eps))
