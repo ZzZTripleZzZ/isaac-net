@@ -1,0 +1,19 @@
+{
+ "digests": {
+  "dl_traffic_reference": "2383ea3c78d1f655b0b74bdd15139b5babf01c72ae2b772529a88d7736e1d9bc",
+  "edge_delay_fdd_same_carrier": "6d160bd946d319321b358e2c7884fc50de8302cb5986901773233b55cb67b41c",
+  "edge_delay_l1": "10cb7afc2a044cd1b9609d75a0f21255d68866894ff00032bbc2b337c2b74b4f",
+  "edge_delay_tdd_l2": "74f7307a259cf12e30c92093a54806d8882712bf561ddae61ee36b5220372267",
+  "rach_multicell_no_rlf": "c6cda81005fa9e3a3bcb6453f497d56f93f2b775166faf980c508b3d8e1c2253",
+  "rach_single_cell": "4ac75de034bc10d8834f0285160d35854cb7130d3e3bba55b4fd65f9645a7b7f",
+  "radio_map_sector_runtime": "e5b1af4c61653a1a12ec27399e8dee54a446b7905ee04957ffadbe0cc798ca92",
+  "rlf_drx_no_rach": "a69ecf086eea5ae13a34df85e8ba0afe8eb8bb162c07024feb35ceb18a75e6d0",
+  "rlf_no_rach": "d04dd4ce2f66316d03d4c2b6a11bf194b25fc9ff5b2a6fa1bdae53de792fc126",
+  "rlf_no_rach_dl_poses": "baf7fad219b35098ee83a7db100109a0cc713ca65ac7447d556611c8ed671f59"
+ },
+ "env": {
+  "machine": "arm64",
+  "system": "Darwin",
+  "torch": "2.9.1"
+ }
+}
