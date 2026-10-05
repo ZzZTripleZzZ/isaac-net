@@ -8,6 +8,8 @@
 - bler_source="lena": 5G-LENA v5.1 EESM tables. They are GPL-derived data and are never shipped: build them from
   your own 5G-LENA checkout with `python -m isaac_net.tools.extract_lena_tables` (see lena_tables_path()).
 - EESM betas per MCS: Sionna SYS 2.2.0 esm_params/eesm_beta_table.json (Apache-2.0).
+- CQI: TS 38.214 Table 5.2.2.1-2 (4-bit CQI table 1, up to 64QAM) and Table 5.2.2.1-3 (table 2, up to 256QAM), used
+  with MCS table 1 and 2 respectively (NRConfig.cqi_table="38214", cqi_tables()).
 """
 import math
 import os
@@ -26,6 +28,18 @@ MCS_T2 = [(2, 120), (2, 193), (2, 308), (2, 449), (2, 602), (4, 378), (4, 434), 
           (6, 822), (6, 873), (8, 682.5), (8, 711), (8, 754), (8, 797), (8, 841), (8, 885),
           (8, 916.5), (8, 948)]
 MCS_TABLES = {1: MCS_T1, 2: MCS_T2}
+
+# TS 38.214 Table 5.2.2.1-2 (CQI table 1) and Table 5.2.2.1-3 (CQI table 2): CQI 1..15 as (Qm, R x 1024); CQI 0 =
+# "out of range". Spectral efficiency = Qm * R / 1024 (the tables list it rounded to 4 decimals: 0.1523, 0.2344,
+# 0.3770, 0.6016, 0.8770, 1.1758, 1.4766, 1.9141, 2.4063, 2.7305, 3.3223, 3.9023, 4.5234, 5.1152, 5.5547 for table 1;
+# table 2 continues after 5.5547 with 6.2266, 6.9141, 7.4063). Every row was checked against 38.214 from
+# memory, not a downloaded copy: the entries equal the LTE TS 36.213 Tables 7.2.3-1 / 7.2.3-2 rows, which 38.214
+# reuses, and every (Qm, R) except CQI 1 (QPSK 78) is also an MCS row of Table 5.1.3.1-1 / -2.
+CQI_T1 = [(2, 78), (2, 120), (2, 193), (2, 308), (2, 449), (2, 602), (4, 378), (4, 490), (4, 616), (6, 466), (6, 567),
+          (6, 666), (6, 772), (6, 873), (6, 948)]
+CQI_T2 = [(2, 78), (2, 193), (2, 449), (4, 378), (4, 490), (4, 616), (6, 466), (6, 567), (6, 666), (6, 772), (6, 873),
+          (8, 711), (8, 797), (8, 885), (8, 948)]
+CQI_TABLES = {1: CQI_T1, 2: CQI_T2}
 
 # TS 38.214 Table 5.1.3.2-1, TBS for N_info <= 3824
 TBS_TABLE = [24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176,
@@ -331,6 +345,34 @@ class PHY:
         cbs, c, bg = self.cb(tbs, self.r[mcs.long()])
         b = self.bler_lookup(mcs if mcs_eq is None else mcs_eq, sinr_eff_db, cbs.float(), bg)
         return 1 - (1 - b) ** c.float()
+
+
+def cqi_tables(phy, mcs_table):
+    """CQI side of DlMac.cqi_report with cqi_table="38214" for a PHY of MCS table mcs_table.
+
+    Returns (thr [15], cqi_mcs [16]): thr[k - 1] = the SINR (dB) from which the UE reports CQI k, the 10 % BLER SINR
+    of the CQI's (Qm, R) for one 10-PRB RBG (PHY.thr_ref of the MCS with the same spectral efficiency; for an
+    efficiency with no MCS row, CQI 1, the nearest MCS's threshold shifted by the Shannon-gap difference
+    10 log10((2^se - 1) / (2^se_mcs - 1)), as build_bler_table fills missing curves), made non-decreasing; cqi_mcs[k]
+    = the highest MCS <= phy.mcs_max whose spectral efficiency is <= CQI k's (MCS 0 for CQI 0 and for a CQI below
+    every MCS)."""
+    cq = CQI_TABLES[mcs_table]
+    se_c = [q * r / 1024 for q, r in cq]
+    se_m = [float(x) for x in phy.se]
+    thr_m = [float(x) for x in phy.thr_ref]
+    gap = lambda e: 10 * math.log10(2 ** e - 1)
+    thr = []
+    for e in se_c:
+        m = min(range(phy.M), key=lambda k: (abs(se_m[k] - e), k))
+        thr.append(thr_m[m] + (0.0 if abs(se_m[m] - e) < 1e-6 else gap(e) - gap(se_m[m])))
+    for k in range(1, len(thr)):
+        thr[k] = max(thr[k], thr[k - 1])
+    cqi_mcs = [0]
+    for e in se_c:
+        ok = [m for m in range(phy.mcs_max + 1) if se_m[m] <= e + 1e-6]
+        cqi_mcs.append(max(ok) if ok else 0)
+    return (torch.tensor(thr, dtype=torch.float32, device=phy.dev),
+            torch.tensor(cqi_mcs, dtype=torch.long, device=phy.dev))
 
 
 _RAW = {}

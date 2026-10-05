@@ -32,6 +32,7 @@ import torch
 
 from .channels import (PlaneWaveField, RadioMapChannel, TR38901Channel, blocked_links, draw_plane_waves,
                        eval_plane_waves)
+from .channels.antenna import gnb_antenna_gain_db
 from .channels.fields import counter_uniform
 from .config import NRConfig
 from .proto.netsim import Radio  # noqa: F401  (re-export: the prototype single-cell radio)
@@ -144,6 +145,8 @@ class RadioMC:
             rx = self.cfg.ue_tx_dbm + self.ch.pathgain_db(pos)
         if self.cfg.blockage:
             rx = rx - self.cfg.blockage_loss_db * self.blocked(pos).float()
+        if self.cfg.gnb_antenna != "isotropic":      # gNB sector pattern on every link (channels/antenna.py)
+            rx = rx + gnb_antenna_gain_db(self.cfg, pos, self.gnb3, self.h_ut)
         return rx
 
     def _log_distance_rx(self, pos):

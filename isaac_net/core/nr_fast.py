@@ -386,7 +386,7 @@ class NRTritonEngine(NRGraphEngine):
     interpolation and HARQ combining run in the kernel in float32 (float64 where phy.py uses it). Reduction order and
     fused multiply-adds differ from ATen, so the engine equals the reference to float rounding, not bitwise.
     The 5G-LENA MAC switches pf_update, pf_avg_idle, ul_retx_sched and ul_amc_alloc run in the kernel;
-    ul_grant_model="bsr" (and so lena_match_v2) is refused for now (use graph).
+    ul_grant_model="bsr" (and so lena_match_v2), ul_tpc and cqi_table="38214" are refused for now (use graph).
     Limits: one cell (n_cells = 1), no user SINR hook; robots are padded to a power of two (R up to about 256)."""
 
     backend = "triton"
@@ -401,6 +401,11 @@ class NRTritonEngine(NRGraphEngine):
                 "grant pipeline, which lena_match_v2 / lena_validation_v2 turn on) yet; use backend='graph' (bitwise "
                 "equal to the reference) or backend='reference'. The other 5G-LENA MAC switches (pf_update, "
                 "pf_avg_idle, ul_retx_sched, ul_amc_alloc) run on triton.")
+        if cfg.ul_tpc or cfg.cqi_table != "mcs":
+            raise NotImplementedError(
+                "the triton backend does not implement closed-loop UL power control (ul_tpc) or the 38.214 CQI table "
+                "(cqi_table='38214') yet: both change the per-slot loop of the fused kernel; use backend='graph' "
+                "(bitwise equal to the reference) or backend='reference'.")
         super().__init__(E, R, device, cfg, seed=seed)
         from . import nr_triton
         from .nr_rng import STEP, salt

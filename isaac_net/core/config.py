@@ -75,14 +75,16 @@ FIELD_GROUPS = {
            "pf_update", "pf_avg_idle", "ul_retx_sched", "ul_amc_alloc", "ul_grant_model", "sr_boot_slots",
            "sr_boot_bytes", "bsr_delay_slots", "bsr_hdr_bytes", "bsr_est_hdr_bytes", "rlc_tail_bytes", "rlc_tail_timer_ms",
            "phr_min_db", "fading", "fading_rho_per_ms", "ue_speed_mps", "carrier_ghz", "fading_doppler",
-           "doppler_min_speed_mps", "dl_snr_offset_db",
+           "doppler_min_speed_mps", "dl_snr_offset_db", "cqi_table",
+           "ul_tpc", "ul_tpc_mode", "ul_tpc_target_db", "ul_tpc_steps_db", "ul_tpc_delay_slots", "ul_tpc_range_db",
            "gnb_tx_dbm", "ue_nf_db", "tb_overhead_bytes", "pkt_payload_bytes", "pkt_overhead_bytes", "ul", "dl"),
     "link": ("snr_ref_prbs", "noise_model", "ni_fixed_dbm", "gnb_nf_db", "ue_tx_dbm"),
     "radio": ("pl_const_db", "pathloss_exp", "shadow_sigma_db", "shadow_modes", "shadow_dcorr_m", "shadow_white_frac",
               "shadow_acf", "shadow_white_dcorr_m", "channel", "tr38901_scenario", "tr38901_los", "gnb_height_m",
               "ue_height_m", "o2i_indoor_frac", "o2i_model", "inf_clutter_density", "inf_clutter_size_m",
               "inf_clutter_height_m", "radio_map_path", "blockage", "blockage_radius_m", "blockage_loss_db",
-              "n_cells", "cell_layout", "cell_positions_m", "cell_isd_m", "cell_center_m", "cell_arena_m"),
+              "n_cells", "cell_layout", "cell_positions_m", "cell_isd_m", "cell_center_m", "cell_arena_m",
+              "gnb_antenna", "cell_azimuth_deg", "cell_tilt_deg", "gnb_antenna_gain_dbi"),
     "multicell": ("ul_interference", "li_alpha", "ul_pc", "ul_pc_p0_dbm", "ul_pc_alpha", "a3_offset_db",
                   "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc"),
     "nr_multicell": ("dl_interference",),      # read by the NR engine only (NetSlotMC has no downlink)
@@ -108,10 +110,13 @@ TR38901_SHORT = {"tr38901_rma": "RMa", "tr38901_uma": "UMa", "tr38901_umi": "UMi
 
 # fields read only under some switches (fields_read_by drops them when the switch is off)
 DL_ONLY_FIELDS = ("k1", "cqi_period_slots", "dl_mcs_max", "dl_snr_offset_db", "dl_interference", "gnb_tx_dbm",
-                  "ue_nf_db")                                 # NR engine downlink (dl=True)
+                  "ue_nf_db", "cqi_table")                                 # NR engine downlink (dl=True)
 HANDOVER_FIELDS = ("a3_offset_db", "a3_hyst_db", "a3_ttt_ms", "ho_interruption_ms", "ho_rlc")    # n_cells > 1
 INTERFERENCE_FIELDS = ("ul_interference", "dl_interference", "li_alpha")    # n_cells > 1 and noise_model="thermal"
 UL_PC_FIELDS = ("ul_pc_p0_dbm", "ul_pc_alpha")               # ul_pc_on
+UL_TPC_FIELDS = ("ul_tpc_mode", "ul_tpc_target_db", "ul_tpc_steps_db", "ul_tpc_delay_slots",
+                 "ul_tpc_range_db")                         # ul_tpc (NR engine only)
+ANTENNA_FIELDS = ("cell_azimuth_deg", "cell_tilt_deg", "gnb_antenna_gain_dbi")      # gnb_antenna="sector"
 TR38901_FIELDS = ("tr38901_scenario", "tr38901_los", "o2i_indoor_frac", "o2i_model", "inf_clutter_density",
                   "inf_clutter_size_m", "inf_clutter_height_m")             # channel="tr38901"
 BLOCKAGE_FIELDS = ("blockage_radius_m", "blockage_loss_db")                 # blockage=True
@@ -142,7 +147,11 @@ def _switch_unread(cfg, nr):
         off.add("radio_map_path")
     if not cfg.blockage:
         off |= set(BLOCKAGE_FIELDS)
+    if cfg.gnb_antenna != "sector":
+        off |= set(ANTENNA_FIELDS)
     if nr:
+        if not cfg.ul_tpc:
+            off |= set(UL_TPC_FIELDS)
         if not cfg.fading:
             off |= set(FADING_FIELDS)
         elif cfg.fading_doppler != "per_robot":
@@ -157,7 +166,8 @@ def fields_read_by(level, cfg=None):
     may read under some configuration (whole groups); with cfg: only those its switches make it read (DL fields only
     with dl=True, handover and interference fields only with several cells, the noise fields of the noise model, the
     fields of the selected channel model, blockage and fading fields only when on, lena_ref_sc_per_rb only with
-    tbs_mode="lena")."""
+    tbs_mode="lena", the closed-loop TPC fields only with ul_tpc, cqi_table only with dl, the antenna pattern fields only
+    with gnb_antenna="sector")."""
     groups = {"L0": ("app", "proto", "l0"), "L0DR": ("app", "proto", "l0dr"), "L1": ("app", "proto", "l1"),
               "L2": ("app", "frame", "nr", "link", "radio", "multicell", "nr_multicell", "traffic")}.get(
         level, ("app", "proto"))
@@ -299,6 +309,9 @@ class NRConfig:
     bler_target: float = 0.1
     ul_mcs_max: int | None = None        # MCS index cap (public-data calibration: bench open-source UL SE ~2.4-3)
     dl_mcs_max: int | None = None
+    cqi_table: str = "mcs"               # DL CQI: "mcs" = the UE reports the highest MCS meeting the BLER target per
+                                         # RBG; "38214" = 4-bit CQI of TS 38.214 Table 5.2.2.1-2 (-3 with mcs_table=2),
+                                         # mapped to the highest MCS whose spectral efficiency is <= the CQI's
     olla: bool = True
     olla_up_db: float = 0.05             # down step = up * (1 - target) / target
     scheduler: str = "pf"                # "pf" proportional fair (metric from pf_metric), "pf_wideband" (= pf with
@@ -391,6 +404,12 @@ class NRConfig:
     cell_isd_m: float = 100.0            # hex inter-site distance (>= 100 m: see multicell())
     cell_center_m: tuple = (75.0, 75.0)  # hex: cluster centroid
     cell_arena_m: float = 150.0          # grid: square arena tiled by ceil(sqrt(C)) columns
+    gnb_antenna: str = "isotropic"       # gNB antenna: "isotropic" (0 dBi) | "sector": TR 38.901 Table 7.3-1 element
+                                         # (65 deg HPBW, 30 dB front-back), added to every link (channels/antenna.py)
+    cell_azimuth_deg: tuple | None = None    # sector: boresight azimuth per cell (deg, from +x toward +y); None = 30,
+                                             # 150, 270 cycled over the cells (the 3-sector site convention)
+    cell_tilt_deg: float | tuple = 0.0   # sector: downtilt (deg below the horizon), one value or one per cell
+    gnb_antenna_gain_dbi: float = 8.0    # sector: maximum element gain G_E,max (Table 7.3-1)
     ul_interference: bool = True         # thermal noise only: add same-slot other-cell UL interference
     dl_interference: bool = True         # thermal noise only: same for the DL (NR engine)
     li_alpha: float = 1.0                # link adaptation uses an EWMA of the measured N+I; 1 = previous slot
@@ -398,6 +417,15 @@ class NRConfig:
                                          # per subband; None = ON when n_cells > 1, OFF for one cell (legacy)
     ul_pc_p0_dbm: float = -88.0          # per subband (10 PRB); about 15 dB SNR per subband at alpha = 1
     ul_pc_alpha: float = 1.0
+    ul_tpc: bool = False                 # UL closed-loop power control (TS 38.213 Sec. 7.1.1) on top of ul_pc: per-robot
+                                         # TPC offset from the gNB's PUSCH SINR measurement (NR engine; needs ul_pc on)
+    ul_tpc_mode: str = "accumulate"      # "accumulate": f += step, clamped; "absolute": f = step
+    ul_tpc_target_db: float | None = None    # target PUSCH SINR per PRB at the gNB; None = the 10 % BLER SINR of the
+                                             # middle MCS of mcs_table (MCS 14: 6.3 dB table 1, 12.8 dB table 2, pdsch)
+    ul_tpc_steps_db: tuple | None = None     # command set (dB); None = (-1, 0, 1, 3) accumulate, (-4, -1, 1, 4) absolute
+                                             # (38.213 Table 7.1.1-1)
+    ul_tpc_delay_slots: int | None = None    # PUSCH -> its command takes effect; None = k2
+    ul_tpc_range_db: float = 20.0        # |f| clamp (accumulated offset within the UE power range)
     a3_offset_db: float = 0.0            # A3: neighbour > serving + offset + hysteresis ...
     a3_hyst_db: float = 3.0
     a3_ttt_ms: float = 300.0             # ... held for the time-to-trigger
@@ -485,6 +513,17 @@ class NRConfig:
         assert self.fading_doppler in ("global", "per_robot") and self.doppler_min_speed_mps >= 0
         assert self.tr38901_los in ("stochastic", "los", "nlos") and self.o2i_model in ("low", "high")
         assert 0.0 <= self.o2i_indoor_frac <= 1.0 and self.blockage_radius_m > 0
+        assert self.cqi_table in ("mcs", "38214"), "cqi_table: 'mcs' or '38214'"
+        assert self.ul_tpc_mode in ("accumulate", "absolute"), "ul_tpc_mode: 'accumulate' or 'absolute'"
+        if self.ul_tpc:
+            assert self.ul_pc_on, ("ul_tpc corrects the open-loop power P0 + alpha PL: set ul_pc=True (it is on by "
+                                   "default only with several cells)")
+            assert len(self.ul_tpc_set) >= 1 and self.ul_tpc_delay >= 0 and self.ul_tpc_range_db > 0
+        assert self.gnb_antenna in ("isotropic", "sector"), "gnb_antenna: 'isotropic' or 'sector'"
+        if self.cell_azimuth_deg is not None:
+            assert len(self.cell_azimuth_deg) == self.n_cells, "cell_azimuth_deg needs one azimuth per cell"
+        if isinstance(self.cell_tilt_deg, (tuple, list)):
+            assert len(self.cell_tilt_deg) == self.n_cells, "cell_tilt_deg: one value or one per cell"
         if self.channel == "tr38901":
             from .channels.tr38901 import SCENARIOS, scenario_name
             self.tr38901_scenario = scenario_name(self.tr38901_scenario)
@@ -656,6 +695,29 @@ class NRConfig:
         rows = math.ceil(n / cols)
         dx, dy = self.cell_arena_m / cols, self.cell_arena_m / rows
         return [((i % cols + 0.5) * dx, (i // cols + 0.5) * dy) for i in range(n)]
+
+    @property
+    def ul_tpc_set(self):
+        """TPC command set (dB): ul_tpc_steps_db, or the 38.213 Table 7.1.1-1 set of ul_tpc_mode."""
+        if self.ul_tpc_steps_db is not None:
+            return tuple(float(x) for x in self.ul_tpc_steps_db)
+        return (-1.0, 0.0, 1.0, 3.0) if self.ul_tpc_mode == "accumulate" else (-4.0, -1.0, 1.0, 4.0)
+
+    @property
+    def ul_tpc_delay(self):
+        """Slots from a PUSCH to the slot its TPC command takes effect: ul_tpc_delay_slots, default k2."""
+        return self.k2 if self.ul_tpc_delay_slots is None else int(self.ul_tpc_delay_slots)
+
+    def cell_azimuths(self):
+        """Boresight azimuth per cell (deg): cell_azimuth_deg, or 30, 150, 270 cycled over the cells."""
+        if self.cell_azimuth_deg is not None:
+            return [float(a) for a in self.cell_azimuth_deg]
+        return [(30.0 + 120.0 * c) % 360.0 for c in range(self.n_cells)]
+
+    def cell_tilts(self):
+        """Downtilt per cell (deg)."""
+        t = self.cell_tilt_deg
+        return [float(x) for x in t] if isinstance(t, (tuple, list)) else [float(t)] * self.n_cells
 
     @property
     def ul_pc_on(self):
