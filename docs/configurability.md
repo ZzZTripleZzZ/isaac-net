@@ -20,6 +20,7 @@ One `NRConfig` dataclass (`isaac_net/core/config.py`) configures every module, a
 | Message size classes | `config.py` `msg_sizes` | (4000, 30000) B | yes, every level | per-call tensor, safe |
 | Isaac-side message sizes | `isaac/netmodule.py:54` | (1500, 12000) B | yes since 9c642ce: the Isaac layer reads `NRConfig.msg_sizes` (4000, 30000) | n/a |
 | Policy messages per robot per step | `traffic.py`, `Requests.send` | at most one, class index 0, 1, 2, ... | no; generated traffic: `traffic` (see [Traffic models](#traffic-models)), `L2` only | fixed shape `[E,R]` |
+| Generated traffic direction | `traffic.py` `TrafficModel.direction` | uplink | `direction="dl"` (or `.downlink()`) per model, mixed freely with UL models; `L2` with `dl=True` (see [Downlink models](#downlink-models)) | reference backend only |
 | Per-message tag | `Requests.det` / `hid`; `submit(..., tag=, priority=, deadline_ms=)` | one bool per message, one id per env; tag, priority and deadline per message on `L2` | no | safe |
 | Stack processing offset | `config.py` `proc_offset_ms` | 0 ms | yes, `L2` | n/a |
 | Stepping randomness | every engine | engine-owned counter streams (`proto/rng.py`; `nr_rng.py` on `L2`) | `seed`, `rng` (`"engine"` default, `"global"` = earlier behavior) | hashed inside the graph and the Triton kernel |
@@ -64,6 +65,7 @@ One `NRConfig` dataclass (`isaac_net/core/config.py`) configures every module, a
 | Power-headroom cap | `proto/netsim.py:38` | 3 dB per subband | NR `phr_cap`, `phr_min_db`; legacy fixed | constexpr (`PHR`) |
 | UL power control | `mac_ul.py` (`pc_backoff`), `proto/netsim_mc.py:222-224` | fractional, on by default with more than one cell | `ul_pc*` (`L2` and multi-cell legacy) | reference only |
 | Retransmission priority | `mac.py:243-290` | admitted retransmissions win RBGs before new data (`retx_priority`); off: they compete on the PF metric and RBGs of short ones are released | `retx_priority` on/off | same rule in the `triton` kernel |
+| Duplexing | `config.py` pattern helpers (`slot_symbols`, `ul_capable`, `next_ul_capable`) | TDD, one carrier for both directions | `duplex="fdd"` with `dl_n_prb` / `dl_bandwidth_mhz` (`L2`); see [Duplexing](#duplexing-tdd-and-fdd) | reference and graph; `triton` refuses FDD |
 | DL CQI | `mac_dl.py:16-20` | best MCS per subband, mapped back to its threshold, reported every 10 slots | `cqi_period_slots`; the quantization rule is fixed (not the 38.214 CQI table) | n/a |
 
 ### Fidelity levels, surrogates and bounds
@@ -122,7 +124,7 @@ The comparison was checked line by line against the official documentation of ns
 
 ## Traffic models
 
-`NRConfig(traffic=...)` takes one `TrafficModel` or a list of them (`isaac_net.core.traffic`). They run inside the engine step of level `L2` and put messages into the uplink queues without the policy emitting them; the policy's `submit()` keeps working next to them.
+`NRConfig(traffic=...)` takes one `TrafficModel` or a list of them (`isaac_net.core.traffic`). They run inside the engine step of level `L2` and put messages into the uplink queues (or, for [downlink models](#downlink-models), the robots' DL queues) without the policy emitting them; the policy's `submit()` keeps working next to them.
 
 ```python
 from isaac_net.core import NRConfig, make_engine
@@ -157,9 +159,41 @@ Every constructor also takes `tag` (default: 1 + the model's position in the lis
 
 **Levels.** Only `L2` runs traffic models. Every other level (`L0` to `L1`, `L2-legacy`, the surrogates and the bounds) raises a `ValueError` that names the models it would ignore, whether or not `strict` is set, and `NRConfig.unused_fields(level)` lists `traffic`. A config with only `policy()` works everywhere. Traffic models, `submit()` extras and the extra outputs cost nothing when unused: without them the engine runs exactly its earlier ops.
 
-**Limits.** Uplink only. `priority` is carried and reported, but the MAC serves each robot's queue in FIFO order. `deadline_ms` is reported as `deadline_miss` and does not drop messages. Traffic models work with one cell and with several NR cells (`n_cells > 1`). The engine gates arrivals through four hooks on its `UlMac` instance (`sr_step`, `slot`, `end_step`, and `handover`, so that a `ho_rlc="flush"` handover spares messages that arrive later in the step). If a future `NRNet` stops calling the first three, `step()` raises instead of silently mis-timing.
+**Limits.** `priority` is carried and reported, but the MAC serves each robot's queue in FIFO order. `deadline_ms` is reported as `deadline_miss` and does not drop messages. Traffic models work with one cell and with several NR cells (`n_cells > 1`). The engine gates arrivals through four hooks on its `UlMac` instance (`sr_step`, `slot`, `end_step`, and `handover`, so that a `ho_rlc="flush"` handover spares messages that arrive later in the step). If a future `NRNet` stops calling the first three, `step()` raises instead of silently mis-timing.
+
+### Downlink models
+
+`direction="dl"` (or `model.downlink()`) turns any generating model into a downlink source: the gNB sends its messages to the robot through the NR engine's DL queue (`NRConfig(dl=True)`, otherwise `make_engine` raises a `ValueError`), with the same sizes, `.on(robots)`, tags, priorities, deadlines and arrival offsets as an uplink model. A config may mix UL and DL models in one list.
+
+```python
+cfg = NRConfig(dl=True, traffic=[
+    TM.periodic(200, period_ms=10).on(range(4)),                 # UL telemetry
+    TM.periodic(1_500, period_ms=20).downlink().on(range(4)),    # DL setpoints / map updates
+    TM.video(fps=10, mean_frame_bytes=20_000).downlink().on(4),  # DL video to an operator robot
+])
+```
+
+- **Arrivals.** The step enqueues a DL model's messages in arrival order and opens the robot's DL byte stream slot by slot, exactly as for the uplink (hooks on the `DlMac` instance: `slot`, `end_step`, `handover`). The DL scheduler cannot send a message's bytes before its arrival slot, and its delay counts from that slot.
+- **Outputs.** With DL models, `step()` adds per DL frame `[E, R, Fd]`: `dl_delivered`, `dl_lost` (timed out or dropped), `dl_delay` (control steps from the arrival slot, NaN otherwise), `dl_tag`, `dl_bytes` (on the air), `dl_generated` (the frame came from a DL model) and `dl_deadline_miss`, plus `gen_dl_accepted` and `gen_dl_bytes` per robot. `net.traffic_stats_dl` counts generated, accepted and refused DL messages and bytes.
+- **Randomness.** DL models draw from a second generator (`TrafficGen(direction="dl")`) seeded from the engine seed, so adding a DL model leaves the UL models' arrivals, and every UL output, bitwise unchanged (tested). A model's default tag is still 1 + its position in the whole list.
+- **Sharing the DL queue with the edge loop.** `EdgeConfig(return_path="nr_dl")` and `add_dl_frames()` use the same per-robot DL queue (`frame_buffer` frames), so generated DL traffic competes with the commands for queue room and DL RBGs, which is the intended load. The two never mix: an edge command carries `cls` = capture step + 1 (at least 1) and `EdgeLoop` matches a delivered DL frame to its command by `cls - 1`, while generated DL frames carry `cls = -tag` (at most -1), which no command matches. `dl_generated` reports the generated ones.
+- **Backends and levels.** DL models run on the reference backend of `L2` (their arrival gate is host code that a replayed CUDA graph would skip): `backend="graph"` or `"triton"` raises a `ValueError`. The other levels refuse them like any traffic model.
 
 Example: [`isaac_net/examples/traffic_models.py`](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/isaac_net/examples/traffic_models.py).
+
+## Duplexing (TDD and FDD)
+
+| Field | Default | Meaning |
+|:---|:---|:---|
+| `duplex` | `"tdd"` | `"tdd"`: both directions share one carrier and `tdd_pattern` assigns each slot; `"fdd"`: the UL carrier is an all-`U` pattern and a paired DL carrier is an all-`D` pattern, so every slot carries `14 - dl_ctrl_symbols` DL data symbols and `ul_data_symbols` UL data symbols |
+| `dl_n_prb` | `None` | FDD only: PRBs of the DL carrier (override) |
+| `dl_bandwidth_mhz` | `None` | FDD only: DL carrier bandwidth, TS 38.101-1 N_RB at `scs_khz`; `None` (with `dl_n_prb=None`) = the UL carrier |
+
+FDD lives in the pattern helpers of `NRConfig`. `slot_symbols(pos)` returns both directions in every slot, `ul_capable(pos)` is always true and `next_ul_capable(g) = g`, so the schedule, `ul_slots_per_step = dl_slots_per_step = slots_per_step`, the SR opportunities (first slot of each `sr_period_slots` window), the DL CQI reports (first slot of each `cqi_period_slots` window) and the DL HARQ-ACK (exactly `k1` slots after the PDSCH) follow without engine changes. K2, the UL HARQ RTT and the SR grant delay are counted in slots as before. `cfg.dl_nprb` and `cfg.dl_subband_prbs` describe the DL carrier.
+
+What the two carriers share. The NR engine keeps one subband grid for both directions: the per-subband fading state, the CQI and the SINR inputs are `[E, R, S]` with `S = n_subbands` of the UL carrier. A DL carrier of its own width is therefore split into the same `S` RBGs (`dl_subband_prbs`, as even as possible), and the DL MAC sizes its transport blocks with those PRB counts. The gNB power `gnb_tx_dbm` is spread over the DL carrier's PRBs, so the default per-PRB DL SINR moves by `-10 log10(dl_nprb / nprb)`: through `step_rx` (pose and path-gain input), the multi-cell DL PSD, and the default of the SNR input (`snr + dl_snr_offset_db`); an explicit `dl_snr_db` is taken as given. Both carriers use the same per-subband fading process (statistically the same, not reciprocal), and there is no interference between them.
+
+Limits: `proactive_grant="per_period"` needs a TDD period and is refused with FDD (use `"every_ul_slot"`); the `triton` kernel assumes one TDD carrier and refuses `duplex="fdd"`; `L2-legacy`, `NetSlotMC` and the prototype levels have no FDD and list `duplex` in `unused_fields`. With `duplex="fdd"` the TDD fields (`tdd_pattern`, `special_split`, `special_dl_data`, `special_ul_data`) are unused on `L2`; `dl_n_prb` and `dl_bandwidth_mhz` are unused without `dl=True`, and setting them with TDD raises.
 
 ## Proposed modes and switches
 
@@ -184,6 +218,9 @@ Every proposal keeps today's behavior as the default, so existing results and th
 |:---|:---|:---|
 | Engine-owned step RNG | `NRConfig(seed=..., rng="engine")` | **done** on `feat/protolevels` for every level except `L2`, which has its own engine RNG (`nr_rng.py`) |
 | Traffic generators | **done** on `feat/traffic`: `NRConfig(traffic=[TrafficModel.periodic(...), .bursty(...), .video(...), .event(...), .policy()])`, see [Traffic models](#traffic-models) | `L2` only; they run inside the engine step because sub-step arrivals must gate the MAC, so the other levels refuse them |
+| DL traffic generators | **done** on `feat/dltraffic`: `TrafficModel.<kind>(...).downlink()` / `direction="dl"`, see [Downlink models](#downlink-models) | `L2` with `dl=True`, reference backend; graph and triton refuse |
+| FDD | **done** on `feat/dltraffic`: `NRConfig(duplex="fdd", dl_bandwidth_mhz=...)`, see [Duplexing](#duplexing-tdd-and-fdd) | `L2` reference and graph; triton refuses; the subband grid is shared by the two carriers |
+| REM export | **done** on `feat/dltraffic`: `python -m isaac_net.tools.rem` / `isaac-net-rem` samples `RadioMC` on a grid ([rem.md](rem.md)) | any channel model, CPU |
 | Several messages per robot per step | **done** for generated traffic (fixed `max_msgs_per_step` per model, arrival offset in slots); policy `Requests` stay one per step | `L2`; a multi-message `Requests(send=[E,R,M])` for the policy is still open |
 | Configurable F, timeout and step for every level | `NRConfig(frame_buffer=32, timeout_steps=40, control_step_ms=50.0)` | **done** on `feat/protolevels`: every level and backend; fits record them |
 | 38.901 path loss and LOS probability | `NRConfig(channel="tr38901_inf_sh")` (also `rma`, `uma`, `umi`, `inh`, `inf_sl`, `inf_dl`, `inf_dh`) | **done** on `feat/channel`: `RadioMC` model with LOS state, shadow fading and O2I; fast fading and MAC unchanged |

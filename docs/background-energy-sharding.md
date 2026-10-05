@@ -51,6 +51,19 @@ Step dict keys, per cell `[E, C]`:
 
 `bg_pos` `[E, R_bg, 2]` gives the background positions after the step.
 
+### Downlink background
+
+Two `BackgroundConfig` fields load the downlink of `L2` (with `NRConfig(dl=True)`). Both default off, and then every output is bitwise the engine without them.
+
+| Field | Default | Meaning |
+|:---|:---|:---|
+| `dl_traffic` | `()` | DL traffic models (`periodic`, `bursty`, `video`) of every background UE. On `L2` the ghost rows get them as [downlink models](configurability.md#downlink-models): the gNB queues their messages in the ghosts' DL queues and the DL PF scheduler serves ghosts and robots together, so the ghosts take DL RBGs, HARQ processes and, with several cells, cause DL interference like robots |
+| `dl_load_frac` | 0.0 | offered-load DL share f, 0 ≤ f < 1: background traffic that is not simulated UE by UE takes the share f of every DL RBG, so each RBG keeps (1 − f) of its PRBs for the simulated UEs (robots and DL ghosts). It scales the DL MAC's PRBs per RBG, hence the DL capacity, by 1 − f. It also works with `n_background = 0`, where it is the only background |
+
+The offered-load mode of `L1` and `L2-legacy` has no downlink to scale (those engines are uplink-only), so they refuse both fields with a `ValueError`, as does `L2` without `dl=True`. `dl_load_frac` changes the DL MAC's PRB table, which the `triton` kernel reads from the config, so `triton` refuses it; `dl_traffic` runs on the reference backend only, like every DL traffic model.
+
+Step dict keys added with `dl_traffic`, per cell `[E, C]`: `bg_dl_offered_bytes` (accepted generated DL bytes on the air), `bg_dl_delivered_bytes`, `bg_dl_lost_bytes`, `bg_dl_queue_bytes` (offered = delivered + lost + queued over an episode) and `bg_dl_util` (PRB-slots of the ghosts' DL transport blocks over the DL carrier's PRB-slots of the step, `cfg.dl_nprb × dl_slots_per_step`). The robots' own DL frames are reported by the per-frame `dl_*` keys of the engine, sliced to `[E, R, Fd]`.
+
 ## Radio energy
 
 `EnergyConfig` adds per-robot energy and a battery to any level. Per robot and control step:
@@ -98,4 +111,4 @@ Across two GPUs of the same model the kernels are identical, so the bitwise chec
 
 ## Tests
 
-`tests/test_background.py`, `tests/test_energy.py` and `tests/test_sharded.py`: n_background = 0 bitwise equal to the plain engine; output shapes; ghost byte conservation; per-cell attachment with several cells; capacity reduction at every supported level; the exact `L1` capacity factor; frame conservation and real-byte queue reporting under the offered load; partial-reset isolation; region and speed bounds; the energy tap bitwise transparent and equal to the MAC's TB count; the energy formula term by term; power control, DL receive slots, battery flag, partial reset, `initial_soc` ranges; `EnergyLoop(graph=True)` around the `L2-legacy` graph backend; the offered load on the graph and Triton backends; the `CounterRNG` offset; sharded == unsharded bitwise on CPU and GPU.
+`tests/test_background.py`, `tests/test_energy.py` and `tests/test_sharded.py`: n_background = 0 bitwise equal to the plain engine; output shapes; ghost byte conservation; per-cell attachment with several cells; capacity reduction at every supported level; the exact `L1` capacity factor; frame conservation and real-byte queue reporting under the offered load; partial-reset isolation; region and speed bounds; the energy tap bitwise transparent and equal to the MAC's TB count; the energy formula term by term; power control, DL receive slots, battery flag, partial reset, `initial_soc` ranges; `EnergyLoop(graph=True)` around the `L2-legacy` graph backend; the offered load on the graph and Triton backends; the `CounterRNG` offset; sharded == unsharded bitwise on CPU and GPU. `tests/test_dl_traffic_fdd_rem.py` covers the downlink background: ghost DL traffic and `dl_load_frac` lower a robot's DL throughput, ghost DL bytes are conserved, and the levels without a downlink refuse both fields.

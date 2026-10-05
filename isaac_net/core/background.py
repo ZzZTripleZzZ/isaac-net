@@ -43,6 +43,18 @@ Step dict keys added (per step, [E, C]; C = number of cells):
                         sum offered = sum delivered + sum lost + queued)
 The background positions are `bg_pos` [E, R_bg, 2] (after the step).
 
+Downlink background (level "L2" with NRConfig(dl=True); both fields default off, which keeps every output bitwise):
+  dl_traffic     DL traffic models of every background UE (ghost rows): the gNB sends them messages through the
+                 NR engine's DL queues (TrafficModel direction="dl"), so they compete with the robots for the DL
+                 RBGs and HARQ processes in the DL PF scheduler. Step dict keys (per step, [E, C]): bg_dl_offered_bytes
+                 (accepted generated DL bytes on the air), bg_dl_delivered_bytes, bg_dl_lost_bytes, bg_dl_queue_bytes
+                 (DL byte conservation as above) and bg_dl_util (PRB-slots of the ghosts' DL transport blocks over the
+                 DL carrier's PRB-slots of the step).
+  dl_load_frac   offered-load DL share f: background traffic that is not simulated UE by UE takes the share f of every
+                 DL RBG, so each RBG carries (1 - f) of its PRBs for the simulated UEs (robots and DL ghosts). It
+                 scales the DL MAC's PRBs per RBG, hence the DL capacity, by 1 - f; with n_background = 0 it is the
+                 only background. The offered-load levels ("L1", "L2-legacy") have no downlink and refuse both fields.
+
 Randomness: placement and waypoints come from the wrapper's own counter-based streams (proto/rng.py), keyed by
 (seed, env id, episode), so a partial reset redraws exactly those envs and a shard of a larger batch draws the same
 numbers for an env as the unsharded engine. With n_background = 0 make_engine returns the plain engine.
@@ -81,6 +93,8 @@ class BackgroundConfig:
     height_m       z of the background UEs when the robots' poses are 3-D
     max_util       offered-load levels: cap on a cell's background share rho_c
     seed           seed of the placement and waypoint draws; None = derived from the engine seed
+    dl_traffic     DL traffic models of every background UE (periodic, bursty, video; L2 with dl=True; () = none)
+    dl_load_frac   share of every DL RBG taken by unsimulated background traffic, 0 <= f < 1 (L2 with dl=True)
     """
     n_background: int = 0
     placement: str = "random"
@@ -94,6 +108,8 @@ class BackgroundConfig:
     height_m: float = 1.5
     max_util: float = 0.95
     seed: int | None = None
+    dl_traffic: tuple = ()
+    dl_load_frac: float = 0.0
 
     def __post_init__(self):
         assert self.n_background >= 0
@@ -107,6 +123,19 @@ class BackgroundConfig:
             if m.robots is not None:
                 raise ValueError("background traffic models apply to every background UE: drop .on(robots=...)")
         assert self.traffic, "background UEs need at least one traffic model"
+        self.dl_traffic = tuple(m.downlink() for m in (normalize_traffic(self.dl_traffic) or ()))
+        for m in self.dl_traffic:
+            if m.kind not in ("periodic", "bursty", "video"):
+                raise ValueError(f"background DL traffic takes periodic, bursty or video models, not {m.kind}()")
+            if m.robots is not None:
+                raise ValueError("background DL traffic models apply to every background UE: drop .on(robots=...)")
+        if not 0.0 <= self.dl_load_frac < 1.0:
+            raise ValueError(f"dl_load_frac must be in [0, 1), not {self.dl_load_frac}")
+
+    @property
+    def has_dl(self):
+        """The config asks for downlink background (dl_traffic or dl_load_frac)."""
+        return bool(self.dl_traffic) or self.dl_load_frac > 0
 
     def offered_bytes_per_step(self, step_ms):
         """Mean application bytes one background UE offers per control step (sum over its models)."""
@@ -151,7 +180,7 @@ class BackgroundLoop:
         self.C = cfg.n_cells
         self.Nb = bg.n_background * self.C
         self.gnb = torch.tensor(cfg.gnb_xy(), dtype=torch.float32, device=self.dev)            # [C, 2]
-        self.cell_of = torch.arange(self.Nb, device=self.dev) // bg.n_background                 # [Nb]
+        self.cell_of = torch.arange(self.Nb, device=self.dev) // max(bg.n_background, 1)                 # [Nb]
         a = bg.arena_m if bg.arena_m is not None else (0.0, 0.0, cfg.cell_arena_m, cfg.cell_arena_m)
         self.arena = tuple(float(v) for v in a)
         region = bg.region if bg.region != "auto" else ("arena" if self.C == 1 else "cell")
@@ -169,6 +198,13 @@ class BackgroundLoop:
             from .slot_tap import SlotTap
             self.tap = SlotTap.of(engine)
             self.prb_avail = float(cfg.nprb * cfg.ul_slots_per_step)
+            self.prb_avail_dl = float(cfg.dl_nprb * cfg.dl_slots_per_step)
+            if bg.dl_load_frac > 0:
+                # offered-load DL share: every DL RBG keeps (1 - f) of its PRBs for the simulated UEs (in place, so a
+                # captured CUDA graph of the graph backend reads the scaled tensor)
+                dl = engine.net.dl
+                dl.sb_prb.mul_(1.0 - bg.dl_load_frac)
+                dl._w_sum = float(dl.sb_prb.sum())
         else:
             self.lam = bg.offered_bytes_per_step(cfg.control_step_ms)
             self.K = cfg.proto_slots_per_step
@@ -184,6 +220,15 @@ class BackgroundLoop:
         if level not in GHOST_LEVELS + LOAD_LEVELS:
             raise ValueError(f"background users need a level with a capacity model: {GHOST_LEVELS + LOAD_LEVELS}; "
                              f"level {level} has none")
+        if bg.has_dl:
+            if level not in GHOST_LEVELS:
+                raise ValueError(f"DL background (dl_traffic, dl_load_frac) needs the NR engine's downlink (level 'L2' "
+                                 f"with dl=True); level {level} has no downlink")
+            if not cfg.dl:
+                raise ValueError("DL background (dl_traffic, dl_load_frac) needs NRConfig(dl=True)")
+            if bg.dl_load_frac > 0 and backend == "triton":
+                raise ValueError("dl_load_frac scales the DL MAC's PRBs per RBG, which the triton kernel takes from the "
+                                 "config; use backend='reference' or 'graph'")
         if seed is None:
             seed = cfg.seed if cfg.seed is not None else int(torch.randint(0, 2 ** 62, ()).item())
         bseed = bg.seed if bg.seed is not None else seed
@@ -196,8 +241,10 @@ class BackgroundLoop:
                     m = m.with_(trigger=_padded_trigger(m.trigger, Nb))
                 users.append(m.on(tuple(range(R))) if m.robots is None else m)
             ghosts = tuple(m.on(tuple(range(R, R + Nb))).with_(det=False, tag=m.tag if m.tag is not None else 900 + i)
-                           for i, m in enumerate(bg.traffic))
-            inner_cfg = inner_cfg.with_(traffic=tuple(users) + ghosts)
+                           for i, m in enumerate(bg.traffic)) if Nb > 0 else ()
+            ghosts_dl = tuple(m.on(tuple(range(R, R + Nb))).with_(tag=m.tag if m.tag is not None else 950 + i)
+                              for i, m in enumerate(bg.dl_traffic)) if Nb > 0 else ()
+            inner_cfg = inner_cfg.with_(traffic=tuple(users) + ghosts + ghosts_dl)
             inner = factory(level, E, R + Nb, device, inner_cfg, backend, seed=seed, **kw)
         else:
             inner = factory(level, E, R, device, inner_cfg, backend, seed=seed, **kw)
@@ -429,13 +476,20 @@ class BackgroundLoop:
             newest, det_env = out
             return newest[:, :R], det_env
         E, Rt = self.E, R + n
+        res = {k: (v[:, :R] if torch.is_tensor(v) and v.dim() >= 2 and v.shape[:2] == (E, Rt) else v)
+               for k, v in out.items()}
+        if n == 0:          # dl_load_frac without background UEs: no ghost rows to report
+            zc = torch.zeros(E, self.C, dtype=torch.float64, device=self.dev)
+            for k in ("bg_offered_bytes", "bg_delivered_bytes", "bg_lost_bytes", "bg_queue_bytes", "bg_util"):
+                res[k] = zc.clone()
+            res["bg_n"] = zc.long()
+            res["bg_pos"] = self.pos.clone()
+            return res
         serv = out["serving_cell"][:, R:]
         gone = out["delivered"] | out["timed_out"] | out["dropped"]
         b = out["bytes"][:, R:].double()
         q = self.engine.net.ul.q
         qb = ((q.end - q.start) * (q.cap >= 0))[:, R:].sum(-1).double()
-        res = {k: (v[:, :R] if torch.is_tensor(v) and v.dim() >= 2 and v.shape[:2] == (E, Rt) else v)
-               for k, v in out.items()}
         res["bg_n"] = self._per_cell(serv, torch.ones(E, n, dtype=torch.long, device=self.dev))
         res["bg_offered_bytes"] = self._per_cell(serv, out["gen_bytes"][:, R:].double())
         res["bg_delivered_bytes"] = self._per_cell(serv, (b * out["delivered"][:, R:]).sum(-1))
@@ -443,4 +497,14 @@ class BackgroundLoop:
         res["bg_queue_bytes"] = self._per_cell(serv, qb)
         res["bg_util"] = self._per_cell(serv, self.tap.ul_prb[:, R:].double()) / self.prb_avail
         res["bg_pos"] = self.pos.clone()
+        if self.bg.dl_traffic:
+            bd = out["dl_bytes"][:, R:].double()
+            dd, lost = out["dl_delivered"][:, R:], out["dl_lost"][:, R:]
+            dq = self.engine.net.dl.q
+            qd = ((dq.end - dq.start) * (dq.cap >= 0))[:, R:].sum(-1).double()
+            res["bg_dl_offered_bytes"] = self._per_cell(serv, out["gen_dl_bytes"][:, R:].double())
+            res["bg_dl_delivered_bytes"] = self._per_cell(serv, (bd * dd).sum(-1))
+            res["bg_dl_lost_bytes"] = self._per_cell(serv, (bd * lost).sum(-1))
+            res["bg_dl_queue_bytes"] = self._per_cell(serv, qd)
+            res["bg_dl_util"] = self._per_cell(serv, self.tap.dl_prb[:, R:].double()) / self.prb_avail_dl
         return res

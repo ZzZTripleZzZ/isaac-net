@@ -82,6 +82,18 @@ def _check_traffic(level, cfg: NRConfig):
                          "policy() alone is accepted by every level.")
 
 
+def _check_l2_backend(backend, cfg: NRConfig):
+    """What the fast NR backends do not run: DL traffic models (graph, triton) and FDD (triton)."""
+    if backend in ("graph", "triton") and generates(cfg.traffic, "dl"):
+        raise ValueError(f"DL traffic models (TrafficModel(..., direction='dl')) run on the reference backend of the NR "
+                         f"engine only: their in-step arrival gate is host code that a replayed CUDA graph would skip. "
+                         f"Use backend='reference', or add the DL messages per step with add_dl_frames() "
+                         f"(backend {backend!r})")
+    if backend == "triton" and cfg.duplex == "fdd":
+        raise ValueError("the triton NR kernel assumes one TDD carrier for both directions (its PRB tables and slot "
+                         "schedule); duplex='fdd' runs on backend='reference' or 'graph'")
+
+
 def _level_params(level, cfg: NRConfig, params):
     """Parameters of the prototype delay levels and L1 from the config when the caller passes none."""
     if params is not None:
@@ -132,7 +144,7 @@ def _bgenergy_wrapped(factory):
         if seed is None:
             seed = int(torch.randint(0, 2 ** 62, ()).item())
         rest = {k: p[k] for k in ("sizes", "params", "inject", "strict")}
-        if bg is not None and bg.n_background > 0:
+        if bg is not None and (bg.n_background > 0 or getattr(bg, "dl_load_frac", 0.0) > 0):
             from .background import BackgroundLoop
             if cfg.edge is not None and cfg.edge.return_path == "nr_dl":
                 raise ValueError("EdgeConfig(return_path='nr_dl') cannot be combined with background users")
@@ -200,6 +212,7 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
         seed = cfg.seed
     if level == "L2":
         seed = seed if seed is not None else cfg.seed
+        _check_l2_backend(backend, cfg)
         if backend in ("reference", "eager"):
             return NREngine(E, R, device, cfg, seed=seed)
         if backend == "graph":
@@ -278,7 +291,7 @@ class NREngine:
         self.traffic = None
         self._extras = False
         self._gate = None
-        if generates(cfg.traffic):
+        if generates(cfg.traffic, "ul"):
             tseed = (int(seed) * 6364136223846793005 + 1442695040888963407) % 2 ** 62
             self.traffic = TrafficGen(cfg.traffic, E, R, self.dev, cfg.control_step_ms, cfg.slots_per_step,
                                       seed=tseed)
@@ -289,6 +302,20 @@ class NREngine:
         if cfg.rach or cfg.drx:
             from .access import AccessStage
             self.access = AccessStage(self)
+        # DL traffic models (direction="dl"): their own generator, so they never shift the UL models' draws
+        self.traffic_dl = None
+        self._dl_gate = None
+        self._dl_snap = None
+        if generates(cfg.traffic, "dl"):
+            if self.net.dl is None:
+                names = ", ".join(f"{m.kind}()" for m in cfg.traffic if m.generates and m.direction == "dl")
+                raise ValueError(f"DL traffic models ({names}) need the NR engine's downlink: NRConfig(dl=True)")
+            dseed = (int(seed) * 2862933555777941757 + 3037000493) % 2 ** 62
+            self.traffic_dl = TrafficGen(cfg.traffic, E, R, self.dev, cfg.control_step_ms, cfg.slots_per_step,
+                                         seed=dseed, direction="dl")
+            self._enable_dl_traffic()
+        if cfg.duplex == "fdd" and self.net.dl is not None and cfg.dl_nprb != cfg.nprb:
+            self._install_fdd_dl_carrier()
 
     # ------------------------------------------------------------------ passthroughs
     def __getattr__(self, name):          # ul, dl, stats, counters(), cap, ... of the wrapped NRNet
@@ -496,6 +523,148 @@ class NREngine:
             dk = delivered & (sn["cap"] <= net.log_cap_max)
             net.stats["delay"][-1] = delay[dk].cpu()
 
+    # ------------------------------------------------------------------ downlink traffic models
+    def _enable_dl_traffic(self):
+        """DL counterpart of _enable_extras for the DL traffic models: per-message arrival offset, tag, priority and
+        deadline in the DL queue, and hooks on net.dl (slot: open the DL stream up to the arrivals of the current
+        slot; end_step: open it fully and snapshot the frames before compaction; handover: a flush spares messages
+        that have not arrived yet). Generated DL frames carry cls = -tag (<= -1): an edge loop's DL commands carry
+        cls = capture step + 1 >= 1, so the two never mix (EdgeLoop matches a command by cls - 1 >= 0)."""
+        dl = self.net.dl
+        dl.q.enable_extras()
+        slot0, end0, ho0 = dl.slot, dl.end_step, dl.handover
+
+        def slot(g, *a, **k):
+            self._open_dl_gate(g)
+            return slot0(g, *a, **k)
+
+        def end_step(t, timeout):
+            if self._dl_gate is not None:
+                dl.q.enq = self._dl_full_enq
+                self._dl_gate = None
+            q = dl.q
+            res = end0(t, timeout)
+            self._dl_snap = {"cap": q.cap.clone(), "fin": q.fin.clone(), "off": q.off.clone(), "tag": q.tag.clone(),
+                             "cls": q.cls.clone(), "dline": q.dline.clone(), "bytes": (q.end - q.start).clone(),
+                             "masks": tuple(x.clone() for x in res)}
+            return res
+
+        def handover(ho, flush=False):
+            if self._dl_gate is None:
+                return ho0(ho, flush)
+            q = dl.q
+            pending = (q.cap >= 0) & (q.start >= q.enq[..., None]) & ~q.lost
+            r = ho0(ho, flush)
+            dl.ctr["lost_frames"] -= (pending & q.lost).sum()
+            q.lost = q.lost & ~pending
+            return r
+
+        dl.slot, dl.end_step, dl.handover = slot, end_step, handover
+        self.traffic_stats_dl = {k: torch.zeros((), dtype=torch.long, device=self.dev)
+                                 for k in ("generated", "generated_bytes", "accepted", "accepted_bytes", "refused")}
+
+    def _open_dl_gate(self, g):
+        if self._dl_gate is None:
+            return
+        ends, slots, base = self._dl_gate
+        rel = g - self._g0
+        vis = torch.where(slots <= rel, ends, base[..., None]).max(-1).values
+        self.net.dl.q.enq = torch.maximum(base, vis)
+
+    def _inject_dl(self, T, triggers):
+        """Generate this step's DL messages, enqueue them in arrival order in the robots' DL queues and close the DL
+        stream gate. Returns (accepted messages [E,R], accepted bytes on the air [E,R])."""
+        arr = self.traffic_dl.step(self.clock, triggers)
+        net, N = self.net, self.config.slots_per_step
+        q = net.dl.q
+        base = q.enq
+        ends = []
+        n_acc = torch.zeros(self.E, self.R, dtype=torch.long, device=self.dev)
+        st = self.traffic_stats_dl
+        for m in range(arr.valid.shape[-1]):
+            v = arr.valid[..., m]
+            nb = arr.nbytes[..., m]
+            adm = net._admit(net.dl, T, v)
+            if net.log_stats:
+                net.stats["overflow_dl"] = net.stats.get("overflow_dl", 0) + int((adm & (q.count() >= q.F)).sum())
+            acc, _, oh = q.add(T, adm, net.air_bytes(nb.float()))
+            put = lambda name, x: setattr(q, name, torch.where(oh, x[..., None].to(getattr(q, name).dtype),  # noqa: E731
+                                                               getattr(q, name)))
+            tag = arr.tag[..., m]
+            put("cls", -tag.clamp(min=1))
+            put("off", arr.slot[..., m].double() / N)
+            put("tag", tag)
+            put("prio", arr.prio[..., m])
+            put("dline", arr.dline[..., m])
+            ends.append(q.enq)
+            n_acc = n_acc + acc.long()
+            st["generated"] += v.sum()
+            st["generated_bytes"] += (nb.round().long() * v).sum()
+            st["accepted"] += acc.sum()
+            st["accepted_bytes"] += (nb.round().long() * acc).sum()
+            st["refused"] += (v & ~acc).sum()
+        self._dl_full_enq = q.enq
+        if ends:
+            never = torch.full_like(arr.slot, N)
+            self._dl_gate = (torch.stack(ends, -1), torch.where(arr.valid, arr.slot, never), base)
+            q.enq = base
+            self._g0 = T * N
+        return n_acc, self._dl_full_enq - base
+
+    def _outputs_dl(self, out):
+        """Per-frame DL outputs [E,R,Fd] from the snapshot of the DL queue before compaction."""
+        sn, c = self._dl_snap, self.config
+        self._dl_snap = None
+        dd, dt_, dr = sn["masks"]
+        valid = sn["cap"] >= 0
+        delay = (sn["fin"] - sn["cap"].double() - sn["off"]).float()
+        out["dl_delivered"] = dd
+        out["dl_lost"] = dt_ | dr
+        out["dl_delay"] = torch.where(dd, delay, torch.full_like(delay, float("nan")))
+        out["dl_tag"] = torch.where(valid, sn["tag"], torch.zeros_like(sn["tag"]))
+        out["dl_generated"] = valid & (sn["cls"] < 0)
+        out["dl_bytes"] = torch.where(valid, sn["bytes"], torch.zeros_like(sn["bytes"]))
+        late = dd & (delay.double() * c.control_step_ms > sn["dline"])
+        out["dl_deadline_miss"] = late | ((dt_ | dr) & torch.isfinite(sn["dline"]))
+
+    # ------------------------------------------------------------------ FDD: the paired DL carrier
+    def _install_fdd_dl_carrier(self):
+        """duplex="fdd" with a DL carrier of its own width (dl_n_prb / dl_bandwidth_mhz != the UL carrier).
+
+        The engine keeps one subband grid for both directions (the fading state [E,R,(C,)S,2], the CQI and the SINR
+        inputs are per subband), so the DL carrier is split into the same S RBGs, each of
+        cfg.dl_subband_prbs[i] PRBs: the DL MAC sizes its transport blocks with those PRB counts. The gNB power
+        gnb_tx_dbm is spread over the DL carrier's PRBs, so the default per-PRB DL SINR moves by
+        -10 log10(dl_nprb / nprb) against a shared carrier: through step_rx (pose / path-gain input), through the
+        multi-cell DL PSD, and on the SNR input's default (snr + dl_snr_offset_db). An explicit dl_snr_db is taken as
+        given. The per-subband fading process is shared by the two carriers (statistically the same, not
+        reciprocal); there is no cross-carrier interference (UL and DL never shared a slot's spectrum)."""
+        c, net = self.config, self.net
+        dl = net.dl
+        dl.sb_prb = torch.tensor(c.dl_subband_prbs, dtype=torch.float32, device=self.dev)
+        dl._w_sum = float(dl.sb_prb.sum())
+        corr = -10 * math.log10(c.dl_nprb / c.nprb)
+        self.dl_psd_corr_db = corr
+        if net.C > 1:
+            net.dl_psd_db = c.gnb_tx_dbm - 10 * math.log10(c.dl_nprb)
+            return
+        step0, rx0 = net.step, net.step_rx
+
+        def step(t, snr_db, cur_hid=None, dl_snr_db=None, full=False):
+            if dl_snr_db is None:
+                dl_snr_db = snr_db + c.dl_snr_offset_db + corr
+            return step0(t, snr_db, cur_hid, dl_snr_db, full=full)
+
+        def step_rx(t, pathgain_db, cur_hid=None, ul_interf_dbm_prb=None, dl_interf_dbm_prb=None, dl_pathgain_db=None,
+                    full=False):
+            if dl_pathgain_db is None:
+                dl_pathgain_db = pathgain_db + corr
+            else:
+                dl_pathgain_db = dl_pathgain_db + corr
+            return rx0(t, pathgain_db, cur_hid, ul_interf_dbm_prb, dl_interf_dbm_prb, dl_pathgain_db, full=full)
+
+        net.step, net.step_rx = step, step_rx
+
     # ------------------------------------------------------------------ time
     def _now(self, t):
         if t is None:
@@ -526,8 +695,11 @@ class NREngine:
         """Re-initialize env_ids (None = all): queues, HARQ, SR/BSR, OLLA, PF, CSI, fading, radio and clock."""
         ids = _proto.env_index(env_ids, self.E, self.dev)
         self._gate = None
+        self._dl_gate = None
         if self.traffic is not None and (ids is None or ids.numel() > 0):
             self.traffic.reset(None if ids is None else env_mask(self.E, ids, self.dev))
+        if self.traffic_dl is not None and (ids is None or ids.numel() > 0):
+            self.traffic_dl.reset(None if ids is None else env_mask(self.E, ids, self.dev))
         if ids is None:
             self.net.reset(None)
             self.T = 0
@@ -648,6 +820,8 @@ class NREngine:
             gen_bytes = self._full_enq - n0
             if arr.valid.shape[-1] == 0:
                 self._gate_seen = True
+        if self.traffic_dl is not None:
+            gen_dl = self._inject_dl(T, triggers)
         if self.net.C > 1:
             if pathgain_db is None:
                 if x is None or x.dim() != 3:
@@ -693,4 +867,10 @@ class NREngine:
             out["gen_bytes"] = gen_bytes
         if x is not None and x.dim() == 3:
             self._obstacle_outputs(out)
+        if self.traffic_dl is not None:
+            if self._dl_snap is None:
+                raise RuntimeError("the DL traffic hooks on net.dl were not reached: NRNet no longer calls "
+                                   "dl.end_step; DL traffic models need an update")
+            self._outputs_dl(out)
+            out["gen_dl_accepted"], out["gen_dl_bytes"] = gen_dl
         return out

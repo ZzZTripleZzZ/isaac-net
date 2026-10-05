@@ -1,0 +1,17 @@
+{
+ "digests": {
+  "l1_load_bg": "ea471a5be34ccfb9343b0e176c497d43376a8e9a683cafd66650e9fa07f8642b",
+  "l2_ghost_bg_dl": "88bbfc369fc19bce9eec13bc836dbe201f46a6ec302e4b79d26b7fa243c958c5",
+  "l2_ghost_bg_multicell": "b6945c5b0c7df6307cf31254c40df76ce6b4f705efbd55358a330f0728e016c5",
+  "l2_multicell_traffic_dl": "b2615a433f381699878249f5bfc029198c67b3e1cb9390e8eabfc667f1acb13e",
+  "l2_plain_dl": "547c857290d501d167aa21ccec45f114e28667bc5e69e911da2fef580f4a8921",
+  "l2_ul_traffic_dl_pose": "3395c2fa8a7214ccee23dafbd2beea39eca8380c3ba448f38313c22225d05578",
+  "l2_ul_traffic_snr": "fb5321ae656133bc09dde70403521d8c950560ebf7c09f4102ec95d519842e3e",
+  "l2legacy_load_bg": "4314551972ab0e9d17115bbb89c91ac5968c60348ccd14511312b23db8286821"
+ },
+ "env": {
+  "machine": "arm64",
+  "system": "Darwin",
+  "torch": "2.9.1"
+ }
+}
