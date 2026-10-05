@@ -246,7 +246,7 @@ def _mac_slot(
         lnw_full = _lse_rows(lw_full)
         lin_o = libdevice.exp10(tl.minimum(tl.maximum(est_o, -30.0), 60.0) / 10.0)
         mw = tl.zeros(sent.shape, tl.int32)
-        for m in range(M):
+        for m in range(MCS_MAX + 1):        # capped at phy.mcs_max, as phy.mcs_at / select_mcs
             wbm = _eff_m(lin_o, est_o, lw_full, lnw_full, tl.load(beta_ptr + m), MODE)
             mw = tl.where(wbm >= tl.load(thr_ptr + m), m, mw)
         rate = (tl.load(se_ptr + mw) * re_prb / 8.0)[:, None] * w[None, :]

@@ -189,7 +189,7 @@ class MacLink:
         if cfg.pf_metric == "wideband" or sched == "pf_wideband":
             allm = torch.ones(E, R, S, dtype=torch.bool, device=d)
             wb = phy.eff_sinr_all(est_o, allm, cfg.eff_sinr, w)                        # [E,R,M]
-            ok = wb >= phy.thr_ref
+            ok = (wb >= phy.thr_ref) & (torch.arange(phy.M, device=d) <= phy.mcs_max)   # cap as phy.mcs_at
             m = (ok.long() * torch.arange(1, phy.M + 1, device=d)).max(-1).values.clamp(min=1) - 1
             rate_sb = (phy.se[m] * re_prb / 8)[..., None] * w
         else:
