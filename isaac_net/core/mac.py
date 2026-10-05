@@ -440,6 +440,21 @@ class MacLink:
         return delivered, timed, dropped
 
     def compact(self, gone):
+        """Remove the resolved frames gone [E,R,F], advance the stream floor, and free the HARQ processes whose
+        bytes all left with them.
+
+        A process whose TB carried stream bytes that all lie below the new floor (h_lo < h_hi <= floor) holds only
+        purged data (discard="purge" timeouts): it returns to the fresh state (free, no transmissions, no combining),
+        so it neither retransmits dead bytes at retransmission priority nor, under harq_fail="rlc_am", loops on RLC
+        resends forever. A partially purged process (h_lo < floor < h_hi) is kept: its upper bytes belong to the
+        head frame, which is still queued, and freeing it would let ack_ptr pass bytes that were never decoded (a
+        false in-order delivery). A TB that carried no stream bytes (h_lo == h_hi, padding of the 5G-LENA BSR grant
+        model) purged nothing and is left to its HARQ process as before. Without purging, frames leave only once
+        every byte below them is resolved, so no busy process lies wholly below the floor and nothing changes."""
         self.q.remove(gone)
         self.floor = self.q.floor()
         self.sent = torch.maximum(self.sent, self.floor)
+        dead = (self.h_state == 1) & (self.h_hi <= self.floor[..., None]) & (self.h_hi > self.h_lo)
+        for n in ("h_state", "h_ready", "h_ntx", "h_comb", "h_lexp", "h_nrb"):
+            x = getattr(self, n)
+            setattr(self, n, torch.where(dead, torch.full_like(x, self.STATE[n][2]), x))
