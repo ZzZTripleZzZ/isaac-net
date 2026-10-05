@@ -81,6 +81,8 @@ class NetObs:
                 cols.append(self.hist)
             elif f == "blocked":
                 cols.append(out["blocked"].float()[..., None])
+            elif f == "los":
+                cols.append(out["los"].float()[..., None])
         self.x = torch.cat(cols, -1) if cols else self.x
         return self.x
 

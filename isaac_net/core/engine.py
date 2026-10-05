@@ -45,7 +45,7 @@ from .config import NRConfig
 from .levels import BOUND_LEVELS, SURROGATE_LEVELS, fit_app, make_level
 from .nr_engine import NRNet
 from .proto import netsim as _proto
-from .radio import RadioMC
+from .radio import RadioMC, pick
 from .queues import env_mask, onehot
 from .traffic import Requests, TrafficGen, generates
 
@@ -260,6 +260,7 @@ class NREngine:
             install_per_robot_fading(self.net)
         self.F = cfg.frame_buffer
         self.radio = None
+        self._los_fn = None                    # los_source="callback": installed on the radio when it is made
         self.T = 0
         self.epoch = torch.zeros(E, dtype=torch.long, device=self.dev)
         self._uniform_epoch = 0                 # host copy of the epoch while no partial reset happened
@@ -306,6 +307,28 @@ class NREngine:
     def attach_radio(self, radio):
         """Use an external RadioMC (C = 1) for step(t, poses); reset(env_ids) then resets its rows too."""
         self.radio = radio
+
+    def set_los_callback(self, fn):
+        """NRConfig.los_source="callback": fn(poses [E,R,2|3]) -> [E,R,C] bool (True = line of sight blocked), e.g.
+        the Isaac layer's blocked_fn or isaac.radio.mesh_blocked_fn; used by the engine's radio from now on."""
+        if self.config.los_source != "callback":
+            raise ValueError("set_los_callback needs NRConfig(los_source='callback')")
+        self._los_fn = fn
+        if self.radio is not None:
+            self.radio.set_los_callback(fn)
+
+    def _obstacle_outputs(self, out):
+        """Step keys "los" / "blocked" [E,R] of the serving link, only with the obstacle stack on (los_source !=
+        "stochastic" or blockage) and poses through the engine's radio; unchanged dict otherwise."""
+        rad = self.radio
+        if rad is None or not getattr(rad, "obstacle_outputs", False):
+            return
+        serv = out["serving_cell"]
+        los, blk = rad.los_state(), rad.blocked_state()
+        if los is not None:
+            out["los"] = pick(los, serv)
+        if blk is not None:
+            out["blocked"] = pick(blk, serv)
 
     def set_sinr_hook(self, fn, direction="ul"):
         """fn(g, dir, won [E,R,S], n_prb [E,R], sinr [E,R,S]) -> sinr [E,R,S] is called between allocation and
@@ -537,25 +560,27 @@ class NREngine:
         """Downlink messages of nbytes [E,R] (0 = none) at t (needs config.dl)."""
         self.net.add_dl_frames(self._now(t), nbytes, cls)
 
-    def _ul_input(self, x, vel=None):
+    def _ul_input(self, x, vel=None, blockers=None):
         """SNR [E,R] dB (full UE power over snr_ref_prbs PRBs), or poses [E,R,2|3] -> (pathgain or None, snr)."""
         if x.dim() == 3:
-            return self._pathgain(x, vel)[..., 0]
+            return self._pathgain(x, vel, blockers)[..., 0]
         return None
 
-    def _pathgain(self, pos, vel=None):
+    def _pathgain(self, pos, vel=None, blockers=None):
         if self.radio is None:
             # rng="engine": the radio draws from the engine's counter RNG keyed by (seed, env id, episode), so an env's
             # shadowing / LOS / O2I draws depend neither on E nor on other envs' resets; rng="global": self.gen
             self.radio = RadioMC(self.config, self.E, self.dev, generator=self.gen, R=self.R, rng=self.rng)
-        pg = self.radio.pathgain_db(pos)
+            if self._los_fn is not None:
+                self.radio.set_los_callback(self._los_fn)
+        pg = self.radio.pathgain_db(pos) if blockers is None else self.radio.pathgain_db(pos, blockers)
         if self.per_robot_doppler:
             speed = self.radio.observe_motion(pos, vel)
             self.net.fading_rho_ms = rho_per_ms_from_speed(speed, self.config.carrier_ghz)
         return pg
 
     def step(self, t, x=None, cur_hid=None, *, snr_db=None, dl_snr_db=None, pathgain_db=None, vel=None,
-             triggers=None):
+             triggers=None, blockers=None):
         """Advance [t, t+1). x: SNR [E,R] in dB, or poses [E,R,2|3] (through the engine's radio); snr_db=
         takes a per-subband SNR [E,R,S]. With several cells (config.n_cells > 1) x must be poses, or pass
         pathgain_db= [E,R,C] (large-scale gain of every robot-cell link, dB). vel [E,R,2|3] (m/s): robot velocities
@@ -572,9 +597,15 @@ class NREngine:
         per frame [E,R,F]: arrival (env clock incl. the in-step offset), arrival_slot, tag, priority, bytes (on the
         air), deadline_miss; delay is then measured from the arrival slot. gen_accepted / gen_bytes [E,R] count
         the generated messages accepted this step.
+        blockers [E,M,3] (x, y, class): extra dynamic blockers of this step for blockage_model="screen" (humans,
+        vehicles; class indexes NRConfig.blocker_size_m, < 0 = empty slot); needs poses. With the obstacle stack on
+        (los_source != "stochastic" or blockage) and poses, the dict also has los / blocked [E,R] bool: LOS state
+        and dynamic blockage of the serving link (docs/obstacles.md).
         """
         T = self._now(t)
         legacy = cur_hid is not None
+        if blockers is not None and (pathgain_db is not None or x is None or x.dim() != 3):
+            raise ValueError("blockers= needs poses x [E,R,2|3] through the engine's radio")
         hid = cur_hid if legacy else self._last_hid
         if self.net.C > 1 and pathgain_db is None and (x is None or x.dim() != 3):
             raise ValueError("several cells: pass poses [E,R,2|3] or pathgain_db=[E,R,C]")
@@ -592,13 +623,13 @@ class NREngine:
             if pathgain_db is None:
                 if x is None or x.dim() != 3:
                     raise ValueError("several cells: pass poses [E,R,2|3] or pathgain_db=[E,R,C]")
-                pathgain_db = self._pathgain(x, vel)
+                pathgain_db = self._pathgain(x, vel, blockers)
             out = self.net.step_cells(T, pathgain_db, hid, full=True)
             snr = self.net.serving_sinr_db()
         elif pathgain_db is not None:
             raise ValueError("pathgain_db= needs config.n_cells > 1; use x (poses or SNR) with one cell")
         elif snr_db is None:
-            pg = self._ul_input(x, vel)
+            pg = self._ul_input(x, vel, blockers)
             if pg is not None:
                 out = self.net.step_rx(T, pg, hid, full=True)
                 c = self.config
@@ -631,4 +662,6 @@ class NREngine:
         if arr is not None:
             out["gen_accepted"] = gen_acc
             out["gen_bytes"] = gen_bytes
+        if x is not None and x.dim() == 3:
+            self._obstacle_outputs(out)
         return out

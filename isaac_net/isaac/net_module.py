@@ -249,6 +249,17 @@ class NetModule:
             blk = rb if blk is None else (blk | rb)
         return blk
 
+    def _engine_blocked_fn(self, blocked_fn):
+        """radio="engine": the blocked_fn becomes the engine radio's LOS callback (NRConfig.los_source="callback")."""
+        if self.config.los_source == "callback" and hasattr(self.eng, "set_los_callback"):
+            if getattr(self, "_los_fn", None) is not blocked_fn:
+                self.eng.set_los_callback(blocked_fn)
+                self._los_fn = blocked_fn
+        elif not getattr(self, "_warned_fn", False):
+            self._warned_fn = True
+            warnings.warn("radio='engine' ignores blocked_fn unless NRConfig(los_source='callback') at level L2 "
+                          "(see docs/obstacles.md)", stacklevel=3)
+
     def _snr(self, poses, blocked_fn):
         """SNR [E,R] averaged in dB over pose chunks between the previous and the current end-of-step pose."""
         prev = torch.where(self._prev_valid[:, None, None], self._prev, poses)
@@ -263,21 +274,28 @@ class NetModule:
                 blk_last = blk.gather(-1, serving[..., None]).squeeze(-1)
         return snr, serving, blk_last
 
-    def step(self, t, poses: torch.Tensor, cur_tag: Optional[torch.Tensor] = None, blocked_fn=None) -> dict:
+    def step(self, t, poses: torch.Tensor, cur_tag: Optional[torch.Tensor] = None, blocked_fn=None,
+             blockers: Optional[torch.Tensor] = None) -> dict:
         """Advance every env by one control step (t is ignored: per-env clocks).
 
         poses [E,R,3] (or [E,R,2]) env-local positions at the END of this control step.
         cur_tag [E] long: the env's current tag (-1 = none) for tag_delivered.
         blocked_fn(poses [E,R,3]) -> [E,R,G] bool line-of-sight blockage, evaluated per pose chunk (the per-env gNB
-        positions are net.radio.gnb_env [E,G,3]). Ignored with IsaacNetCfg.blockage = False.
+        positions are net.radio.gnb_env [E,G,3]). Ignored with IsaacNetCfg.blockage = False. With radio="engine"
+        it becomes the engine radio's LOS source when NRConfig.los_source="callback" (multi-cell scene blockage;
+        the poses are in the radio frame, the gNBs at the config's cells), else it is ignored with a warning.
+        blockers [E,M,3] (x, y, class): extra dynamic blockers (humans, vehicles) as TR 38.901 model-B screens, for
+        radio="engine" at level L2 with NRConfig(blockage=True, blockage_model="screen").
         Returns a dict:
           delivered [E,R] bool      at least one message of the robot was delivered this step
           newest_cap [E,R] long     newest capture step delivered this step (-1 if none), env clock
           last_cap [E,R] long       newest capture step delivered this episode (0 = the state at reset)
           aoi_s [E,R] float         age of that information at the end of the step, in seconds
           queue_len, queue_bytes    FIFO state after the step
-          sinr_db [E,R], rsrp_dbm [E,R], serving [E,R], blocked [E,R]   radio of this step (rsrp = SINR + the
-                                    env's noise floor: the received power when there is no interference)
+          sinr_db [E,R], rsrp_dbm [E,R], serving [E,R], blocked [E,R], los [E,R]   radio of this step (rsrp =
+                                    SINR + the env's noise floor: the received power when there is no
+                                    interference; los = the engine radio's LOS state of the serving link, or
+                                    ~blocked when the radio has none)
           tag_delivered [E] bool    if cur_tag is given
           msg_delivered, timed_out [E,R,F] bool, cap, cls [E,R,F] long, delay_s [E,R,F] float (NaN if not
           delivered), t [E] long    per message slot as queued before the step, from the engine
@@ -293,13 +311,24 @@ class NetModule:
         self.eng._last_hid.copy_(cur_tag.clamp(min=0) if cur_tag is not None else self._zero_hid)
         blocked = None
         if self.radio is not None:
+            if blockers is not None:
+                raise ValueError("blockers= needs radio='engine' (TR 38.901 screens in the engine radio); with the "
+                                 "Isaac radio pass a blocked_fn")
             snr, serving, blocked = self._snr(poses, blocked_fn)
             o = self.eng.step(None, snr)
             noise = self.radio.noise_dbm[:, None]
         else:
-            o = self.eng.step(None, poses)
+            if blocked_fn is not None:
+                self._engine_blocked_fn(blocked_fn)
+            kw = {}
+            if blockers is not None:
+                if self.level != "L2":
+                    raise ValueError("blockers= needs level 'L2' (the NR engine's radio)")
+                kw["blockers"] = blockers
+            o = self.eng.step(None, poses, **kw)
             serving = o.get("serving_cell", torch.zeros(self.E, self.R, dtype=torch.long, device=self.dev))
             noise = self.config.subband_noise_dbm
+            blocked = o.get("blocked")
         self._prev.copy_(poses)
         self._prev_valid.fill_(True)
         newest = o["newest"]
@@ -315,6 +344,8 @@ class NetModule:
             rsrp_dbm=o["sinr_db"] + noise,
             serving=serving,
             blocked=blocked if blocked is not None else torch.zeros_like(newest, dtype=torch.bool),
+            los=o["los"] if "los" in o else (~blocked if blocked is not None
+                                             else torch.ones_like(newest, dtype=torch.bool)),
             msg_delivered=o["delivered"],
             timed_out=o["timed_out"],
             cap=o["cap"],
