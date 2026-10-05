@@ -68,21 +68,22 @@ UL_MODELS = [TM.periodic(700, 10).on([0, 2]), TM.event(500, trigger="alarm")]
 
 def _drive(eng, E, R, steps, pos, reset_at, dl_frames, seed=0):
     g = torch.Generator().manual_seed(seed)
+    dev = getattr(eng, "dev", "cpu")                        # inputs are drawn on the CPU, moved to the engine device
     p = torch.rand(E, R, 2, generator=g) * 150
     outs = []
     for t in range(steps):
         if t == reset_at:
-            eng.reset(torch.tensor([1]))
+            eng.reset(torch.tensor([1], device=dev))
         send = (torch.rand(E, R, generator=g) < 0.3).long()
-        trig = {"alarm": torch.rand(E, R, generator=g) < 0.3}
-        eng.submit(None, Requests(send))
+        trig = {"alarm": (torch.rand(E, R, generator=g) < 0.3).to(dev)}
+        eng.submit(None, Requests(send.to(dev)))
         if dl_frames:
-            eng.add_dl_frames(None, torch.where(torch.rand(E, R, generator=g) < 0.3, 2500.0, 0.0))
+            eng.add_dl_frames(None, torch.where(torch.rand(E, R, generator=g) < 0.3, 2500.0, 0.0).to(dev))
         if pos:
             p = (p + 5.0 * (2 * torch.rand(E, R, 2, generator=g) - 1)).clamp(0, 150)
-            o = eng.step(None, p, triggers=trig)
+            o = eng.step(None, p.to(dev), triggers=trig)
         else:
-            o = eng.step(None, 25 * torch.rand(E, R, generator=g) - 5, triggers=trig)
+            o = eng.step(None, (25 * torch.rand(E, R, generator=g) - 5).to(dev), triggers=trig)
         outs.append({k: v.clone() for k, v in o.items() if torch.is_tensor(v)})
     return outs
 

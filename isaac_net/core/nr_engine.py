@@ -322,7 +322,7 @@ class NRNet:
         cfg = self.cfg
         f = subband_centers_hz(cfg)
         if self.fc_mode == "fixed":
-            self.fc_L = corr_sqrt(subband_corr(cfg.fading_delay_spread_ns * 1e-9, f)).float().to(self.dev)
+            self.fc_L = corr_sqrt(subband_corr(cfg.fading_delay_spread_ns * 1e-9, f)).float().to(self.dev).contiguous()
             return
         lo, hi, G = cfg.fading_ds_grid
         self.fc_grid_ns = torch.logspace(math.log10(lo), math.log10(hi), int(G), dtype=torch.float64)
