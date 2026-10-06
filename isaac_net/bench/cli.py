@@ -2,7 +2,7 @@
 
     list                                      tasks, variants, levels, presets, baselines
     run --task T --level L --backend B --baselines random,heuristic,ppo_mlp --seeds 0,1 --out results/
-    report results/ [--metrics task,delay_p95_ms] [--json out.json]
+    report results/ [--metrics task,delay_p95_ms] [--json out.json] [--html out.html] [--figures DIR]
     calibrate --task T --level L --backend B  offered vs delivered load for the lightest and heaviest send choice
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ import torch
 
 from ..core.engine import BACKENDS, LEVELS
 from .baselines import BASELINES
-from .report import DEFAULT_METRICS, aggregate, load_results, markdown, to_json
+from .report import DEFAULT_METRICS, aggregate, load_results, markdown, markdown_figures, to_json
 from .runner import calibrate, run, write_result
 from .spec import NR_PRESETS, TRAFFIC_PRESETS, TaskConfig
 from .tasks import TASKS, variants
@@ -69,12 +69,18 @@ def main(argv=None):
     pr.add_argument("--ppo_envs", type=int, default=None)
     pr.add_argument("--label", default="", help="free-form tag in the file name and the result (e.g. sanity)")
     pr.add_argument("--out", default="results")
+    pr.add_argument("--keep_rows", action="store_true",
+                    help="keep the per env-episode evaluation rows in the result file (per-episode CDFs in reports)")
     pr.add_argument("--quiet", action="store_true")
     pp = sub.add_parser("report", help="aggregate result files: mean ± 95%% CI over seeds")
     pp.add_argument("paths", nargs="+")
     pp.add_argument("--metrics", default=",".join(DEFAULT_METRICS))
     pp.add_argument("--no_timing", action="store_true")
     pp.add_argument("--json", default=None, help="also write the aggregate as JSON")
+    pp.add_argument("--html", default=None, help="also write a self-contained HTML report with figures (needs the "
+                                                 "viz extra: matplotlib)")
+    pp.add_argument("--figures", default=None, metavar="DIR",
+                    help="also write the report's figures as PNGs into DIR and list them under the table")
     pc = sub.add_parser("calibrate", help="offered vs delivered load at the lightest and heaviest send choice")
     _add_common(pc)
     pc.add_argument("--seed", type=int, default=0)
@@ -99,6 +105,14 @@ def main(argv=None):
             return 1
         rows = aggregate(res)
         print(markdown(rows, _csv(a.metrics), timing=not a.no_timing))
+        if a.figures:
+            from .report import figures
+            print()
+            print(markdown_figures(figures(res, rows, a.figures)))
+        if a.html:
+            from .report import html
+            html(res, rows, a.html, _csv(a.metrics), timing=not a.no_timing)
+            print(f"wrote {a.html}", file=sys.stderr)
         if a.json:
             with open(a.json, "w") as f:
                 json.dump(to_json(rows), f, indent=1)
@@ -118,7 +132,7 @@ def main(argv=None):
                 t0 = time.time()
                 res = run(_cfg(a, t, s), b, a.device, eval_episodes=a.eval_episodes, eval_envs=a.eval_envs,
                           ppo_iters=a.ppo_iters, ppo_horizon=a.ppo_horizon, ppo_envs=a.ppo_envs, label=a.label,
-                          log=log)
+                          keep_rows=a.keep_rows, log=log)
                 path = write_result(res, a.out)
                 m = res["eval"]["metrics"]
                 key = res["task_spec"]["metric"]["key"]
