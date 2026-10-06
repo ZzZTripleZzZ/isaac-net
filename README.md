@@ -112,6 +112,17 @@ for _ in range(300):                                # one control step = 100 ms 
 
 `make_engine(level, E, R, device, config, backend)` builds every fidelity level, and every engine has the same API. `step` also returns, per message slot, the `delivered` and `timed_out` masks, the `delay` in control steps and the `cap`/`cls` of each message, plus `queue_bytes`, `sinr_db` and, if `Requests(send, det, hid)` carried an application tag, `det_env`. `reset(env_ids)` takes an index tensor, a list or a bool mask and leaves every other env bit-for-bit unaffected. The earlier calls `add_frames(t, send, det, hid, snr)` and `step(t, snr, hid) -> (newest, det_env)` still work. `aoi` and `queued` go straight into observations. The example task in [`isaac_net/examples/fleet_task.py`](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/isaac_net/examples/fleet_task.py) uses the application tag to mark frames that captured a hazard. [`isaac_net/isaac/mixins.py`](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/isaac_net/isaac/mixins.py) wires a network into an Isaac Lab `DirectRLEnv` with four hook calls (see [Isaac Lab quick start](#isaac-lab-quick-start)).
 
+**Pick a scenario.** A scenario preset returns a representative `NRConfig` for a deployment, and `describe()` prints what it turns on and which backends can run it ([scenario presets](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/configurability.md#scenario-presets)):
+
+```python
+from isaac_net import make_engine, warehouse_private_5g        # also factory_inf, outdoor_campus, urllc_control
+cfg = warehouse_private_5g()                                   # InF-SH at 3.5 GHz, robots as screens, UL power control
+print(cfg.describe())                                          # carrier, channel, MAC, backends, non-default fields
+net = make_engine("L2", E, R, dev, cfg, backend="auto")        # triton if it accepts the config, else graph or reference
+out = net.step(None, pos)                                      # poses: Rician K and delay spread follow the LOS state
+print(net.output_schema()["delay"])                            # shape, dtype, unit and meaning of every step key
+```
+
 ## Isaac Lab quick start
 
 This section is written for **Windows 11** (PowerShell), where the integration was developed and tested natively with an RTX 4090 (driver 617.14; the CUDA 13.0 build of PyTorch needs 580.88 or newer). For **Linux**, including clusters without root or with a glibc older than 2.35, install Isaac Lab with [docs/isaac-lab-linux.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/isaac-lab-linux.md) (kit-less Isaac Lab 3.0 on Newton or OV PhysX, where `ISAAC_NET_PHYSICS=newton` or `ovphysx` selects the fleet env's physics backend); the test, benchmark and training commands after that are given in bash below.

@@ -76,6 +76,8 @@ Each level has one readable implementation, the `reference` backend, written as 
 
 Use `graph` for runs whose numbers must be reproducible against the reference, and `triton` for scale. The NR engine `L2` has `graph` (bitwise equal to its reference, one or several cells) and `triton` (one cell). [Performance](performance.md) has the measured costs.
 
+`make_engine(..., backend="auto")` picks the fastest backend that can run the config on the device and logs why ([Choosing a backend automatically](configurability.md#choosing-a-backend-automatically)). Whatever the backend, `net.output_schema()` lists the keys `step` returns, with shape, dtype, unit and meaning ([Output schema](configurability.md#output-schema)).
+
 ## Fidelity levels
 
 All levels come from `make_engine(level, E, R, device, config, backend)` and share the same API. They fall into three groups.
@@ -87,6 +89,10 @@ All levels come from `make_engine(level, E, R, device, config, backend)` and sha
 **Bounds** are not network models. `ORACLE` delivers every message at capture with zero delay, and `NOCOMM` never delivers anything. They bracket what any network can give a task, and they are the first check when you design one: if a task's returns under `ORACLE` and `NOCOMM` are close, the policy barely uses what the network carries, and the task cannot tell fidelity levels apart.
 
 Higher fidelity costs more per step, and it changes what a policy experiences: whether a message's delay depends on what the other robots send, whether a robot at the cell edge loses more, and whether retransmissions stretch the tail. The [fidelity level reference](reference/levels.md) lists every level with its parameters and backends, and [Tutorial 02](tutorials/02_choosing_fidelity.ipynb) runs several of them on the same traffic.
+
+## Configurations and scenarios
+
+One `NRConfig` configures every level. Most users start from a preset and override a few fields: the 5G-LENA validation presets (`lena_validation_v2()`), or a scenario preset for a deployment, such as `warehouse_private_5g()`, `factory_inf()`, `outdoor_campus()` or `urllc_control()` ([Scenario presets](configurability.md#scenario-presets)). `cfg.describe()` prints what a config turns on, which backends can run it and which fields the chosen level would ignore, and `cfg.diff(other)` lists the fields two configs disagree on ([Describing a configuration](configurability.md#describing-a-configuration)). A level that ignores a field you set triggers a warning when the engine is built ([Ignored fields](configurability.md#ignored-fields-warning-and-strict-mode)).
 
 ## Glossary
 

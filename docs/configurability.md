@@ -4,7 +4,150 @@ Users should be able to choose the network model they train against, not inherit
 
 ## How configuration works today
 
-One `NRConfig` dataclass (`isaac_net/core/config.py`) configures every module, and `make_engine(level, E, R, device, config, backend)` builds every fidelity level. The configurable NR engine (`L2`) reads almost all of it. The other levels read much less. The prototype levels (`L0` to `L1`, `L2-legacy`), the fitted surrogates and the bounds read only the application fields (frame buffer, timeout, control step and UL slots per step, message sizes) and the randomness fields (`seed`, `rng`); since `feat/protolevels` they accept any values of these (see "Engine-owned randomness and the application constants"). `L2-legacy` with more than one cell or thermal noise runs `NetSlotMC`, which reads the radio, cell, power-control and handover fields but none of the NR MAC fields. `L2` reads those cell fields too, plus `dl_interference`. Until this branch, a field that a level does not read was ignored without notice. For example, `make_engine("L0", config=NRConfig(pathloss_exp=3.0))` runs with the fixed legacy radio, and `make_engine("L2-legacy", config=NRConfig(olla_up_db=0.1))` runs with the legacy OLLA steps. `NRConfig.unused_fields(level)` now lists such fields and `make_engine(..., strict=True)` refuses them (see the last section).
+One `NRConfig` dataclass (`isaac_net/core/config.py`) configures every module, and `make_engine(level, E, R, device, config, backend)` builds every fidelity level. The configurable NR engine (`L2`) reads almost all of it. The other levels read much less. The prototype levels (`L0` to `L1`, `L2-legacy`), the fitted surrogates and the bounds read only the application fields (frame buffer, timeout, control step and UL slots per step, message sizes) and the randomness fields (`seed`, `rng`); since `feat/protolevels` they accept any values of these (see "Engine-owned randomness and the application constants"). `L2-legacy` with more than one cell or thermal noise runs `NetSlotMC`, which reads the radio, cell, power-control and handover fields but none of the NR MAC fields. `L2` reads those cell fields too, plus `dl_interference`. Until this branch, a field that a level does not read was ignored without notice. For example, `make_engine("L0", config=NRConfig(pathloss_exp=3.0))` runs with the fixed legacy radio, and `make_engine("L2-legacy", config=NRConfig(olla_up_db=0.1))` runs with the legacy OLLA steps. `NRConfig.unused_fields(level)` now lists such fields, `make_engine` warns about them once per config, and `make_engine(..., strict=True)` refuses them (see [Ignored fields](#ignored-fields-warning-and-strict-mode)).
+
+## Scenario presets
+
+Four presets in `isaac_net/core/scenarios.py` give a starting point for a common deployment in one call. Each returns a plain `NRConfig`, so `cfg.with_(...)`, `cfg.diff(...)` and `cfg.describe()` work on it, and every keyword argument overrides the field it names. They are representative, not calibrated: nothing in them is fitted to or measured in a real site.
+
+```python
+from isaac_net import make_engine, warehouse_private_5g, urllc_control
+
+cfg = warehouse_private_5g(radio_map_path="hall.npz")     # LOS from the map's height map
+print(cfg.describe())                                     # what is on, which backends can run it
+net = make_engine("L2", E, R, "cuda", cfg, backend="auto")
+cfg2 = urllc_control(warehouse_private_5g())               # URLLC switches on top of the warehouse
+```
+
+| Preset | Channel and cells | What it turns on |
+|:---|:---|:---|
+| `warehouse_private_5g(**kw)` | TR 38.901 InF-SH at 3.5 GHz, one isotropic gNB | LOS from the radio map's height map when `radio_map_path` is given (`los_source="raycast"`), else the stochastic TR 38.901 state; blockage model B with robots as screens (`blockage_model="screen"`, people and vehicles through `step(blockers=)`); Rician K and frequency-correlated fading from the LOS state; UL open-loop power control with closed-loop TPC |
+| `factory_inf(n_cells=3, **kw)` | InF-DH, a hex cluster of cells 30 m apart with sector antennas facing its centre | A3 handover, radio link failure (with several cells), UL power control, OLLA, Rician K and frequency-correlated fading from the LOS state |
+| `outdoor_campus(n_cells=3, **kw)` | UMi, sites 200 m apart with sector antennas | A3 handover, radio link failure, UL power control, OLLA, blockage model A (`blockage_model="stochastic"`), Rician K and frequency-correlated fading from the LOS state |
+| `urllc_control(base=None, **kw)` | the channel of `base` (default: unchanged) | 10 ms control step, 2-symbol mini-slots in UL and DL, the QoS scheduler with class 0 = commands (5QI 82 values: priority level 19, 10 ms budget) and class 1 = video (5QI 2 values: priority level 40, 150 ms), an UL grant in every UL slot as a stand-in for configured grants |
+
+**What is validated.** Every preset starts from the MAC of `lena_validation_v2()`, which was compared with 5G-LENA on a single-cell uplink sweep with fading off and the 5G-LENA PHY tables ([fidelity-vs-lena.md](fidelity-vs-lena.md), "v2"). The rest is outside that comparison: the channel models, fading, several cells, power control, QoS, mini-slots and the downlink. The presets also use the shipped Sionna PDSCH BLER curves and the TS 38.214 TBS instead of the 5G-LENA tables, so they run without the local table extraction; pass `bler_source="lena", tbs_mode="lena", harq_combining="ir_lena"` to use those tables. With several cells the presets turn OLLA on, because the scheduler's MCS uses the N+I of the previous slot and OLLA absorbs the mismatch with the actual interference.
+
+**Backends.** `triton` refuses all four (the SR / BSR grant pipeline, several cells or mini-slots), so they run on `reference` and `graph`. `warehouse_private_5g(ul_grant_model="lumped")` runs on `triton` too; with `sr_grant_delay_slots=40` it is the "v2 minus BSR" configuration of [fidelity-vs-lena.md](fidelity-vs-lena.md#scale-configurations). The docstring of each preset lists every switch it turns on and why.
+
+## Describing a configuration
+
+`cfg.describe(level="L2", backend=None)` returns a one-page plain-text summary of what `make_engine(level, ..., cfg)` will run: carrier and numerology, TDD pattern with the slots and UL slots per control step, mini-slots, channel model and obstacle stack, fading, link budget and PHY tables, the scheduler and the 5G-LENA MAC switches that are on, UL grants, HARQ and RLC, power control and TPC, QoS, MIMO, cells with handover and RLF, RACH and DRX, traffic models, application constants and wrappers. It then lists which backends can run the config (for `triton`, the features `NRTritonEngine.refusals` names), every field set away from its default with the default next to it, and a warning line for the fields the level ignores (`unused_fields(level)`). There are no colour codes, so the text can go into a log or a notebook.
+
+`cfg.diff(other)` returns `{field: (cfg value, other value)}` for the fields that differ, in field order. `cfg.diff(NRConfig())` lists what a preset changed.
+
+## Ignored fields: warning and strict mode
+
+A field set away from its default that a level does not read used to be ignored without notice. `make_engine` now handles it by `strict`:
+
+| `strict` | Behaviour |
+|:---|:---|
+| `False` (default) | one `UnusedFieldsWarning` (a `UserWarning`) naming the ignored fields, once per level and set of ignored field values per process, emitted after the level accepted the config |
+| `True` | `ValueError` before anything is built |
+| `None` | no check, the behaviour before the warning |
+
+A warning, not an error, keeps every existing script running. Silence it with `warnings.filterwarnings("ignore", category=UnusedFieldsWarning)` or `strict=None`. Two places warn by design. `multicell()` builds on the `netslot_compat()` MAC, which `L2-legacy` (NetSlotMC) does not read. The adaptive engine also passes one config to its cheap and expensive levels, so the cheap level warns about the NR fields.
+
+## Choosing a backend automatically
+
+`make_engine(..., backend="auto")` picks the backend from the level, the config and the device, and logs one INFO line on the `isaac_net` logger, for example `backend=auto -> graph: triton refuses several cells`. For `L2` it picks `triton` when the device is CUDA, the `triton` package is installed and `NRTritonEngine.refusals(cfg)` is empty, `graph` on CUDA otherwise, and `reference` off CUDA. `rng="global"` and `EdgeConfig(return_path="nr_dl")` force `reference`, and a background `dl_load_frac` rules out `triton`. Other levels get `graph` on CUDA, which is bitwise equal to their reference, except the multi-cell `NetSlotMC` of `L2-legacy`, which has only `reference`. `isaac_net.core.resolve_backend(level, cfg, device)` returns the choice and its reason without building anything.
+
+`auto` is not the default: `backend="reference"` stays the default of `make_engine`, so existing calls run exactly as before. `ShardedEngine(..., backend="auto")` passes it to every shard, and each shard logs its choice.
+
+## Output schema
+
+Every engine has `output_schema()`, an ordered dict `{key: {"shape", "dtype", "unit", "doc", "when"}}` of the keys its `step()` returns under its current config: the NR engine on every backend, the wrappers (edge, energy, background), the prototype and legacy levels, `NetSlotMC`, `WIFI`, the surrogates and bounds, the adaptive engine and `ShardedEngine`. `when` is `"always"` or the input a key needs, such as pose input for `los` and `blocked`, or a `submit()` with extras for the per-message keys. The descriptions live in one registry, `isaac_net/core/schema.py` (`STEP_KEYS`, `GROUPS`), and `tests/test_ux_core.py` checks that every key a step returns is in the schema and every schema key is returned, for the NR engine under eleven configs and for every other engine. The table below is generated with `python -c "from isaac_net.core.schema import markdown_table; print(markdown_table())"`, and the test fails when it is out of date.
+
+Shapes use `E` envs, `R` robots, `F` frame buffer slots, `C` cells and `R_bg` background UEs per env. Units: `step` is a control-step index of the env clock, `steps` a duration in control steps, `slot` a slot index inside the control step.
+
+| Key | Shape | Dtype | Unit | Meaning |
+|:---|:---|:---|:---|:---|
+| `newest` | `[E,R]` | int64 | step | Newest capture step delivered this step for each robot, -1 if none. |
+| `det_env` | `[E]` | bool | bool | A message carrying the env's current hazard (hid of the last submit) arrived this step. |
+| `delivered` | `[E,R,F]` | bool | bool | Message slot delivered during this step (slots as queued before the step). |
+| `timed_out` | `[E,R,F]` | bool | bool | Message slot dropped at its application deadline (timeout_steps) this step. |
+| `cap` | `[E,R,F]` | int64 | step | Capture step of the message in each slot, -1 for an empty slot. |
+| `cls` | `[E,R,F]` | int64 | class | Traffic class of the message in each slot (index into msg_sizes + 1), 0 for an empty slot. |
+| `delay` | `[E,R,F]` | float32 | steps | Delivery time minus capture (or arrival) time in control steps, NaN if not delivered. |
+| `queue_len` | `[E,R]` | int64 | count | Messages in the robot's uplink queue after the step. |
+| `queue_bytes` | `[E,R]` | float32 | bytes | Accepted uplink bytes not yet resolved in order after the step. |
+| `sinr_db` | `[E,R]` | float32 | dB | Wideband SNR or serving-link SINR used for this step. |
+| `t` | `[E]` | int64 | step | Env clock value of this step (the clock is t + 1 afterwards). |
+| `dropped` | `[E,R,F]` | bool | bool | Message lost under RLC UM (harq_fail='drop'), on a handover with ho_rlc='flush' or on radio link failure, resolved this step. |
+| `serving_cell` | `[E,R]` | int64 | id | Serving cell (access point at level WIFI), 0 with one cell. |
+| `dl_newest` | `[E,R]` | int64 | step | Newest capture step of a downlink message delivered this step, -1 if none. |
+| `dl_queue_len` | `[E,R]` | int64 | count | Messages in the robot's downlink queue after the step. |
+| `rank` | `[E,R]` | int64 | count | Rank (layers) of the robot's last new uplink transport block, 1 without uplink rank 2. |
+| `dl_rank` | `[E,R]` | int64 | count | Rank (layers) of the robot's last new downlink transport block. |
+| `rlf` | `[E,R]` | bool | bool | Robot is in radio link failure (T310 expired, not yet re-established). |
+| `los` | `[E,R]` | bool | bool | Line-of-sight state of the serving link (docs/obstacles.md). |
+| `blocked` | `[E,R]` | bool | bool | A dynamic blocker (robot, screen, model-A region) is on the serving link's direct path. |
+| `arrival` | `[E,R,F]` | float64 | steps | Arrival time of the message in env-clock control steps, including the in-step offset; NaN for an empty slot. |
+| `arrival_slot` | `[E,R,F]` | int64 | slot | Slot of the control step in which the message arrived, -1 for an empty slot. |
+| `tag` | `[E,R,F]` | int64 | id | Tag of the message (traffic model position + 1, 0 = policy), 0 when empty. |
+| `priority` | `[E,R,F]` | int64 | class | Priority of the message (QoS class with scheduler='qos'). |
+| `bytes` | `[E,R,F]` | int64 | bytes | Bytes of the message on the air (payload plus packet overheads). |
+| `deadline_miss` | `[E,R,F]` | bool | bool | Message delivered after its deadline_ms, or lost with a finite deadline. |
+| `gen_accepted` | `[E,R]` | int64 | count | Uplink messages generated by the traffic models and accepted this step. |
+| `gen_bytes` | `[E,R]` | int64 | bytes | Uplink bytes on the air of the generated messages accepted this step. |
+| `dl_delivered` | `[E,R,F]` | bool | bool | Downlink message slot delivered this step. |
+| `dl_lost` | `[E,R,F]` | bool | bool | Downlink message slot timed out or dropped this step. |
+| `dl_delay` | `[E,R,F]` | float32 | steps | Downlink delivery time minus arrival time in control steps, NaN if not delivered. |
+| `dl_tag` | `[E,R,F]` | int64 | id | Tag of the downlink message, 0 when empty. |
+| `dl_generated` | `[E,R,F]` | bool | bool | Downlink slot holds a message from a traffic model (not an edge command). |
+| `dl_bytes` | `[E,R,F]` | int64 | bytes | Bytes of the downlink message on the air. |
+| `dl_deadline_miss` | `[E,R,F]` | bool | bool | Downlink message delivered after its deadline, or lost with a finite deadline. |
+| `gen_dl_accepted` | `[E,R]` | int64 | count | Downlink messages generated and accepted this step. |
+| `gen_dl_bytes` | `[E,R]` | int64 | bytes | Downlink bytes on the air of the generated messages accepted this step. |
+| `access_state` | `[E,R]` | int64 | state | Access state at the last slot of the step: 0 IDLE, 1 RACH, 2 CONNECTED, 3 DORMANT. |
+| `access_sleep_frac` | `[E,R]` | float32 | fraction | Share of the step's engine slots in which the robot was DRX-dormant. |
+| `rach_attempts` | `[E,R]` | int64 | count | Preamble transmissions of the robot this step. |
+| `wifi_mcs` | `[E,R]` | int64 | id | 802.11 MCS index of the robot's link, -1 out of range. |
+| `wifi_rate_mbps` | `[E,R]` | float32 | Mbit/s | PHY rate of the robot's link. |
+| `wifi_access_ms` | `[E,R]` | float32 | ms | Mean channel-access time over the sub-steps the robot contended, NaN if it did not. |
+| `wifi_p_fail` | `[E,R]` | float32 | fraction | Mean conditional failure probability of an attempt. |
+| `wifi_busy` | `[E,R]` | float32 | fraction | Fraction of time the channel is busy as the robot senses it. |
+| `fidelity` | `[E]` | int64 | bool | 1 if the env's step ran on the expensive level. |
+| `fidelity_indicator` | `[E]` | float32 | fraction | Switching indicator after the step. |
+| `bg_n` | `[E,C]` | int64 | count | Background UEs attached to the cell. |
+| `bg_offered_bytes` | `[E,C]` | float64 | bytes | Bytes the background offered this step. |
+| `bg_delivered_bytes` | `[E,C]` | float64 | bytes | Background bytes delivered this step (ghost UEs, L2). |
+| `bg_lost_bytes` | `[E,C]` | float64 | bytes | Background bytes timed out or dropped this step (ghost UEs, L2). |
+| `bg_queue_bytes` | `[E,C]` | float64 | bytes | Background bytes queued after the step (ghost UEs, L2). |
+| `bg_util` | `[E,C]` | float64 | fraction | Share of the cell's uplink resources the background used. |
+| `bg_pos` | `[E,R_bg,2]` | float32 | m | Background UE positions after the step. |
+| `bg_dl_offered_bytes` | `[E,C]` | float64 | bytes | Downlink background bytes offered this step. |
+| `bg_dl_delivered_bytes` | `[E,C]` | float64 | bytes | Downlink background bytes delivered this step. |
+| `bg_dl_lost_bytes` | `[E,C]` | float64 | bytes | Downlink background bytes lost this step. |
+| `bg_dl_queue_bytes` | `[E,C]` | float64 | bytes | Downlink background bytes queued after the step. |
+| `bg_dl_util` | `[E,C]` | float64 | fraction | Share of the DL carrier's PRB-slots the background used. |
+| `edge_done` | `[E,R]` | int64 | count | Results the edge completed this step. |
+| `edge_done_cap` | `[E,R]` | int64 | step | Capture step of the newest result completed this step, -1 if none. |
+| `edge_done_time` | `[E,R]` | float32 | steps | Completion time of that result (env clock), NaN if none. |
+| `edge_dropped` | `[E,R]` | int64 | count | Messages dropped at the edge this step (full + deadline). |
+| `edge_dropped_full` | `[E,R]` | int64 | count | Messages dropped because the edge queue was full. |
+| `edge_dropped_deadline` | `[E,R]` | int64 | count | Messages dropped at their edge deadline. |
+| `edge_queue_len` | `[E]` | int64 | count | Messages at the edge after the step (in service, waiting, not yet admitted). |
+| `edge_in_service` | `[E]` | int64 | count | Messages in service after the step. |
+| `edge_lag` | `[E]` | bool | bool | The env ran out of its event budget and catches up next step. |
+| `act_new` | `[E,R]` | bool | bool | A newer action (command) reached the robot this step. |
+| `act_cap` | `[E,R]` | int64 | step | Capture step of the robot's newest action, -1 before the first. |
+| `act_time` | `[E,R]` | float32 | steps | Arrival time of that action at the robot (env clock). |
+| `act_age` | `[E,R]` | float32 | steps | Age t + 1 - act_cap of the action the robot holds, NaN before the first. |
+| `act_latency` | `[E,R]` | float32 | steps | Capture to uplink to edge to return latency of that action. |
+| `act_ul_delay` | `[E,R]` | float32 | steps | Uplink stage of act_latency. |
+| `act_edge_delay` | `[E,R]` | float32 | steps | Edge stage (waiting and service) of act_latency. |
+| `act_ret_delay` | `[E,R]` | float32 | steps | Return-path stage of act_latency. |
+| `cmd_dropped` | `[E,R]` | int64 | count | Commands lost this step (replaced in flight, DL loss or DL queue full). |
+| `energy_j` | `[E,R]` | float32 | J | Radio energy of the robot this step. |
+| `energy_tx_j` | `[E,R]` | float32 | J | Transmit part of energy_j (PA and circuit). |
+| `energy_cum_j` | `[E,R]` | float32 | J | Energy since the env's last reset. |
+| `tx_slots` | `[E,R]` | float32 | count | Transmissions (transport blocks or slot equivalents) this step. |
+| `rx_slots` | `[E,R]` | float32 | count | Receive slots this step. |
+| `battery_j` | `[E,R]` | float32 | J | Battery energy left. |
+| `battery_frac` | `[E,R]` | float32 | fraction | Battery state of charge. |
+| `low_battery` | `[E,R]` | bool | bool | battery_frac below low_battery_frac. |
+| `battery_empty` | `[E,R]` | bool | bool | Battery is empty (the engine keeps transmitting). |
 
 ## Inventory of hard-coded choices
 
@@ -247,6 +390,8 @@ What this means for delay. A frame whose transport block fits the first occasion
 | DL traffic models (`TrafficModel(..., direction="dl")`): the DL arrival gate in the kernel | yes | yes | yes |
 
 Mirrors of the refused features in the fused kernel are open work ([STATUS.md](STATUS.md), items 1 and 21).
+
+`backend="auto"` picks `triton` exactly when this table lets it, else `graph` on CUDA ([Choosing a backend automatically](#choosing-a-backend-automatically)).
 
 ## Closed-loop power control, CQI table and sector antennas
 
