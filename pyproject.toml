@@ -75,6 +75,7 @@ isaac-net-bench = "isaac_net.bench.cli:main"
 isaac-net-bake = "isaac_net.tools.scene.bake:main"
 isaac-net-measure = "isaac_net.tools.measure.cli:main"
 isaac-net-rem = "isaac_net.tools.rem:main"
+isaac-net-doctor = "isaac_net.tools.doctor:main"
 
 [tool.setuptools.dynamic]
 version = { attr = "isaac_net.__version__" }

@@ -84,7 +84,15 @@ Linux with an NVIDIA GPU is the main target for the standalone package, and Pyth
 | `wifi` | nothing | level `WIFI` needs only the core dependencies |
 | `all` | every extra above except `isaac` | everything pip can install on Linux without Isaac |
 
-Four console scripts come with the package: `isaac-net-bench` (the benchmark suite), `isaac-net-bake` (bake a radio map from a USD scene), `isaac-net-measure` (probe, ingest and calibrate for gNB measurement campaigns) and `isaac-net-rem` (export a radio environment map, added after 0.1.0).
+Five console scripts come with the package: `isaac-net-bench` (the benchmark suite), `isaac-net-bake` (bake a radio map from a USD scene), `isaac-net-measure` (probe, ingest and calibrate for gNB measurement campaigns), `isaac-net-rem` (export a radio environment map, added after 0.1.0) and `isaac-net-doctor` (environment report, self-test and config check, [docs/doctor.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/doctor.md)).
+
+**First check.** After installing, run the doctor. It lists what is installed, runs a short self-test (about 5 s on a CPU, plus the backend equivalence checks on a GPU) and exits with 0 when nothing failed:
+
+```bash
+isaac-net-doctor                                    # environment report + self-test
+isaac-net-doctor --quick --device cpu               # shorter, CPU only
+isaac-net-doctor --config lena_validation_v2        # which backends run a config
+```
 
 ## Put a network in your environment
 
