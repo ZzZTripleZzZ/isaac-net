@@ -224,7 +224,7 @@ def test_c4_kernel_arguments_and_call_sites():
     assert len(calls) == 1
     kws = {k.arg for k in calls[0].keywords}
     assert set(new[:7]) <= kws
-    fast = open(os.path.join(HERE, "..", "isaac_net", "core", "nr_fast.py")).read()
+    fast = open(importlib.util.find_spec("isaac_net.core.nr_fast").origin).read()
     for c in new[7:]:
         assert c in fast
     # _mac_slot: the TPC arguments are the last ten, the TPC state the last four return values, at both call sites
