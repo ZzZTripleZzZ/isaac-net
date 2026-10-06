@@ -174,6 +174,10 @@ class ShardedEngine:
             return self._gather(self._each("step", t, x, **kw))
         return self._gather(self._each("step", t, x, cur_hid, **kw))
 
+    def output_schema(self):
+        """{key: {"shape", "dtype", "unit", "doc", "when"}} of the keys step() returns (core/schema.py)."""
+        return self.shards[0].output_schema()
+
     def queued(self):
         return self._gather([s.queued() for s in self.shards])
 

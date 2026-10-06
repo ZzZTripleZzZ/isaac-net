@@ -150,6 +150,11 @@ class EdgeLoop:
     def add_frames(self, t, send, det, hid, snr_db):
         return self.engine.add_frames(t, send, det, hid, snr_db)
 
+    def output_schema(self):
+        """{key: {"shape", "dtype", "unit", "doc", "when"}} of the keys step() returns (core/schema.py)."""
+        from .schema import schema
+        return schema("edge", base=self.engine.output_schema())
+
     def queued(self):
         return self.engine.queued()
 

@@ -160,6 +160,11 @@ class LevelNet:
             self.stats["d_" + f] = []
             self.stats["x_" + f] = []
 
+    def output_schema(self):
+        """{key: {"shape", "dtype", "unit", "doc", "when"}} of the keys step() returns (core/schema.py)."""
+        from ..schema import schema
+        return schema("base")
+
     def queued(self):
         return (self.cap >= 0).sum(-1)
 

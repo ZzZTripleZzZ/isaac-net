@@ -90,6 +90,11 @@ class NetSlotMC(NetSlot):
             self.radio = RadioMC(self.cfg, self.E, self.dev, generator=self.gen, rng=self.rng)
         return self.radio.rx_dbm(pos)
 
+    def output_schema(self):
+        """{key: {"shape", "dtype", "unit", "doc", "when"}} of the keys step() returns (core/schema.py)."""
+        from ..schema import schema
+        return schema("base", "serving_cell")
+
     def step(self, t, x=None, cur_hid=None, rx_dbm=None):
         """step(t, poses) -> dict; step(t, None, rx_dbm=rx) -> dict; step(t, rx, cur_hid) -> (newest, det_env)."""
         if rx_dbm is None:

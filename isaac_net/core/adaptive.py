@@ -582,6 +582,11 @@ class AdaptiveEngine:
     def clock(self):
         return self.cheap.clock
 
+    def output_schema(self):
+        """{key: {"shape", "dtype", "unit", "doc", "when"}} of the keys step() returns (core/schema.py)."""
+        from .schema import schema
+        return schema("base", "fidelity")
+
     def queued(self):
         qx = self.lx.queued()
         if self.subbatch:

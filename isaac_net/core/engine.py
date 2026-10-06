@@ -301,6 +301,11 @@ class NREngine:
             self._install_fdd_dl_carrier()
 
     # ------------------------------------------------------------------ passthroughs
+    def output_schema(self):
+        """{key: {"shape", "dtype", "unit", "doc", "when"}} of the keys step() returns under this config (core/schema.py)."""
+        from .schema import nr_schema
+        return nr_schema(self)
+
     def __getattr__(self, name):          # ul, dl, stats, counters(), cap, ... of the wrapped NRNet
         if name == "net":
             raise AttributeError(name)

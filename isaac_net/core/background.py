@@ -264,6 +264,17 @@ class BackgroundLoop:
     def clock(self):
         return self.engine.clock
 
+    def output_schema(self):
+        """{key: {"shape", "dtype", "unit", "doc", "when"}} of the keys step() returns (core/schema.py)."""
+        from .schema import schema
+        if self.mode == "load":         # offered load (L1, L2-legacy): float32 offered bytes and load
+            out = schema("background_load", base=self.engine.output_schema())
+            for k in ("bg_offered_bytes", "bg_util"):
+                out[k] = dict(out[k], dtype="float32")
+            return out
+        dl = self.Nb > 0 and bool(self.bg.dl_traffic)
+        return schema("background", *(("background_dl",) if dl else ()), base=self.engine.output_schema())
+
     def queued(self):
         return self.engine.queued()[:, :self.R]
 

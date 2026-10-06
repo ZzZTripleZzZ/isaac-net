@@ -172,6 +172,11 @@ class EnergyLoop:
     def config(self):
         return self._config
 
+    def output_schema(self):
+        """{key: {"shape", "dtype", "unit", "doc", "when"}} of the keys step() returns (core/schema.py)."""
+        from .schema import schema
+        return schema("energy", base=self.engine.output_schema())
+
     def queued(self):
         return self.engine.queued()
 

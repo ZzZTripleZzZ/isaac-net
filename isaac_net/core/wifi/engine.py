@@ -196,6 +196,11 @@ class WifiNet(LevelNet):
                                  rng=self.rng)
         return self.radio
 
+    def output_schema(self):
+        """{key: {"shape", "dtype", "unit", "doc", "when"}} of the keys step() returns (core/schema.py)."""
+        from ..schema import schema
+        return schema("base", "serving_cell", "wifi")
+
     def step(self, t, x=None, cur_hid=None, *, rx_dbm=None, sense=None):
         """Advance [t, t+1). x: poses [E,R,2|3] (through the engine's RadioMC over the APs), or the SNR [E,R] in dB
         to the single AP; rx_dbm= [E,R,A] gives the received power (dBm) of every robot at every AP instead.
