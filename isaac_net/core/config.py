@@ -310,6 +310,101 @@ def fields_read_by(level, cfg=None):
     return read
 
 
+class UnusedFieldsWarning(UserWarning):
+    """make_engine(..., strict=False) built a level that ignores some fields set away from their defaults
+    (NRConfig.unused_fields). Filter it with warnings.filterwarnings("ignore", category=UnusedFieldsWarning), or pass
+    strict=None to make_engine to skip the check."""
+
+
+def _fmt(v):
+    """Compact text of a field value for NRConfig.describe / diff listings."""
+    if isinstance(v, float):
+        return "inf" if v == math.inf else f"{v:.6g}"
+    if isinstance(v, (tuple, list)):
+        inner = ", ".join(_fmt(x) for x in v)
+        return f"({inner}{',' if len(v) == 1 else ''})"
+    kind = getattr(v, "kind", None)
+    if kind is not None and hasattr(v, "direction"):          # traffic.TrafficModel
+        return _traffic_text(v)
+    if hasattr(v, "__dataclass_fields__"):                       # EdgeConfig, EnergyConfig, BackgroundConfig, ...
+        ref = None
+        try:
+            ref = type(v)()
+        except Exception:                                        # noqa: BLE001 - no default constructor
+            pass
+        changed = [(f.name, getattr(v, f.name)) for f in fields(v)
+                   if ref is None or getattr(v, f.name) != getattr(ref, f.name)]
+        return f"{type(v).__name__}(" + ", ".join(f"{k}={_fmt(x)}" for k, x in changed) + ")"
+    return repr(v)
+
+
+def _traffic_text(m):
+    """One traffic model as kind(size, timing) [dl] [robots]."""
+    parts = []
+    if m.size_bytes:
+        parts.append(f"{m.size_bytes:g} B")
+    if m.period_ms:
+        parts.append(f"every {m.period_ms:g} ms")
+    if m.rate_hz:
+        parts.append(f"{m.rate_hz:g} Hz x {m.burst_size}")
+    if m.kind == "video" and m.gop is not None:
+        parts.append(f"gop {m.gop}")
+    if m.kind == "event":
+        parts.append(f"trigger {m.trigger if isinstance(m.trigger, str) else 'callable'}")
+    extra = []
+    if m.direction == "dl":
+        extra.append("DL")
+    if m.priority:
+        extra.append(f"priority {m.priority}")
+    if m.deadline_ms != math.inf:
+        extra.append(f"deadline {m.deadline_ms:g} ms")
+    if m.robots is not None:
+        extra.append(f"robots {list(m.robots)}")
+    return f"{m.kind}({', '.join(parts)})" + (f" [{', '.join(extra)}]" if extra else "")
+
+
+_LEVEL_BACKENDS = {"L0": "reference, eager, graph, compile", "L0DR": "reference, eager, graph, compile",
+                   "L05": "reference, eager, graph, compile", "L05Q": "reference, eager, graph, compile",
+                   "L1": "reference, eager, graph, compile, triton",
+                   "L2-legacy": "reference, eager, graph, compile, triton",
+                   "WIFI": "reference, graph"}
+
+
+def _backend_lines(cfg, level, backend):
+    """Which backends can run cfg at level: (text lines)."""
+    lines = []
+    if level == "L2-legacy" and not cfg.is_legacy_cell():
+        lines.append("L2-legacy runs NetSlotMC here (multi-cell or thermal noise): reference only")
+    elif level != "L2":
+        avail = _LEVEL_BACKENDS.get(level, "reference, graph")
+        lines.append(f"{level}: {avail}")
+    else:
+        lines.append("reference: yes (any device)")
+        g = "yes on CUDA (bitwise equal to reference)" if cfg.rng == "engine" else "no: needs rng='engine'"
+        lines.append(f"graph: {g}")
+        try:
+            from .nr_fast import NRTritonEngine
+            refusals = NRTritonEngine.refusals(cfg)
+        except ImportError:                                     # standalone config.py (docs hook, no torch)
+            refusals = None
+        if refusals is None:
+            lines.append("triton: unknown (isaac_net.core.nr_fast not importable)")
+        elif cfg.rng != "engine":
+            lines.append("triton: no: needs rng='engine'")
+        elif refusals:
+            lines.append("triton: refused: " + "; ".join(f.split(" (")[0] for f, _ in refusals))
+        else:
+            lines.append("triton: yes on CUDA with triton installed (equal to the reference to float rounding)")
+        bg = cfg.background
+        if bg is not None and getattr(bg, "dl_load_frac", 0.0) > 0 and refusals == []:
+            lines[-1] = "triton: refused: background dl_load_frac (the kernel takes the DL PRBs from the config)"
+        if cfg.edge is not None and cfg.edge.return_path == "nr_dl":
+            lines[1:] = ["graph, triton: no: EdgeConfig(return_path='nr_dl') runs on the reference backend only"]
+    if backend is not None:
+        lines.append(f"requested backend={backend!r}")
+    return lines
+
+
 @dataclass
 class EdgeConfig:
     """Edge-computing loop (core/edge.py, EdgeLoop): the edge server that processes delivered uplink messages and
@@ -383,7 +478,9 @@ class NRConfig:
     NRConfig and take keyword overrides; cfg.with_(**changes) returns a modified copy. Derived quantities
     (nprb, rbg, slots_per_step, ...) are properties computed from the fields. Each level reads only some fields
     (fields_read_by); unused_fields(level) lists the non-default fields a level ignores, and
-    make_engine(..., strict=True) raises on them.
+    make_engine(..., strict=True) raises on them (strict=False, the default, warns once per config).
+    The scenario presets of core/scenarios.py (warehouse_private_5g, factory_inf, outdoor_campus, urllc_control) also
+    return an NRConfig. cfg.describe(level) prints a one-page summary, cfg.diff(other) lists the differing fields.
     """
     # ---- numerology and carrier ----
     mu: int = 1                          # SCS = 15 * 2^mu kHz, mu in {0, 1, 2}
@@ -1025,12 +1122,193 @@ class NRConfig:
         return -174.0 + 10 * math.log10(12 * self.scs_khz * 1e3) + nf
 
     def unused_fields(self, level):
-        """Fields set away from their defaults that make_engine(level, ..., self) ignores (silently, unless
-        make_engine(..., strict=True))."""
+        """Fields set away from their defaults that make_engine(level, ..., self) ignores (make_engine warns once per
+        config with UnusedFieldsWarning, raises with strict=True, and stays silent with strict=None)."""
         ref = NRConfig()
         read = fields_read_by(level, self)
         return sorted(f.name for f in fields(self)
                       if f.name not in read and getattr(self, f.name) != getattr(ref, f.name))
+
+    def diff(self, other):
+        """{field: (self value, other value)} of the fields whose values differ between self and other (an
+        NRConfig), in field order. cfg.diff(NRConfig()) lists what a preset changed."""
+        if not isinstance(other, NRConfig):
+            raise TypeError("diff() compares two NRConfig objects")
+        return {f.name: (getattr(self, f.name), getattr(other, f.name)) for f in fields(self)
+                if getattr(self, f.name) != getattr(other, f.name)}
+
+    def describe(self, level="L2", backend=None):
+        """One-page plain-text summary of this config as make_engine(level, ..., backend) would run it: carrier,
+        numerology and TDD, channel and obstacle stack, fading, the MAC options that are on, cells / handover / RLF,
+        access, traffic, duplex, mini-slots, MIMO, wrappers, every field set away from its default, which backends
+        can run it (NRTritonEngine.refusals for triton) and the fields the level ignores (unused_fields). Most rows
+        describe the NR engine (level "L2"); for other levels the unused-field list says which rows they ignore."""
+        c, rows = self, []
+        row = rows.append
+        on = lambda b: "on" if b else "off"                                                     # noqa: E731
+        # ---- carrier, numerology, duplexing
+        row(("Level", level))
+        row(("Carrier", f"{c.carrier_ghz:g} GHz, mu={c.mu} ({c.scs_khz} kHz SCS), {c.bandwidth_mhz} MHz -> "
+                        f"{c.nprb} PRB, RBG {c.rbg} -> {c.n_subbands} subbands"))
+        if c.duplex == "tdd":
+            dup = f"TDD {c.tdd_pattern}, S slot {c.special_split} (DL, guard, UL)"
+        else:
+            dup = f"FDD, UL carrier {c.nprb} PRB, paired DL carrier {c.dl_nprb} PRB"
+        row(("Duplex", dup))
+        row(("Control step", f"{c.control_step_ms:g} ms = {c.slots_per_step} slots of {c.slot_ms:g} ms; "
+                             f"{c.ul_slots_per_step} UL / {c.dl_slots_per_step} DL data slots per step"))
+        if c.ul_mini_slot_symbols is None:
+            row(("Mini-slots", "off (one scheduling occasion per data slot)"))
+        else:
+            row(("Mini-slots", f"{c.ul_mini_slot_symbols}-symbol occasions in UL data slots"
+                               f"{' and DL data slots' if c.mini_slot_dl and c.dl else ''}; "
+                               f"{c.ul_occasions_per_step} UL occasions per step"))
+        row(("Directions", f"UL {on(c.ul)}, DL {on(c.dl)}"))
+        # ---- channel and obstacles
+        if c.channel == "tr38901":
+            h = f", gNB height {c.gnb_height_m:g} m" if c.gnb_height_m is not None else ", scenario gNB height"
+            ch = f"tr38901 {c.tr38901_scenario}, LOS {c.tr38901_los}{h}, UE height {c.ue_height_m:g} m"
+            if c.o2i_indoor_frac > 0:
+                ch += f", O2I {c.o2i_indoor_frac:g} ({c.o2i_model})"
+        elif c.channel == "radio_map":
+            ch = f"radio_map {c.radio_map_path}"
+        else:
+            ch = (f"log_distance PL = {c.pl_const_db:g} + {10 * c.pathloss_exp:g} log10(d) dB, shadowing "
+                  f"{c.shadow_sigma_db:g} dB ({c.shadow_acf}, {c.shadow_dcorr_m:g} m)")
+        row(("Channel", ch))
+        obs = [f"LOS source {c.los_source}"]
+        if c.los_source in ("map", "raycast"):
+            obs.append(f"map {c.radio_map_path}")
+        if c.los_source == "raycast":
+            obs.append(f"{c.los_raycast_samples} samples, diffraction {on(c.los_diffraction)}")
+        if c.los_soft:
+            obs.append("soft LOS")
+        if c.blockage:
+            if c.blockage_model == "sphere":
+                obs.append(f"blockage sphere r={c.blockage_radius_m:g} m, {c.blockage_loss_db:g} dB")
+            elif c.blockage_model == "screen":
+                obs.append(f"blockage screen (model B: robots and step(blockers=)), cap {c.blockage_max_db:g} dB")
+            else:
+                obs.append(f"blockage stochastic (model A), cap {c.blockage_max_db:g} dB")
+        else:
+            obs.append("blockage off")
+        row(("Obstacles", ", ".join(obs)))
+        # ---- fading
+        if not c.fading:
+            fad = "off"
+        else:
+            dop = "per robot" if c.fading_doppler == "per_robot" else f"rho {c.fading_rho_per_ms:.4f} per ms"
+            fad = f"AR(1) Rayleigh per subband, {dop}"
+            mode = c.rician_mode
+            if mode == "fixed":
+                fad += f"; Rician K {c.rician_k_db:g} dB"
+            elif mode == "los":
+                fad += f"; Rician K from LOS ({c.tr38901_scenario} table, ramp {c.rician_k_ramp_slots} slots)"
+            fc = c.freq_corr_mode
+            if fc == "fixed":
+                fad += f"; frequency-correlated, DS {c.fading_delay_spread_ns:g} ns"
+            elif fc == "los":
+                fad += f"; frequency-correlated, DS per link from LOS ({c.tr38901_scenario})"
+        row(("Fading", fad))
+        # ---- link budget and PHY
+        noise = (f"thermal, gNB NF {c.gnb_nf_db:g} dB, UE NF {c.ue_nf_db:g} dB" if c.noise_model == "thermal"
+                 else f"fixed {c.ni_fixed_dbm:g} dBm per {c.snr_ref_prbs} PRB")
+        row(("Link budget", f"UE {c.ue_tx_dbm:g} dBm ({c.ul_power}, PHR cap {on(c.phr_cap)}), gNB {c.gnb_tx_dbm:g} "
+                            f"dBm; noise {noise}"))
+        row(("PHY", f"MCS table {c.mcs_table}, {c.eff_sinr}, BLER {c.bler_source}, TBS {c.tbs_mode}, target "
+                    f"{c.bler_target:g}, OLLA {on(c.olla)}" + (f", DL CQI {c.cqi_table}" if c.dl else "")))
+        # ---- MAC
+        sched = c.scheduler + (f" ({c.pf_metric} metric, window {c.pf_window:g})"
+                               if c.scheduler in ("pf", "qos") else "")
+        lena = c.lena_mac_switches()
+        if lena:
+            sched += "; 5G-LENA MAC: " + ", ".join(f"{k}={v}" for k, v in lena.items())
+        row(("Scheduler", sched))
+        if c.ul_grant_model == "bsr":
+            grant = (f"5G-LENA SR/BSR pipeline (bootstrap {c.sr_boot_bytes} B after {c.sr_boot_slots} slots, BSR "
+                     f"delay {c.bsr_delay_slots} slots), SR period {c.sr_period_slots} slots")
+        else:
+            grant = f"lumped SR -> grant {c.sr_delay} slots, SR period {c.sr_period_slots} slots"
+            if c.proactive_grant != "off":
+                grant += f", proactive grants {c.proactive_grant}"
+        row(("UL grants", grant))
+        proc = f"{c.n_harq} process{'es' if c.n_harq > 1 else ''}"
+        row(("HARQ / RLC", f"{proc}, max {c.max_harq_tx} tx, combining {c.harq_combining}, on "
+                           f"failure {c.harq_fail}; discard {c.discard}"))
+        pc = (f"open loop P0 {c.ul_pc_p0_dbm:g} dBm per subband, alpha {c.ul_pc_alpha:g}" if c.ul_pc_on
+              else "open loop off")
+        if c.ul_tpc:
+            tgt = "auto" if c.ul_tpc_target_db is None else f"{c.ul_tpc_target_db:g} dB"
+            pc += f"; closed-loop TPC {c.ul_tpc_mode}, target {tgt}"
+        else:
+            pc += "; closed-loop TPC off"
+        row(("UL power control", pc))
+        if c.scheduler == "qos":
+            row(("QoS", f"{c.qos_classes} classes, priority {_fmt(c.qos_priority)}, PDB {_fmt(c.qos_pdb_ms)} ms"))
+        else:
+            row(("QoS", "off"))
+        if c.n_layers_max == 1:
+            row(("MIMO", "off (one layer)"))
+        else:
+            row(("MIMO", f"rank <= 2, rule {c.rank_rule}, UL {on(c.ul and c.ul_mimo)}, DL {on(c.dl and c.dl_mimo)}"))
+        # ---- cells
+        if c.n_cells == 1:
+            cells = f"1 cell at {_fmt(c.gnb_xy()[0])}, antenna {c.gnb_antenna}"
+        else:
+            cells = (f"{c.n_cells} cells ({c.cell_layout}"
+                     + (f", ISD {c.cell_isd_m:g} m" if c.cell_layout == "hex" else "") + f"), antenna {c.gnb_antenna}")
+            cells += (f"; A3 offset {c.a3_offset_db:g} dB, hysteresis {c.a3_hyst_db:g} dB, TTT {c.a3_ttt_ms:g} ms, "
+                      f"interruption {c.ho_interruption_ms:g} ms, RLC {c.ho_rlc}")
+            cells += (f"; RLF on (Qout {c.rlf_qout_db:g} / Qin {c.rlf_qin_db:g} dB, T310 {c.t310_ms:g} ms)"
+                      if c.rlf else "; RLF off")
+        if c.gnb_antenna == "sector":
+            cells += (f"; sector {c.gnb_antenna_gain_dbi:g} dBi, azimuths {_fmt(tuple(c.cell_azimuths()))} deg, "
+                      f"tilt {_fmt(tuple(c.cell_tilts()))} deg")
+        row(("Cells", cells))
+        acc = []
+        acc.append(f"RACH every {c.rach_occasion_slots} slots, {c.rach_preambles} preambles, start {c.rach_initial}"
+                   if c.rach else "RACH off")
+        acc.append(f"DRX cycle {c.drx_cycle_ms:g} ms, on {c.drx_on_ms:g} ms, inactivity {c.drx_inactivity_ms:g} ms"
+                   if c.drx else "DRX off")
+        row(("Access", ", ".join(acc)))
+        if c.traffic is None:
+            tr = "policy messages only (submit)"
+        else:
+            tr = "; ".join(_traffic_text(m) for m in c.traffic)
+        row(("Traffic", tr))
+        row(("Application", f"frame buffer {c.frame_buffer}, timeout {c.timeout_steps} steps "
+                            f"({c.timeout_steps * c.control_step_ms:g} ms), msg sizes {_fmt(c.msg_sizes)} B"))
+        wr = [f"edge {'off' if c.edge is None else _fmt(c.edge)}",
+              f"energy {'off' if c.energy is None else _fmt(c.energy)}",
+              f"background {'off' if c.background is None else _fmt(c.background)}"]
+        row(("Wrappers", "; ".join(wr)))
+        row(("Randomness", f"rng {c.rng}, seed {c.seed}"))
+        # ---- backends and field checks
+        lines = []
+        width = max(len(k) for k, _ in rows)
+        title = f"NRConfig summary (level {level})"
+        lines += [title, "=" * len(title)]
+        lines += [f"{k:<{width}}  {v}" for k, v in rows]
+        lines.append("")
+        bl = _backend_lines(c, level, backend)
+        lines.append(f"{'Backends':<{width}}  {bl[0]}")
+        lines += [f"{'':<{width}}  {x}" for x in bl[1:]]
+        lines.append("")
+        changed = self.diff(NRConfig())
+        lines.append(f"Fields set away from their defaults ({len(changed)}):")
+        if changed:
+            fw = max(len(k) for k in changed)
+            lines += [f"  {k:<{fw}}  {_fmt(v)}   (default {_fmt(d)})" for k, (v, d) in changed.items()]
+        else:
+            lines.append("  none (NRConfig())")
+        unused = self.unused_fields(level)
+        lines.append("")
+        if unused:
+            lines.append(f"WARNING: level {level} ignores {len(unused)} field(s) set here: {', '.join(unused)}")
+            lines.append("  (NRConfig.unused_fields; make_engine warns about them, strict=True raises)")
+        else:
+            lines.append(f"Unused fields: none (level {level} reads every field set here)")
+        return "\n".join(lines)
 
     def with_(self, **kw):
         """A copy of this config with the given fields replaced (dataclasses.replace). An explicit

@@ -22,6 +22,10 @@ Backends
   L2 (NR engine)                      "reference" (= "eager"), "graph" (CUDA graphs of the reference step, bitwise
                                       equal to it) and "triton" (fused UL slot kernel, equal to rounding); the fast
                                       ones need CUDA and rng="engine" (the default). See nr_fast.py.
+  "auto"                              make_engine picks one (resolve_backend): triton for L2 when CUDA and triton are
+                                      available and NRTritonEngine.refusals(config) is empty, else graph on CUDA, else
+                                      reference; one INFO line on the "isaac_net" logger says which and why. Not the
+                                      default: backend="reference" stays the default of make_engine.
 
 Every engine returned here has the contract API of ARCHITECTURE.md:
   reset(env_ids=None)                 partial reset: None, index tensor, list or bool mask [E]
@@ -36,12 +40,15 @@ raises if the config asks for them (see _check_traffic).
 """
 from __future__ import annotations
 
+import importlib.util
+import logging
 import math
+import warnings
 
 import torch
 
 from .channels import install_per_robot_fading, rho_per_ms_from_speed
-from .config import NRConfig
+from .config import NRConfig, UnusedFieldsWarning
 from .levels import BOUND_LEVELS, SURROGATE_LEVELS, fit_app, make_level
 from .nr_engine import NRNet
 from .proto import netsim as _proto
@@ -55,6 +62,55 @@ LEVELS = SIM_LEVELS + SURROGATE_LEVELS + BOUND_LEVELS
 WIFI_LEVELS = ("WIFI",)                  # 802.11 uplink (core/wifi, docs/wifi.md)
 FAST_BACKENDS = ("eager", "graph", "compile", "triton")
 BACKENDS = ("reference",) + FAST_BACKENDS
+AUTO_BACKEND = "auto"                    # make_engine(..., backend="auto"): resolve_backend picks one of BACKENDS
+
+log = logging.getLogger("isaac_net")
+_WARNED_UNUSED = set()                   # (level, unused fields and their values) already warned about
+
+
+def resolve_backend(level, config: NRConfig | None = None, device="cpu"):
+    """(backend, reason) that make_engine(..., backend="auto") uses for this level, config and device.
+
+    L2: "triton" when the device is CUDA, the triton package is installed and NRTritonEngine.refusals(config) is
+    empty (and nothing else forbids it: rng="global", a DL load share of the background, an edge return path through
+    the NR downlink); else "graph" on CUDA (bitwise equal to the reference); else "reference". Other levels: "graph"
+    on CUDA (bitwise equal to their reference; the multi-cell NetSlotMC of L2-legacy has only "reference"), else
+    "reference". reason is a short text for the log line."""
+    cfg = config if config is not None else NRConfig()
+    dev = torch.device(device)
+    if dev.type != "cuda":
+        return "reference", f"device {dev} is not CUDA"
+    if not torch.cuda.is_available():
+        return "reference", "CUDA is not available"
+    if level == "L2":
+        if cfg.rng != "engine":
+            return "reference", "rng='global' (graph and triton need rng='engine')"
+        if cfg.edge is not None and cfg.edge.return_path == "nr_dl":
+            return "reference", "EdgeConfig(return_path='nr_dl') runs on the reference backend only"
+        from .nr_fast import NRTritonEngine
+        why = [f.split(" (")[0] for f, _ in NRTritonEngine.refusals(cfg)]
+        bg = cfg.background
+        if bg is not None and getattr(bg, "dl_load_frac", 0.0) > 0:
+            why.append("background dl_load_frac")
+        if why:
+            return "graph", "triton refuses " + ", ".join(why)
+        if importlib.util.find_spec("triton") is None:
+            return "graph", "the triton package is not installed"
+        return "triton", "triton accepts this config"
+    if level == "L2-legacy" and not cfg.is_legacy_cell():
+        return "reference", "the multi-cell / thermal-noise NetSlotMC has only the reference backend"
+    return "graph", f"graph is bitwise equal to the reference of level {level}"
+
+
+def _warn_unused(level, cfg: NRConfig, unused):
+    """One UnusedFieldsWarning per (level, unused fields with their values) and process."""
+    key = (level, tuple((f, repr(getattr(cfg, f))) for f in unused))
+    if key in _WARNED_UNUSED:
+        return
+    _WARNED_UNUSED.add(key)
+    warnings.warn(f"level {level} ignores these config fields set away from their defaults: {', '.join(unused)} "
+                  "(NRConfig.unused_fields, docs/configurability.md). make_engine(..., strict=True) raises instead, "
+                  "strict=None skips this check.", UnusedFieldsWarning, stacklevel=4)
 
 
 def _proto_app(cfg: NRConfig):
@@ -96,12 +152,26 @@ def _level_params(level, cfg: NRConfig, params):
 
 
 def _edge_wrapped(factory):
-    """make_engine returns EdgeLoop(engine) when the config sets `edge` (NRConfig(edge=EdgeConfig(...)))."""
+    """make_engine returns EdgeLoop(engine) when the config sets `edge` (NRConfig(edge=EdgeConfig(...))). It also emits
+    the unused-field warning (strict=False) once the level accepted the config, so a refused config only raises."""
     import functools
+    import inspect
+    sig = inspect.signature(factory)
 
     @functools.wraps(factory)
     def make(*args, **kw):
         net = factory(*args, **kw)
+        a = sig.bind(*args, **kw)
+        a.apply_defaults()
+        if a.arguments["strict"] is False:
+            level, cfg = a.arguments["level"], a.arguments["config"] or NRConfig()
+            if level in WIFI_LEVELS:
+                from .wifi.engine import unused_wifi_fields
+                unused = unused_wifi_fields(cfg)
+            else:
+                unused = cfg.unused_fields(level)
+            if unused:
+                _warn_unused(level, cfg, unused)
         cfg = getattr(net, "config", None)
         if cfg is not None and getattr(cfg, "edge", None) is not None:
             from .edge import EdgeLoop
@@ -121,6 +191,11 @@ def _bgenergy_wrapped(factory):
     def make(*args, **kw):
         a = sig.bind(*args, **kw)
         a.apply_defaults()
+        if a.arguments["backend"] == AUTO_BACKEND:      # resolved once here, with the full config (wrappers included)
+            b, why = resolve_backend(a.arguments["level"], a.arguments["config"], a.arguments["device"])
+            log.info("backend=auto -> %s: %s", b, why)
+            a.arguments["backend"] = b
+            args, kw = a.args, a.kwargs
         p = dict(a.arguments)
         cfg = p["config"] if p["config"] is not None else NRConfig()
         bg, en = getattr(cfg, "background", None), getattr(cfg, "energy", None)
@@ -168,9 +243,12 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
       with "global", reset draws use the engine generator and stepping draws the global torch RNG. The NR engine
       (L2) keys its slot draws and, with "engine", its radio (RadioMC) draws by (seed, env id, episode) as well;
       only traffic models (TrafficGen) still use one generator per engine.
+    backend: "reference" (default), a fast backend (BACKENDS), or "auto": resolve_backend picks triton, graph or
+      reference for this level, config and device and logs its choice (INFO, logger "isaac_net").
     inject: fast backends only, take the per-slot random draws from set_noise(...) (equivalence tests).
-    strict: raise if the config sets fields away from their defaults that this level ignores
-      (config.unused_fields(level)); by default they are ignored silently.
+    strict: fields set away from their defaults that this level ignores (config.unused_fields(level)): False (default)
+      emits one UnusedFieldsWarning per level and set of such fields per process, True raises ValueError, None skips
+      the check silently (the behavior before the warning).
     L0, L0DR and L1 without params take them from the config (l0_*, dr_*, l1_eta; defaults = earlier behavior).
     config.edge (an EdgeConfig) wraps the engine in core.edge.EdgeLoop: same API, plus the edge-loop step keys.
     """
@@ -178,8 +256,10 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
         raise ValueError(f"unknown level {level!r}; one of {LEVELS + WIFI_LEVELS}")
     if backend in ("orig", "ref"):
         backend = "reference"
+    if backend == AUTO_BACKEND:              # only reached when called through a path that skipped the wrapper
+        backend = resolve_backend(level, config, device)[0]
     if backend not in BACKENDS:
-        raise ValueError(f"unknown backend {backend!r}; one of {BACKENDS}")
+        raise ValueError(f"unknown backend {backend!r}; one of {BACKENDS + (AUTO_BACKEND,)}")
     cfg = config if config is not None else NRConfig()
     if sizes is not None:
         cfg = cfg.with_(msg_sizes=tuple(float(s) for s in sizes))
@@ -189,7 +269,7 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
                          "gates the NR engine's MAC; use level 'L2'")
     if level in WIFI_LEVELS:
         from .wifi.engine import make_wifi_level
-        return make_wifi_level(E, R, device, cfg, backend, seed=seed, inject=inject, strict=strict)
+        return make_wifi_level(E, R, device, cfg, backend, seed=seed, inject=inject, strict=bool(strict))
     if strict and cfg.unused_fields(level):
         raise ValueError(f"level {level} ignores these config fields: {', '.join(cfg.unused_fields(level))} "
                          "(see NRConfig.unused_fields and docs/configurability.md)")
