@@ -28,6 +28,8 @@ Placement (DirectRLEnv.step on release/3.0.0): _pre_physics_step -> decimation x
 net_step belongs in _get_dones, the first post-physics hook, so it sees the pre-reset queues and the END-of-step
 poses. Frames are captured at the start-of-step pose (read it in _pre_physics_step), so a message captured at
 env clock t reflects the world at t, and its delay and the AoI are not optimistic by one control step.
+Viewport overlays: net_setup(..., markers=NetMarkersCfg()) draws the links, gNBs, AoI and access state after every
+network step (isaac/markers.py); headless it costs nothing.
 The module needs no Isaac imports; the only Isaac-specific piece is `rigid_positions_local`.
 """
 from __future__ import annotations
@@ -56,14 +58,16 @@ def rigid_positions_local(collection, env_origins: torch.Tensor, body_ids=None) 
 class NetEnvMixin:
     net: Optional[NetModule] = None
     net_out: Optional[dict] = None
+    net_markers = None
 
     def net_setup(self, level, num_robots: Optional[int] = None, config=None, backend: str = "reference",
-                  isaac: Optional[IsaacNetCfg] = None, **kwargs):
+                  isaac: Optional[IsaacNetCfg] = None, markers=None, **kwargs):
         """Build the network for this env batch; call inside _setup_scene.
 
         level: None or "off" (ideal link, no network features), or a make_engine level ("L0", "L0DR", "L1",
         "L2-legacy", "L2", ...). config: NRConfig. backend: "reference" | "eager" | "graph" | "compile" |
-        "triton". isaac: IsaacNetCfg. kwargs go to NetModule (params, seed, strict, ranges, and IsaacNetCfg
+        "triton". isaac: IsaacNetCfg. markers: a NetMarkersCfg (or True) for viewport overlays, inert when
+        headless (isaac/markers.py). kwargs go to NetModule (params, seed, strict, ranges, and IsaacNetCfg
         fields as shortcuts). A NetConfig (deprecated) is also accepted as `level`.
         """
         self.net_out = None
@@ -71,6 +75,7 @@ class NetEnvMixin:
         self._net_R = num_robots
         self._net_cfg = config
         self._net_tick = 0
+        self.net_markers = None
         if level is None or level == "off":
             self.net = None
             return
@@ -89,6 +94,9 @@ class NetEnvMixin:
         E, R = self.net.E, self.net.R
         self._pend_send = torch.zeros(E, R, dtype=torch.long, device=self.net.dev)
         self._pend_tag = torch.full((E, R), -1, dtype=torch.long, device=self.net.dev)
+        if markers is not None and markers is not False:
+            from .markers import make_markers
+            self.net_markers = make_markers(self, self.net, markers)
 
     def _net_check_rate(self):
         """network control step == env control step * net_decimation / net_substeps."""
@@ -120,9 +128,15 @@ class NetEnvMixin:
         NetModule output dict, or None without a network."""
         if self.net is None:
             return None
-        net, c = self.net, self.net.isaac
         if poses_end is None:
             poses_end = self.net_poses()
+        out = self._net_step(poses_end, send, tag, cur_tag, blocked_fn)
+        if self.net_markers is not None:
+            self.net_markers.update(poses_end, out)
+        return out
+
+    def _net_step(self, poses_end, send, tag, cur_tag, blocked_fn):
+        net, c = self.net, self.net.isaac
         if send is None:
             send = torch.zeros(net.E, net.R, dtype=torch.long, device=net.dev)
         if tag is None:

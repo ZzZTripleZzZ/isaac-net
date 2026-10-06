@@ -156,6 +156,117 @@ With `radio="engine"` no radio key is honored, because the engine radio has one 
 
 **Validation of the configuration layer (2026-09-29, Windows install, SYSTEM tasks).** `tests/test_isaac_config.py` (obs_dim against every feature, the normalization feature by feature, reset zeroing, delay keys into `NRConfig`, `dr_support` against `NRConfig.unused_fields`, radio and cell-placement draws at reset and at an interval, blockage switches, the mixin's pose source and both multi-rate modes) and `tests/test_isaac_layer.py` pass (30 passed, the long GPU NR case deselected). The Isaac-marked tests are now 12, and all pass: the 9 earlier cases, a replay check inside Isaac with every observation feature and network domain randomization (the 44 feature columns and the per-env radio parameters equal the reference replay with zero difference), and bench smoke runs of `net_decimation = 5` (env step 20 ms) and `net_substeps = 2` (env step 200 ms). A 5-iteration PPO run at 256 × 16 with `--obs aoi,sinr,queue_len,delay_history,serving_cell --dr` finished in 7.4 s. The README quick start, run verbatim afterwards, exited 0 on every command. Its benchmark row (256 × 16, L2-legacy `triton`) gave 22.6 control steps/s and 5.5 ms of network per step with the GPU at 71–78% utilization from other jobs, and the PPO smoke run took 9.2 s.
 
+## Train the registered task
+
+`isaac_net.isaac.tasks` registers the tasks below with gymnasium in the layout of `isaaclab_tasks`: an `entry_point`, `disable_env_checker=True`, and `env_cfg_entry_point`, `rsl_rl_cfg_entry_point`, `skrl_cfg_entry_point` and `default_agent="rsl_rl"` in the kwargs. Importing the package imports nothing from Isaac Lab, because every entry point is a `"module:attr"` string resolved when the task is built.
+
+| Task id | Env | Network |
+|:---|:---|:---|
+| `Isaac-NetFleet-Direct-v0` | `NetFleetEnv`, 1,024 envs × 16 robots | `L2-legacy` on `graph` |
+| `Isaac-NetFleet-Direct-L0-v0` | the same | `L0`: independent lognormal delays without contention, the delay baseline |
+| `Isaac-NetFleet-Direct-Warehouse-v0` | `WarehouseFleetEnv`, 64 envs × 16 robots in Isaac Lab's warehouse (Nucleus asset) | NR engine `L2` on `reference` with two cells and the engine's log-distance radio, no baked radio map |
+| `Isaac-NetFleet-Manager-v0` | `ManagerBasedRLEnv` built with `NetManagerCfg` (see [Manager-based workflow](#manager-based-workflow)): a static fleet that learns when to send | `L2-legacy` on `graph` |
+
+The rsl_rl configuration (`tasks/agents/rsl_rl_ppo_cfg.py`) is the one `benchmarks/isaac/train_ppo.py` ran with: 256-128 ELU MLPs with observation normalization, 24 steps per env per iteration and an adaptive learning rate. The skrl configuration (`tasks/agents/skrl_ppo_cfg.py`) has the same network and PPO settings, written as functions that return the dict Isaac Lab reads from its skrl YAML files, so no package data is needed.
+
+Isaac Lab 3.0's train script imports only `isaaclab_tasks`, so the registration has to reach it in one of two ways. The rsl_rl backend takes `--external_callback`, a function it calls before it reads the task metadata, and the callback `isaac_net.isaac.tasks.register` imports the package and registers the ids. For every library, including skrl, `python -m isaac_net.isaac.tasks.train` does what `scripts/reinforcement_learning/train.py` does after importing the package, and it takes the same arguments. Run either from the Isaac Lab checkout, where logs go to `logs/<library>/<experiment>`. Windows (PowerShell, after `. C:\isaac5g\env.ps1` and `uv pip install --no-deps -e .` in this repository):
+
+```powershell
+cd C:\isaac5g\IsaacLab
+isaaclab train --rl_library rsl_rl --task Isaac-NetFleet-Direct-v0 --external_callback isaac_net.isaac.tasks.register --num_envs 1024 --max_iterations 300
+python scripts\reinforcement_learning\train.py --rl_library rsl_rl --task Isaac-NetFleet-Direct-v0 --external_callback isaac_net.isaac.tasks.register
+python -m isaac_net.isaac.tasks.train --rl_library skrl --task Isaac-NetFleet-Direct-L0-v0 --num_envs 1024 --max_iterations 50
+python -m isaac_net.isaac.tasks.train --task Isaac-NetFleet-Manager-v0 --num_envs 1024     # rsl_rl, the default agent
+python -m isaac_net.isaac.tasks.train --play --rl_library rsl_rl --task Isaac-NetFleet-Direct-v0 --num_envs 16 --checkpoint latest --viz kit
+```
+
+Linux uses the same commands with `/` in the paths. Three details differ from older Isaac Lab tutorials:
+
+- Isaac Lab 3.0 runs headless by default and has no `--headless` flag. An unknown flag is passed on to Hydra, which rejects it, so leave it out. `--viz kit` opens a viewport.
+- With `--external_callback`, pass `--rl_library` explicitly. The selector reads the default library before the callback has registered the task. `python -m isaac_net.isaac.tasks.train` registers first, so `default_agent` applies there.
+- The registered configs take their physics backend from `ISAAC_NET_PHYSICS` (`isaacsim_physx` by default, `ovphysx`, `newton`), as `make_cfg` does. They do not declare Isaac Lab physics presets, so the `physics=` selector fails on them. Leave it out.
+
+Command-line overrides reach the env config through Isaac Lab's `env.` prefix, for example `env.num_robots=32 env.net_level=L1 env.net_backend=triton`. `NetFleetEnv.__init__` calls `finalize_fleet_cfg`, which rebuilds the scene when `num_robots` changed and sizes the action and observation spaces from the robot count and `IsaacNetCfg.obs_features`.
+
+## Manager-based workflow
+
+`NetManagerCfg(...).apply(env_cfg)` puts the network into a `ManagerBasedRLEnvCfg` in one call. Call it at the end of `__post_init__`, after `decimation` and `sim.dt` are set: without an `NRConfig` it sets the network step to the env step, and when the network is built the step is checked against the env step as in the Direct mixin:
+
+```python
+from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.utils import configclass
+from isaac_net import NRConfig
+from isaac_net.isaac import IsaacNetCfg, NetManagerCfg, NetMarkersCfg
+
+@configclass
+class MyEnvCfg(ManagerBasedRLEnvCfg):
+    ...                                         # scene with a "robots" asset, observations.policy, actions, ...
+
+    def __post_init__(self):
+        self.decimation, self.sim.dt = 5, 1 / 50            # env step 0.1 s
+        NetManagerCfg(level="L2-legacy", backend="graph",
+                      nr=NRConfig(msg_sizes=(4000.0, 30000.0), control_step_ms=100.0),
+                      isaac=IsaacNetCfg(pose_asset="robots", gnb_pos=((0.0, 0.0, 6.0),)),
+                      obs_terms=("net_aoi", "net_sinr", "net_queue", "net_delivered"),
+                      aoi_weight=-1.0, send_action=True, markers=NetMarkersCfg()).apply(self)
+```
+
+`apply` stores the `NetManagerCfg` as `env_cfg.isaac_net` and adds these terms next to the existing ones. The env cfg holds it rather than the scene cfg, because `InteractiveScene` treats every scene attribute as an asset.
+
+| Manager | Term | Function |
+|:---|:---|:---|
+| terminations | `net_step` (placed first, never ends an episode) | `mdp.net_step_done(env)` |
+| events | `net_reset`, mode `"reset"` | `mdp.net_reset(env, env_ids)` forwards the reset env ids |
+| observations | one term per name in `obs_terms`, in the group `obs_group` | `func(env, asset_cfg=None) -> [E, R·k]` |
+| rewards | `net_aoi` with weight `aoi_weight` (skipped with `None`) | `mdp.net_aoi_penalty(env)` |
+| actions | `net_send` (with `send_action=True`) | `NetSendActionCfg`: one channel per robot, bucketed into none, class 1, ..., class `send_classes` |
+
+The observation terms use the normalization of the Direct env and observe zeros until an env's first network step after a reset. Per-robot values are robot-major, and `asset_cfg.body_ids` selects robots when it is a list:
+
+| Term | Width per robot | Value |
+|:---|---:|:---|
+| `net_aoi` | 1 | age of information divided by the time scale, clamped to [0, 1] |
+| `net_delivered` | 1 | at least one message of the robot was delivered this step |
+| `net_delay` | 1 | delay of the newest message delivered this step divided by the time scale |
+| `net_queue` | 1 | queued messages divided by the frame buffer |
+| `net_sinr` | 1 | SINR in dB divided by 40 |
+| `net_los` | 1 | line of sight to the serving gNB |
+| `net_access_state` | 5 | one-hot idle, RACH, connected and DRX-dormant, then a radio-link-failure flag. It needs `NRConfig(rach=True)`, DRX or RLF at level `L2`, and without them every robot reads as connected |
+
+`mdp.net_send_cost` is a second reward term, the fraction of robots that sent in the last step. The network itself is `env.isaac_net`, a `NetRuntime` that binds `NetEnvMixin` to the manager-based env, so both workflows run the same multi-rate, pose-source and overlay code. The terms build it on first use from `env_cfg.isaac_net`. The first use is the observation manager probing the term shapes, which happens after the scene exists and the simulation has been reset. A custom env can also call `isaac_net.isaac.mdp.net_setup(env, level, num_robots, nr, backend, isaac=...)` itself. Without a send action, every robot sends a message of class `traffic_class` every `traffic_period` network steps, so AoI and delay are defined for any task. A task can also write the classes of a step with `env.isaac_net.write_send(send)`. [`isaac_net/examples/isaac_manager_fleet_env.py`](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/isaac_net/examples/isaac_manager_fleet_env.py) is the complete example behind `Isaac-NetFleet-Manager-v0`.
+
+**Where the network step runs.** After physics, `ManagerBasedRLEnv.step` (Isaac Lab 3.0) computes the terminations, then the rewards, then resets the finished envs (the `"reset"` events), then applies the `"interval"` events, and last computes the observations. The network must step after physics, because it needs the end-of-step poses, and before the observations. The termination manager is the first post-physics stage. A network step placed there sees the end-of-step poses and the queues before any reset, the rewards read the fresh output, the resets clear it for finished envs, and the observations see the result. The Direct mixin runs `net_step` in `_get_dones` for the same reason, because `DirectRLEnv.step` calls `_get_dones`, `_get_rewards`, `_reset_idx` and `_get_observations` in that order. `NetManagerCfg(placement="interval")` uses the event term `mdp.net_step` in `"interval"` mode instead, with `interval_range_s = (step_dt, step_dt)` and `is_global_time=True`, so it runs once per env step. Interval events run after the rewards and the resets, however, so the reward then reads the previous step's network output, and a reset env takes one network step from its new pose before its first observation. `NetRuntime.step` runs at most once per env step, so placing it twice does not step the network twice.
+
+## Viewport overlays
+
+`NetMarkers` (`isaac_net/isaac/markers.py`) draws the network state in the viewport. It is enabled with `net_setup(..., markers=NetMarkersCfg())` in a Direct env, the `net_markers` field of the fleet env cfgs, or `NetManagerCfg(markers=NetMarkersCfg())`:
+
+- a line from every robot to its serving gNB, coloured by the SINR of the step in five bins (below 0 dB red, 0–5 dB orange, 5–10 dB yellow, 10–20 dB light green, 20 dB and above green). Links whose line of sight is blocked are dimmer and dashed.
+- a mast at every gNB with a translucent coverage disc. The disc radius is where the nominal SNR of the radio's path-loss law falls to `coverage_snr_db`, without shadowing. With the Isaac radio it follows the per-env parameters, so network domain randomization moves and resizes the discs.
+- a vertical bar above every robot. Its height grows linearly with the age of information up to `aoi_bar_height_m` at `aoi_max_s`, and its colour is one of five AoI bins.
+- a sphere above every robot that is idle, in random access, DRX-dormant or in radio link failure. These need the access model of level `L2`, and nothing is drawn without it.
+
+<!-- ![Viewport overlays of the fleet env](img/isaac_markers.png) -->
+
+*Screenshot to come: `docs/img/isaac_markers.png`, taken on the lab box with `python -m isaac_net.examples.isaac_markers_demo --task Isaac-NetFleet-Direct-v0 --num_envs 4 --viz kit`. Uncomment the image line above once the file exists.*
+
+All shapes are prototypes of one `isaaclab.markers.VisualizationMarkers` (21 cylinders and spheres, sized through the instance scale, quaternions in Isaac Lab 3.0's x, y, z, w order), so they work in the Kit viewport and in the Newton visualizers. With `line_backend="debug_draw"` the links are drawn through the Kit debug-draw interface (`isaacsim.util.debug_draw`) instead, which shows them only in the Kit viewport. The geometry is computed in torch on the network's device (`isaac_net/isaac/marker_geometry.py`) every `update_every` env steps, for the envs in `env_ids` (by default the first `max_envs`, 4), and moved to the host in one copy. When nothing displays the stage, `NetMarkers` is inert: no GUI, no visualizer and no offscreen rendering, which is the default headless run. Its `update` then returns at once, so nothing is computed or transferred and nothing from Isaac Lab is imported.
+
+| `NetMarkersCfg` field | Default | Meaning |
+|:---|:---|:---|
+| `enable`, `links`, `gnbs`, `coverage`, `aoi`, `states` | `True` | what is drawn |
+| `env_ids`, `max_envs` | `None`, 4 | envs drawn |
+| `update_every` | 1 | redraw interval in env steps |
+| `line_backend` | `"markers"` | `"markers"` (cylinders) or `"debug_draw"` (Kit lines) |
+| `sinr_edges_db`, `sinr_colors` | 0, 5, 10, 20 dB; red to green | the 5-bin SINR colormap |
+| `aoi_edges_s`, `aoi_colors`, `aoi_max_s`, `aoi_bar_height_m` | 0.2, 0.5, 1, 2 s; green to red; 5 s; 2 m | the AoI bars |
+| `nlos_dim`, `nlos_dashes` | 0.35, 4 | blocked links: colour factor and dashes per link |
+| `coverage_snr_db`, `coverage_opacity` | 0 dB, 0.12 | coverage discs |
+
+`python -m isaac_net.examples.isaac_markers_demo --task <id> --num_envs 4 --seconds 30 --viz kit` runs any registered task with the overlays on and random actions, and prints the env steps and the number of overlay instances every second.
+
+**Tests.** `tests/test_isaac_ux.py` checks the parts that need no Isaac Lab on a CPU: the registration metadata (ids, entry points defined in their modules, the skrl dicts, the external-callback contract), every manager term against a fake env that holds a real `NetModule`, the overlay geometry from synthetic inputs (link end points, colour bins, dashes, AoI bar heights, coverage radius against the radio, the single host copy), and that the overlays are inert when headless. Its Isaac-marked cases run `tests/scripts/isaac_tasks_check.py`, which builds the registered tasks with `gym.make`, overlays on, steps them and draws one forced overlay frame. Those cases still have to be run on the lab box.
+
 ## Next steps
 
 The open items are shorter startup (`clone_in_fabric=True`, one multi-instance asset per env, a Newton backend or a pure-tensor pose integrator for the planar robots), a per-robot parameter-shared policy wrapper that reshapes observations and actions to `[E·R, 12]` and `[E·R, 3]` because a centralized MLP does not scale to R = 128, a downlink `NetModule` that gates commands in `_pre_physics_step`, and a benchmark of the line-of-sight blockage path (`segment_sphere_blocked`, cost O(E · R · G · (R + M)) per pose chunk, with the Warp mesh kernel suggested for R ≥ 64).

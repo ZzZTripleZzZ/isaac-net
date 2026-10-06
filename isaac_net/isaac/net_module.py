@@ -68,6 +68,7 @@ FAST_BACKENDS = ("eager", "graph", "compile", "triton")
 BACKENDS = ("reference",) + FAST_BACKENDS
 # levels compiled around the fixed legacy radio: with the Isaac radio they get these NRConfig fields at default
 _LEGACY_RADIO_LEVELS = ("L1", "L2-legacy", "QA")
+_PASSTHROUGH = ("access_state", "access_sleep_frac", "rach_attempts", "rlf")
 _LEGACY_CELL_FIELDS = ("cell_layout", "cell_positions_m", "noise_model", "ni_fixed_dbm", "ue_tx_dbm", "pl_const_db",
                        "pathloss_exp", "shadow_sigma_db", "shadow_modes")
 
@@ -297,6 +298,9 @@ class NetModule:
                                     interference; los = the engine radio's LOS state of the serving link, or
                                     ~blocked when the radio has none)
           tag_delivered [E] bool    if cur_tag is given
+          access_state [E,R] long, access_sleep_frac [E,R], rach_attempts [E,R], rlf [E,R] bool
+                                    passed through from the NR engine when it reports them (core/access.py:
+                                    NRConfig rach / drx; core/radio.py: rlf with several cells)
           msg_delivered, timed_out [E,R,F] bool, cap, cls [E,R,F] long, delay_s [E,R,F] float (NaN if not
           delivered), t [E] long    per message slot as queued before the step, from the engine
         """
@@ -355,6 +359,9 @@ class NetModule:
         )
         if cur_tag is not None:
             out["tag_delivered"] = o["det_env"] & (cur_tag >= 0)
+        for k in _PASSTHROUGH:                       # access state machine and RLF of the NR engine (level L2)
+            if k in o:
+                out[k] = o[k]
         self.obs_features.update(out)
         return out
 

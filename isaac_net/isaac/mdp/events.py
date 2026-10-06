@@ -1,4 +1,14 @@
-"""EventTerm functions for network domain randomization (modes 'reset' or 'interval').
+"""EventTerm functions: network step and reset for the manager-based workflow, and network domain randomization.
+
+    from isaaclab.managers import EventTermCfg as EventTerm
+    net_reset = EventTerm(func=net_mdp.net_reset, mode="reset")
+    net_step = EventTerm(func=net_mdp.net_step, mode="interval", interval_range_s=(dt, dt), is_global_time=True)
+
+net_reset forwards the env_ids of the reset to env.isaac_net (isaac/runtime.py). net_step in "interval" mode with
+interval_range_s = (step_dt, step_dt) and is_global_time=True runs once per env step, but interval events run after
+the rewards and after the resets of finished envs: rewards then read the previous step's network output, and a
+reset env takes one network step from its post-reset pose before its first observation. The termination term
+net_step_done (terminations.py) avoids both and is what NetManagerCfg uses by default (placement="termination").
 
 The simplest route needs no EventTerm: IsaacNetCfg.dr_ranges with dr_mode "reset" or "interval" makes the NetModule
 redraw the parameters itself (see isaac/config.py and docs/isaac-lab.md). randomize_network is the same draw as an
@@ -23,8 +33,25 @@ def randomize_network(env, env_ids: torch.Tensor | None, ranges: dict[str, tuple
     """
     net = getattr(env, "net", None)
     if net is None:
+        rt = getattr(env, "isaac_net", None)
+        net = getattr(rt, "net", None)
+    if net is None:
         return
     if ranges is None:
         net.randomize(env_ids)
     else:
         net.sample_params(env_ids, ranges)
+
+
+def net_step(env, env_ids=None):
+    """Event term: one network step of env.isaac_net (env_ids is ignored: every env steps)."""
+    from ..runtime import get_runtime
+    get_runtime(env).step()
+
+
+def net_reset(env, env_ids=None):
+    """Event term (mode "reset"): partial reset of env.isaac_net for env_ids (None or a slice: all envs)."""
+    from ..runtime import get_runtime
+    if isinstance(env_ids, slice):
+        env_ids = None
+    get_runtime(env).reset(env_ids)

@@ -42,6 +42,7 @@ from isaaclab_physx.sim.schemas import PhysxRigidBodyCfg
 
 from isaac_net import NRConfig
 from isaac_net.isaac import IsaacNetCfg
+from isaac_net.isaac.marker_geometry import NetMarkersCfg
 from isaac_net.isaac.mixins import NetEnvMixin, rigid_positions_local
 
 ARENA = 150.0
@@ -108,6 +109,7 @@ class NetFleetEnvCfg(DirectRLEnvCfg):
     net_nr: NRConfig | None = None                # None: net_config(step of the network)
     net_isaac: IsaacNetCfg | None = None          # None: fleet_isaac_cfg()
     net_seed: int | None = None                   # engine and radio generators (reset draws); None = random
+    net_markers: NetMarkersCfg | None = None      # viewport overlays (isaac/markers.py); inert when headless
 
 
 def fleet_isaac_cfg(**kw) -> IsaacNetCfg:
@@ -157,6 +159,31 @@ def make_cfg(num_envs: int, num_robots: int, level: str, device: str = "cuda:0",
     return cfg
 
 
+def scene_robot_count(scene_cfg) -> int | None:
+    """Robots in a fleet scene cfg (entries of its "robots" collection), None if it has none."""
+    robots = getattr(scene_cfg, "robots", None)
+    objs = getattr(robots, "rigid_objects", None)
+    return len(objs) if objs is not None else None
+
+
+def finalize_fleet_cfg(cfg: NetFleetEnvCfg, num_envs: int | None = None) -> NetFleetEnvCfg:
+    """Make a NetFleetEnvCfg consistent after its fields were set or overridden (registered tasks, Hydra
+    overrides such as env.num_robots=32 or env.net_isaac): build the scene for cfg.num_robots if it is missing or
+    holds another number of robots (keeping its num_envs), and size the action and observation spaces from the
+    robot count and the network features. Idempotent; NetFleetEnv.__init__ calls it."""
+    if cfg.scene is None or scene_robot_count(cfg.scene) != cfg.num_robots:
+        E = num_envs if num_envs is not None else (cfg.scene.num_envs if cfg.scene is not None else 64)
+        cfg.scene = make_scene_cfg(cfg.num_robots, E)
+    elif num_envs is not None:
+        cfg.scene.num_envs = num_envs
+    isaac = cfg.net_isaac or fleet_isaac_cfg()
+    nr = cfg.net_nr or net_config(cfg.sim.dt * cfg.decimation * isaac.net_decimation / isaac.net_substeps)
+    per_robot = TASK_OBS + isaac.obs_dim(nr)          # level "off" observes zeros of the same width
+    cfg.action_space = cfg.num_robots * 3
+    cfg.observation_space = cfg.num_robots * per_robot
+    return cfg
+
+
 def net_config(step_dt: float) -> NRConfig:
     """The network configuration of the task: T1 frame sizes, 16-frame buffer, 2 s timeout, one gNB. step_dt is
     the network control step."""
@@ -166,6 +193,16 @@ def net_config(step_dt: float) -> NRConfig:
 class NetFleetEnv(NetEnvMixin, DirectRLEnv):
     cfg: NetFleetEnvCfg
 
+    def __init__(self, cfg: NetFleetEnvCfg, render_mode: str | None = None, **kwargs):
+        # gym.make(task, cfg=...) passes the registered cfg after command-line overrides: re-derive the scene and
+        # spaces from num_robots and the network features (finalize_fleet_cfg)
+        self._finalize_cfg(cfg)
+        super().__init__(cfg, render_mode, **kwargs)
+
+    @staticmethod
+    def _finalize_cfg(cfg):
+        finalize_fleet_cfg(cfg)
+
     # ---------------------------------------------------------------- setup
     def _setup_scene(self):
         E, R, dev = self.scene.num_envs, self.cfg.num_robots, self.device
@@ -174,7 +211,7 @@ class NetFleetEnv(NetEnvMixin, DirectRLEnv):
         isaac = self.cfg.net_isaac or fleet_isaac_cfg()
         step_dt = self.cfg.sim.dt * self.cfg.decimation * isaac.net_decimation / isaac.net_substeps   # network step
         self.net_setup(self.cfg.net_level, R, self.cfg.net_nr or net_config(step_dt), self.cfg.net_backend,
-                       isaac=isaac, seed=self.cfg.net_seed)
+                       isaac=isaac, seed=self.cfg.net_seed, markers=getattr(self.cfg, "net_markers", None))
         self._rng = torch.tensor(RANGE, device=dev)
         self._pdet = torch.tensor(PDET, device=dev)
         self.tt = torch.zeros(E, dtype=torch.long, device=dev)            # per-env control-step clock
