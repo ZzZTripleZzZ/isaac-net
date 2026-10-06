@@ -181,7 +181,7 @@ def plot_arena(positions, links=None, blocked=None, sinr=None, gnb=None, *, env=
     ([R] or [E, R]) or True for the nearest gNB, None for no links; blocked [R] bool: blocked links are dashed;
     sinr [R] dB: links and robots coloured by SINR (with a colour bar); gnb: [C, 2] positions or an NRConfig
     (its gnb_xy()); bounds (x0, y0, x1, y1): default from an NRConfig's arena, else the data; rem: a REM (dict or
-    .npz) whose best-cell SINR is drawn faintly underneath."""
+    .npz) whose best-cell SINR is drawn faintly underneath (its extent is the default bounds)."""
     from matplotlib.collections import LineCollection
     from matplotlib.lines import Line2D
 
@@ -210,6 +210,12 @@ def plot_arena(positions, links=None, blocked=None, sinr=None, gnb=None, *, env=
         serv = per_robot(links).astype(int).clip(0, g.shape[0] - 1)
     if bounds is None and hasattr(gnb, "cell_arena_m") and getattr(gnb, "n_cells", 1) == 1:
         bounds = (0.0, 0.0, float(gnb.cell_arena_m), float(gnb.cell_arena_m))
+    if bounds is None and rem is not None:
+        rr = load_rem(rem)
+        x, y = _np(rr["x"]), _np(rr["y"])
+        dx = (x[1] - x[0]) / 2 if x.size > 1 else 0.5
+        dy = (y[1] - y[0]) / 2 if y.size > 1 else 0.5
+        bounds = (x[0] - dx, y[0] - dy, x[-1] + dx, y[-1] + dy)
     if bounds is None:
         pts = pos if g is None else np.vstack([pos, g])
         pad = 0.06 * max(np.ptp(pts[:, 0]), np.ptp(pts[:, 1]), 1.0)

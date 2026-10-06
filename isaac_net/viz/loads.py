@@ -36,11 +36,11 @@ def throughput_frame(data, by="level"):
         rd = _data.record_dir_of(item)
         if rd is not None:
             meta = read_meta(rd)
-            st = read_records(rd)
+            st = read_records(rd).groupby("env")[["steps", "offered_bytes", "delivered_bytes"]].sum()
             sec = st.steps.to_numpy(float) * meta["control_step_ms"] * 1e-3
             frames.append(pd.DataFrame({"offered_mbps": st.offered_bytes.to_numpy(float) * 8e-6 / sec,
                                         "delivered_mbps": st.delivered_bytes.to_numpy(float) * 8e-6 / sec,
-                                        "group": _data.run_name(meta, by, rd)}))
+                                        "group": _data.run_name(meta, by, rd), "run": os.path.abspath(rd)}))
             continue
         if isinstance(item, (str, os.PathLike)) and (os.path.isdir(item) or str(item).endswith(".json")):
             df = _bench_frame(item)
@@ -55,9 +55,10 @@ def throughput_frame(data, by="level"):
 
 def plot_throughput_vs_load(data, by: str = "level", *, x="offered_mbps", y="delivered_mbps", bins=8, ax=None,
                             path=None, title=None, legend=True):
-    """Delivered vs offered throughput per group, with the y = x line. Many points per group (recorder windows) are
-    binned by offered load (equal-count bins, mean of each bin, whiskers = 10th-90th percentile of y); a few points
-    (benchmark runs) are drawn as they are."""
+    """Delivered vs offered throughput per group, with the y = x line. Recorder directories give one point per run
+    (whole-run rates, mean over envs, whiskers = 10th-90th percentile over envs), so a sweep of runs at several loads
+    traces each group's curve. Tables with many points per group are binned by offered load (equal-count bins, mean
+    of each bin, whiskers = 10th-90th percentile of y); a few points (benchmark runs) are drawn as they are."""
     df = throughput_frame(data, by)
     if df.empty or x not in df or y not in df:
         raise ValueError(f"no {x} / {y} values to plot")
@@ -74,14 +75,20 @@ def plot_throughput_vs_load(data, by: str = "level", *, x="offered_mbps", y="del
             if xs.size == 0:
                 continue
             c, ls = sty[gname]
-            if xs.size > 4 * bins:
+            if "run" in d and d["run"].notna().all():
+                agg = d.groupby("run").agg(x=(x, "mean"), y=(y, "mean"), lo=(y, lambda v: v.quantile(0.1)),
+                                           hi=(y, lambda v: v.quantile(0.9))).sort_values("x")
+                ax_, ay, alo, ahi = (agg[k].to_numpy(float) for k in ("x", "y", "lo", "hi"))
+                ax.errorbar(ax_, ay, yerr=np.vstack([ay - alo, ahi - ay]), color=c, ls=ls, marker="o", ms=3,
+                            lw=1.1, elinewidth=0.6, capsize=1.5, label=str(gname))
+            elif xs.size > 4 * bins:
                 edges = np.unique(np.quantile(xs, np.linspace(0, 1, bins + 1)))
                 k = np.clip(np.searchsorted(edges, xs, side="right") - 1, 0, max(edges.size - 2, 0))
                 mx = np.array([xs[k == i].mean() for i in range(edges.size - 1) if (k == i).any()])
                 my = np.array([ys[k == i].mean() for i in range(edges.size - 1) if (k == i).any()])
                 lo = np.array([np.quantile(ys[k == i], 0.1) for i in range(edges.size - 1) if (k == i).any()])
                 hi = np.array([np.quantile(ys[k == i], 0.9) for i in range(edges.size - 1) if (k == i).any()])
-                ax.errorbar(mx, my, yerr=[my - lo, hi - my], color=c, ls=ls, marker="o", ms=2.5, lw=1.1,
+                ax.errorbar(mx, my, yerr=np.vstack([my - lo, hi - my]), color=c, ls=ls, marker="o", ms=2.5, lw=1.1,
                             elinewidth=0.6, capsize=1.5, label=str(gname))
             else:
                 o = np.argsort(xs)

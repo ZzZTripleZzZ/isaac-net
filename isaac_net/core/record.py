@@ -96,7 +96,7 @@ class RecordConfig:
     raw_envs     env ids whose robots get a row per window in the robots table
     hist         write the delay_hist / aoi_hist tables
     label        free-form name of the run (a column of every table; used by isaac_net.viz to group runs)
-    level        the level name for the level column; None = the wrapped engine's class name
+    level        the level name for the level column; None = the wrapped engine's level (level_name)
     tensorboard  log directory for torch.utils.tensorboard, or None
     wandb        False, True (log to the active wandb run, init one if none) or a dict of wandb.init kwargs
     log_every    scalar logging cadence in control steps (a window is logged when its end step is a multiple)
@@ -146,6 +146,32 @@ def _hist_quantile(h: torch.Tensor, q: float, edges: torch.Tensor) -> torch.Tens
     lo, hi = edges[k], edges[k + 1]
     val = torch.where(k == 0, lo + frac * (hi - lo), lo * (hi / lo.clamp(min=1e-12)) ** frac)
     return torch.where(tot > 0, val, torch.full_like(val, math.nan)).squeeze(-1)
+
+
+def level_name(engine) -> str:
+    """Fidelity level of an engine built by make_engine (through any wrappers), from its innermost class."""
+    from .engine import NREngine
+    from .levels import CLASSES
+    inner, seen = engine, 0
+    while seen < 16 and inner.__dict__.get("engine") is not None:
+        if isinstance(inner, NREngine):
+            break
+        inner = inner.__dict__["engine"]
+        seen += 1
+    if isinstance(inner, NREngine):
+        return "L2"
+    name = type(inner).__name__
+    for lv, cls in CLASSES.items():
+        if isinstance(inner, cls):
+            return lv
+    mode = inner.__dict__.get("mode") or inner.__dict__.get("rung")
+    if name in ("NetSlot", "NetSlotMC", "NetSlotFast") or mode == "L2":
+        return "L2-legacy"
+    if name == "NetFluid":
+        return "L1"
+    if isinstance(mode, str):
+        return mode
+    return {"WifiNet": "WIFI"}.get(name, name)
 
 
 def _find_nr(engine):
@@ -219,7 +245,7 @@ class RecorderLoop:
         self.C = C = int(getattr(ncfg, "n_cells", 1) or 1)
         self.sizes = torch.tensor((0.0,) + tuple(float(s) for s in ncfg.msg_sizes), dtype=torch.float64, device=d)
         self.edges = torch.as_tensor(bin_edges_ms(), dtype=torch.float64, device=d)
-        self.level = cfg.level or type(_find_nr(engine) or engine).__name__.replace("NREngine", "L2")
+        self.level = cfg.level or level_name(engine)
         fmt = cfg.format
         if fmt == "auto":
             try:

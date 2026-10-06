@@ -146,7 +146,7 @@ def plot_vs_ns3(engine_csv, lena_csv=None, *, per_run_csv=None, engine_arm=None,
                     lo.append(m - np.quantile(v, 0.25))
                     hi.append(np.quantile(v, 0.75) - m)
                     xs.append(i - 0.4 + width * (j + 0.5))
-                ax.errorbar(xs, med, yerr=[lo, hi], ls="none", marker="o", ms=3, color=qcol.get(q, S.CYCLE[j]),
+                ax.errorbar(xs, med, yerr=np.vstack([lo, hi]), ls="none", marker="o", ms=3, color=qcol.get(q, S.CYCLE[j]),
                             elinewidth=0.8, capsize=1.5, label=q)
             ax.axhline(0, color=S.GREY, lw=0.5, zorder=0)
             counts = {g: (len(pr) if g == "all" else int((pr.regime == g).sum())) for g in groups}
