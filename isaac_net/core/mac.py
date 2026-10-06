@@ -100,6 +100,7 @@ class MacLink:
         self.olla_dn = cfg.olla_up_db * (1 - cfg.bler_target) / cfg.bler_target
         self.trace = None          # debug: list of per-slot (frac, tx, ok, lo, hi, exhausted) host copies
         self.sinr_hook = None      # same-slot inter-cell interference, see slot()
+        self.slot_hook = None      # read-only observer fn(link, info) after decoding (core/trace.py); None = no-op
         self.member = None         # [E,C,R] serving-cell membership (multi-cell only)
         self.sched_ok = None       # [E,R] schedulable (outside a handover interruption; multi-cell only)
         self.slot_nsym = 14        # data symbols of the slot being processed (set by slot(), read by SINR hooks)
@@ -500,6 +501,11 @@ class MacLink:
         q = self.q
         done = (q.cap >= 0) & (q.end <= ack[..., None]) & ~q.lost & torch.isinf(q.fin)
         q.fin = torch.where(done, frac + cfg.proc_offset_ms / cfg.control_step_ms, q.fin)
+        if self.slot_hook is not None:
+            # read-only observer (core/trace.SlotTrace): this slot's TB decisions and decode results, never modified
+            self.slot_hook(self, {"g": g, "frac": frac, "tx_new": tx_new, "tx_rx": tx_rx, "ok": ok, "exh": exh,
+                                  "p_tx": p_tx, "ntx": ntx, "mcs": mcs, "tbs": tbs, "n_sb": n_sb, "n_prb": n_prb,
+                                  "lo": lo_tx, "hi": hi_tx})
 
     def _rank(self, est):
         """Rank (1 or 2) of a new TB per robot [E,R] from the link-adaptation estimate est [E,R,S] (per-PRB SINR at

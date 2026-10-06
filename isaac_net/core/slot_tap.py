@@ -22,6 +22,11 @@ the occasion's own symbols through slot_nsym.
 
 One tap serves every wrapper of an engine (SlotTap.of). begin() zeroes the counters before a step. A user hook set
 through NREngine.set_sinr_hook replaces the installed one, so wrappers call install() again after it.
+
+Observers (add_observer): read-only callables fn(link, g, won, n_prb, sinr) that the tap calls after the hook chain,
+with the SINR the MAC decodes with (core/trace.SlotTrace samples it). They see the tensors, never return anything,
+and the tap returns the chain's result unchanged, so the counters above and the engine's outputs stay bitwise the
+same with or without them.
 """
 from __future__ import annotations
 
@@ -43,6 +48,7 @@ class SlotTap:
         self.ul_slots, self.ul_prb, self.ul_tx_j, self.dl_slots = z(), z(), z(), z()
         self.dl_prb = z()
         self.ul_tx_s = z()                                          # PUSCH time (s) of the robot's transmissions
+        self.observers = []                                         # read-only fn(link, g, won, n_prb, sinr)
         self.install()
 
     @staticmethod
@@ -82,10 +88,23 @@ class SlotTap:
             else:
                 self.dl_slots += occ
                 self.dl_prb += n_prb * occ
-            return act if prev is None else prev(g, d, won, n_prb, act)
+            out = act if prev is None else prev(g, d, won, n_prb, act)
+            for fn in self.observers:
+                fn(link, g, won, n_prb, out)
+            return out
 
         hook._slot_tap = self
         return hook
+
+    def add_observer(self, fn):
+        """Call fn(link, g, won, n_prb, sinr) in every data slot after the hook chain (read-only)."""
+        if fn not in self.observers:
+            self.observers.append(fn)
+        self.install()
+
+    def remove_observer(self, fn):
+        if fn in self.observers:
+            self.observers.remove(fn)
 
     def begin(self):
         for x in (self.ul_slots, self.ul_prb, self.ul_tx_j, self.ul_tx_s, self.dl_slots, self.dl_prb):
