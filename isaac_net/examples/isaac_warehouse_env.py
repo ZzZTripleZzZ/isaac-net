@@ -128,6 +128,25 @@ def make_warehouse_cfg(num_envs: int, num_robots: int, level: str = "L2", device
     return cfg
 
 
+def finalize_warehouse_cfg(cfg: WarehouseFleetEnvCfg, num_envs: int | None = None) -> WarehouseFleetEnvCfg:
+    """fleet.finalize_fleet_cfg for the warehouse: the warehouse scene for cfg.num_robots, and, when unset, the
+    Isaac-side settings without a baked radio map (warehouse_isaac_cfg(scene_map=False), engine radio, no Sionna)
+    and the two-cell NRConfig. Idempotent; WarehouseFleetEnv.__init__ calls it."""
+    if cfg.scene is None or fleet.scene_robot_count(cfg.scene) != cfg.num_robots:
+        E = num_envs if num_envs is not None else (cfg.scene.num_envs if cfg.scene is not None else 64)
+        cfg.scene = warehouse_scene_cfg(cfg.num_robots, E, cfg.usd_path)
+    elif num_envs is not None:
+        cfg.scene.num_envs = num_envs
+    if cfg.net_isaac is None:
+        cfg.net_isaac = warehouse_isaac_cfg(scene_map=False)
+    c = cfg.net_isaac
+    if cfg.net_nr is None:
+        cfg.net_nr = warehouse_net_config(cfg.sim.dt * cfg.decimation * c.net_decimation / c.net_substeps)
+    cfg.action_space = cfg.num_robots * 3
+    cfg.observation_space = cfg.num_robots * (TASK_OBS + c.obs_dim(cfg.net_nr))
+    return cfg
+
+
 def occupancy_from_scene(scene_dir: str, area=AREA, res=OCC_RES, z_band=OCC_Z, inflate=RADIUS + 0.2) -> np.ndarray:
     """[H, W] bool, True = blocked: cells of `area` covered by the xy bounding box of an exported triangle that
     reaches into z_band, dilated by `inflate` metres. Conservative for slanted triangles."""
@@ -162,6 +181,10 @@ def occupancy_from_scene(scene_dir: str, area=AREA, res=OCC_RES, z_band=OCC_Z, i
 
 class WarehouseFleetEnv(NetFleetEnv):
     cfg: WarehouseFleetEnvCfg
+
+    @staticmethod
+    def _finalize_cfg(cfg):
+        finalize_warehouse_cfg(cfg)
 
     def _setup_scene(self):
         # free floor cells from the warehouse geometry (the same exporter the radio map uses)
