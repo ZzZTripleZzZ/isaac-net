@@ -18,6 +18,8 @@
   <img alt="Status" src="https://img.shields.io/badge/status-research%20prototype-B7791F?style=flat-square">
 </p>
 
+<p><a href="https://colab.research.google.com/github/ZzZTripleZzZ/isaac-net/blob/main/docs/tutorials/00_quickstart_colab.ipynb"><img alt="Open In Colab" src="https://colab.research.google.com/assets/colab-badge.svg"></a> &nbsp;<b>Try it in Colab:</b> a three-minute quick start on a free CPU or GPU runtime, no install needed.</p>
+
 <p>
   <a href="https://arxiv.org/abs/2610.02370"><b>Paper (arXiv)</b></a> &nbsp;·&nbsp;
   <a href="https://isaacnet.zifanzhang.com"><b>Project website</b></a> &nbsp;·&nbsp;
@@ -55,6 +57,8 @@ uv pip install isaac-net                            # the released package from 
 # or, from a clone, for development:
 uv pip install -e ".[dev]"                          # the isaac_net package, plus pytest, ruff and build
 ```
+
+**Docker (Linux):** [`docker/Dockerfile`](docker/README.md) builds CUDA 12.6, Python 3.11, torch cu126 with Triton and `isaac-net[dev]`, optionally with Isaac Lab 3.0 kit-less on top (`docker build -f docker/Dockerfile -t isaac-net .`).
 
 **Windows 11 (PowerShell):**
 
