@@ -77,3 +77,33 @@ jobs:
         run: mkdocs build --strict
         env:
           NO_MKDOCS_2_WARNING: "1"
+
+  docs-examples:
+    # Executes the Colab quick start and every Python block of docs/cookbook.md on a CPU, so the onboarding pages
+    # cannot drift from the API. The stored notebook outputs are not compared; the run only has to succeed.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install CPU-only torch, the package and the notebook tools
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e . nbconvert ipykernel matplotlib pandas pyarrow
+      - name: Execute the Colab quick start
+        run: jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=600 --output-dir "$RUNNER_TEMP" docs/tutorials/00_quickstart_colab.ipynb
+      - name: Run every cookbook recipe
+        working-directory: ${{ runner.temp }}
+        run: |
+          python - "$GITHUB_WORKSPACE/docs/cookbook.md" <<'EOF'
+          import pathlib, re, subprocess, sys
+          blocks = re.findall(r"```python\n(.*?)```", pathlib.Path(sys.argv[1]).read_text(), re.S)
+          assert len(blocks) == 10, f"expected 10 recipes, found {len(blocks)}"
+          for i, code in enumerate(blocks, 1):
+              print(f"--- recipe {i}", flush=True)
+              subprocess.run([sys.executable, "-c", code], check=True)
+          EOF
