@@ -14,6 +14,7 @@ ul_dl_cqi38214 and ul_tpc_cqi of tests/nr_equiv.py. Here, without Triton:
 """
 import ast
 import math
+import importlib.util
 import os
 import types
 
@@ -25,7 +26,9 @@ from isaac_net.core import NRConfig, make_engine
 from isaac_net.core.nr_fast import NRTritonEngine, TritonUnsupported, state_dict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-KERNEL = os.path.join(HERE, "..", "isaac_net", "core", "nr_triton.py")
+# the kernel source of the installed package too (RELEASE.md step 7 runs the suite outside the tree); find_spec
+# locates the file without importing it, so no triton is needed here
+KERNEL = importlib.util.find_spec("isaac_net.core.nr_triton").origin
 CFGS = ("ul_tpc", "ul_tpc_abs", "ul_dl_cqi38214", "ul_tpc_cqi")
 TPC_CFGS = ("ul_tpc", "ul_tpc_abs", "ul_tpc_cqi")
 

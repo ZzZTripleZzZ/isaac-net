@@ -16,8 +16,10 @@ CFG = NRConfig(msg_sizes=(4000.0, 30000.0), timeout_steps=20, control_step_ms=10
 
 
 def _runner():
-    spec = importlib.util.spec_from_file_location(
-        "run_closedloop", os.path.join(ROOT, "benchmarks", "closedloop", "run_closedloop.py"))
+    path = os.path.join(ROOT, "benchmarks", "closedloop", "run_closedloop.py")
+    if not os.path.exists(path):
+        pytest.skip("benchmarks/ is not shipped with the package (source tree only)")
+    spec = importlib.util.spec_from_file_location("run_closedloop", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

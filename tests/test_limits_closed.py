@@ -196,7 +196,10 @@ def test_triton_refusals_list_several_features_and_pass_defaults():
 
 
 def test_docs_backend_table_lists_the_triton_refusals():
-    with open(os.path.join(HERE, "..", "docs", "configurability.md")) as fh:
+    path = os.path.join(HERE, "..", "docs", "configurability.md")
+    if not os.path.exists(path):
+        pytest.skip("docs/ is not shipped with the package (source tree only)")
+    with open(path) as fh:
         doc = fh.read()
     sec = doc[doc.index("## NR engine backends"):]
     sec = sec[:sec.index("\n## ", 3)]
