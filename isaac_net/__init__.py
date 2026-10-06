@@ -12,5 +12,5 @@ from .core.engine import WIFI_LEVELS
 
 LEVELS = _CORE_LEVELS + WIFI_LEVELS          # every level make_engine accepts (core.LEVELS: the 5G NR ones)
 
-__version__ = "0.2.0"
+__version__ = "0.2.1.dev0"
 __all__ = ["make_engine", "NRConfig", "Requests", "LEVELS", "__version__"]
