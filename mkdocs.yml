@@ -46,6 +46,7 @@ nav:
       - Cookbook: cookbook.md
       - FAQ: faq.md
   - Concepts: concepts.md
+  - Doctor: doctor.md
   - Tutorials:
       - tutorials/index.md
       - "00 Quick start in Colab": tutorials/00_quickstart_colab.ipynb
@@ -83,6 +84,8 @@ nav:
       - Channel models: channels.md
       - Obstacles and NLOS: obstacles.md
       - Radio environment maps: rem.md
+      - Slot traces: trace.md
+      - Plots and reports: viz.md
       - "Wi-Fi (802.11 DCF / EDCA)": wifi.md
       - Radio maps from USD scenes: scene-radio-map.md
       - ns-3 bridges in depth: bridges.md

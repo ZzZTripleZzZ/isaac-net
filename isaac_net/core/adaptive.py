@@ -515,12 +515,12 @@ class AdaptiveEngine:
         self.E, self.R, self.dev = E, R, torch.device(device)
         self.fid, self._config = fid, cfg
         self.seed = _ns.resolve_seed(base.seed if seed is None else seed)
-        self.cheap = make_engine(fid.cheap, E, R, self.dev, base, fid.cheap_backend, params=fid.cheap_params,
+        self.cheap = make_engine(fid.cheap, E, R, self.dev, base, fid.cheap_backend, params=fid.cheap_params, strict=None,
                                  seed=self.seed)
         M = fid.budget_rows(E)
         self.subbatch = M is not None
         self.M = M = E if M is None else M
-        self.exp = make_engine(fid.expensive, M, R, self.dev, base, fid.expensive_backend,
+        self.exp = make_engine(fid.expensive, M, R, self.dev, base, fid.expensive_backend, strict=None,
                                params=fid.expensive_params, seed=self.seed)
         self.lc = _Level(self.cheap, fid.cheap)
         self.lx = (_NRLevel if fid.expensive == "L2" else _Level)(self.exp, fid.expensive)

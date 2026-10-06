@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use Isaac-Net, please cite the paper below."
 title: "Isaac-Net: GPU-batched 5G and Wi-Fi network simulation for massively parallel robot learning"
 type: software
-version: 0.1.0
-date-released: 2026-09-30
+version: 0.2.0
+date-released: 2026-10-05
 license: BSD-3-Clause
 repository-code: "https://github.com/ZzZTripleZzZ/isaac-net"
 url: "https://isaacnet.zifanzhang.com"
