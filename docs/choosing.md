@@ -107,4 +107,4 @@ flowchart TD
     S -- JAX --> S3[MuJoCo Playground / MJX]
 ```
 
-For the backend of the cheaper levels, use `triton` for `L1` and `L2-legacy` at scale, `graph` when results must be bitwise reproducible, and `reference` on a CPU. Whatever you choose, build the engine once with `strict=True` so that a field the level ignores raises an error instead of passing silently ([Cookbook recipe 10](cookbook.md#10-check-a-config-before-a-long-run)).
+For the backend of the cheaper levels, use `triton` for `L1` and `L2-legacy` at scale, `graph` when results must be bitwise reproducible, and `reference` on a CPU. Whatever you choose, build the engine once with `strict=True` so that a field the level ignores raises an error instead of a one-time `UnusedFieldsWarning` ([Cookbook recipe 10](cookbook.md#10-check-a-config-before-a-long-run)).

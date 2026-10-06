@@ -70,7 +70,7 @@ viz = ["matplotlib>=3.8", "pandas>=2.0", "pyarrow>=14"]
 # The Wi-Fi level (WIFI) needs nothing beyond the core dependencies.
 wifi = []
 # Everything installable with pip on Linux without Isaac Sim / Isaac Lab.
-all = ["isaac-net[dev,docs,mjx,ns3,oai,sionna]"]
+all = ["isaac-net[dev,docs,mjx,ns3,oai,sionna,viz]"]
 
 [project.scripts]
 isaac-net-bench = "isaac_net.bench.cli:main"

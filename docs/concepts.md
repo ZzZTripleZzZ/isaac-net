@@ -127,6 +127,7 @@ One `NRConfig` configures every level. Most users start from a preset and overri
 | environment step | Isaac Lab's step of all robots of one environment by one control step; Isaac Lab reports environment steps per second, and robot-steps per second is that rate times the robots per environment |
 | physics substep | this project's name for one Isaac Lab physics step (`sim.dt`), several of which form a control step (`decimation`); not a PhysX or Isaac Gym solver substep |
 | `DirectRLEnv` | the Isaac Lab base class of a task, with hooks called in a fixed order each step |
+| `ManagerBasedRLEnv` | Isaac Lab's other task style, where observations, rewards, events and terminations are config terms rather than hooks; `NetManagerCfg` adds the network's terms ([Manager-based workflow](isaac-lab.md#manager-based-workflow)) |
 | partial reset | restarting only the environments whose episodes ended, while the others keep running |
 | domain randomization | drawing simulator parameters at random per environment so that a policy does not overfit one setting |
 | observation, reward | what the policy sees each step, and the scalar it is trained to maximize |

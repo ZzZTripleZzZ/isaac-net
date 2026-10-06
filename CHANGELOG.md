@@ -4,7 +4,55 @@ All notable changes to `isaac-net` are listed here, grouped by area. The format 
 
 ## [Unreleased]
 
-Nothing yet.
+A usability and visualization wave: scenario presets, a config summary, an install doctor, slot traces, a KPI recorder with a plotting package, registered Isaac Lab tasks with viewport overlays, and new onboarding pages. Nothing in the engines' step changes: the recorder and the trace are bitwise invisible, and `make_engine` keeps `backend="reference"` as its default.
+
+### Added
+
+#### Configuration and presets
+
+- Scenario presets in `isaac_net/core/scenarios.py`: `warehouse_private_5g()`, `factory_inf(n_cells=3)`, `outdoor_campus(n_cells=3)` and `urllc_control(base=None)`, exported from `isaac_net` and listed in `SCENARIOS` ([docs/configurability.md](docs/configurability.md#scenario-presets)). They are representative, not calibrated: each starts from the `lena_validation_v2()` MAC with `fading=True` and the shipped Sionna PDSCH tables (`SHIPPED_PHY`: `bler_source="pdsch"`, `tbs_mode="38214"`, `harq_combining="cc"`), and every keyword argument overrides the field it names.
+- The two multi-cell presets, `factory_inf` and `outdoor_campus`, turn on `olla=True`, which `lena_validation_v2()` runs off: with several cells the scheduler's MCS uses the N+I of the previous slot, and without OLLA many more transport blocks exhaust HARQ (the reason is in their docstrings). `urllc_control` adds a 10 ms control step, 2-symbol mini-slots in both directions, `scheduler="qos"` with two classes and `ul_grant_model="lumped"` with `proactive_grant="every_ul_slot"`, on top of `base` or the preset MAC. No preset runs on `triton` (SR / BSR pipeline, several cells or mini-slots).
+- `NRConfig.describe(level="L2", backend=None)` returns a plain-text page of what the level will run, which backends can run the config, every field set away from its default, and the fields the level ignores. `NRConfig.diff(other)` lists the fields two configs disagree on ([docs/configurability.md](docs/configurability.md#describing-a-configuration)).
+- `make_engine(..., backend="auto")` picks `triton`, `graph` or `reference` from the level, the config and the device and logs the choice and its reason on the `isaac_net` logger; `isaac_net.core.resolve_backend(level, cfg, device)` returns the same choice without building anything. The default stays `backend="reference"`, and `ShardedEngine(..., backend="auto")` resolves it per shard ([docs/configurability.md](docs/configurability.md#choosing-a-backend-automatically)).
+- `output_schema()` on every engine and wrapper lists the keys its `step` returns under its current config, with shape, dtype, unit and meaning, from one registry, `isaac_net/core/schema.py` (`STEP_KEYS`, exported from `isaac_net.core`). The table in [docs/configurability.md](docs/configurability.md#output-schema) is generated from it.
+
+#### Diagnostics
+
+- `isaac-net-doctor` (`isaac_net/tools/doctor.py`, self-test in `selftest.py`, also `python -m isaac_net.tools.doctor`): an environment report (Python, torch, CUDA, triton and the optional stacks, found with importlib metadata rather than imported, except triton), a CPU self-test plus a CUDA one when a GPU is present (`--device auto`), `--quick` for a shorter self-test, `--no-selftest`, `--config SPEC` to check a preset, an expression or `file.py:CFG` against the backends (the self-test then runs only with `--selftest`), and `--json` for one JSON document. Exit code 0 when no check fails, 1 otherwise, 2 for a bad command line or config ([docs/doctor.md](docs/doctor.md)).
+
+#### Traces and recording
+
+- `SlotTrace` (`isaac_net/core/trace.py`): `SlotTrace.attach(net, env=0, robots=[...])` or `pairs=` records slot-level MAC events of selected (env, robot) pairs on `L2` with the reference backend (`graph` and `triton` are refused): frame arrivals, SRs, TB grants with HARQ process, MCS, TBS and RBGs, decode results, DL CQI reports, deliveries and resets. It reads only, draws no random number and gathers on the device with one host copy every `flush_steps=32` steps, so the engine's outputs are bitwise unchanged. `to_frame("events" | "samples")` gives a pandas DataFrame (a list of dicts without pandas), `save()` writes Parquet with pyarrow or CSV otherwise, and `summary()` gives per-robot delay mean / p95 and retransmissions per TB ([docs/trace.md](docs/trace.md)).
+- Two read-only observer points used by the trace: `MacLink.slot_hook` (`None` by default, called after decoding in every slot or mini-slot occasion) and `SlotTap.add_observer(fn)` (called with the SINR the MAC decodes with, after the hook chain).
+- `RecorderLoop` and `isaac_net.record(engine, out_dir="records", ...)` (`isaac_net/core/record.py`, settings in `RecordConfig`): a per-step KPI recorder that wraps any engine or wrapper with the same API and step dict. It accumulates on the device without a per-step host sync, closes a row every `every=1` steps, keeps `flush_every=256` windows before one host copy, and writes `steps`, `cells` (`per_cell=True`), `robots` (for `raw_envs=()`) and `delay_hist` / `aoi_hist` (`hist=True`) tables as Parquet, or CSV without pyarrow (`format="auto"`), plus `meta.json`. It draws no random number and writes no engine tensor, so the outputs are bitwise those of the bare engine.
+- The recorder logs to TensorBoard with `tensorboard="logdir"` (default `None`) and to Weights & Biases with `wandb=True` or a dict of `wandb.init` arguments (default `False`), every `log_every=1` steps at flush time.
+
+#### Plots and reports
+
+- The `isaac_net.viz` package and the `viz` extra (`matplotlib`, `pandas`, `pyarrow`): `style` (paper style), `cdf` (`plot_delay_cdf`, `plot_aoi_cdf` from the recorder histograms), `loads` (`plot_throughput_vs_load`, `plot_cell_utilization`), `maps` (`plot_rem`, `plot_arena`), `compare` (`plot_vs_ns3`, the engine against ns-3 5G-LENA), `report` (`from_records(dirs, "report.html")`, a self-contained HTML page) and `trace` (`plot_timeline`, `plot_slot_heatmap` of a `SlotTrace`). [docs/viz.md](docs/viz.md) has a gallery in `docs/img/viz/`, regenerated by `docs/img/viz/make_gallery.py`.
+- `isaac-net-bench report --html FILE` writes an HTML report with figures (needs the `viz` extra), and `--figures DIR` writes them as PNGs. `isaac-net-bench run --keep_rows` (off by default) keeps the per env-episode evaluation rows in the result file, so the report's CDFs run over episodes instead of seeds ([docs/viz.md](docs/viz.md#reports)).
+- `isaac-net-rem --panels` chooses the panels of the `--png` figure among `rsrp`, `sinr`, `serving`, `los` and `pathgain` (default `rsrp,sinr,serving,los`), drawn by `viz.maps.plot_rem` ([docs/rem.md](docs/rem.md)).
+
+#### Isaac Lab
+
+- Registered gymnasium tasks `Isaac-NetFleet-Direct-v0`, `Isaac-NetFleet-Direct-L0-v0`, `Isaac-NetFleet-Direct-Warehouse-v0` and `Isaac-NetFleet-Manager-v0`, each with rsl_rl and skrl PPO configs (`default_agent` `"rsl_rl"`). They train with `python -m isaac_net.isaac.tasks.train --task ...` or with Isaac Lab's own script and `--external_callback isaac_net.isaac.tasks.register` ([docs/isaac-lab.md](docs/isaac-lab.md#train-the-registered-task)). Isaac Lab 3.0 runs headless by default and has no `--headless` flag; `--viz kit` opens the viewport.
+- A manager-based workflow: `NetManagerCfg(...).apply(env_cfg)` adds the network to a `ManagerBasedRLEnv` config through `NetRuntime`, with the observation terms `net_aoi`, `net_delivered`, `net_delay`, `net_queue`, `net_sinr`, `net_los` and `net_access_state`, the events `net_step` and `net_reset`, the termination `net_step_done`, the rewards `net_aoi_penalty` and `net_send_cost`, and the action term `NetSendActionCfg` ([docs/isaac-lab.md](docs/isaac-lab.md#manager-based-workflow)).
+- Viewport overlays `NetMarkers` / `NetMarkersCfg`: links to the serving gNB coloured by SINR (blocked links dimmer and dashed), gNB masts with coverage discs, AoI bars and glyphs for idle, RACH, DRX-dormant and RLF robots. They are inert when headless: nothing is computed and nothing from Isaac Lab is imported ([docs/isaac-lab.md](docs/isaac-lab.md#viewport-overlays)).
+- `NetModule.step` passes through `access_state`, `rlf`, `access_sleep_frac` and `rach_attempts` when the engine returns them.
+
+#### Docs and onboarding
+
+- A Colab quick start, `docs/tutorials/00_quickstart_colab.ipynb`, with an "Open in Colab" badge; new pages [choosing.md](docs/choosing.md), [cookbook.md](docs/cookbook.md) (ten recipes that run on a CPU), [faq.md](docs/faq.md), [doctor.md](docs/doctor.md), [trace.md](docs/trace.md) and [viz.md](docs/viz.md); a shorter landing page `docs/index.md`.
+- `docker/Dockerfile` and `docker/README.md` for the kit-less Linux path: CUDA 12.6 runtime, torch from the cu126 index, and an optional `isaaclab` stage pinned to the validated Isaac Lab commit. It passes hadolint and has not been built.
+- A CI job `docs-examples` executes the Colab notebook and every Python block of the cookbook on a CPU.
+
+### Changed
+
+- `make_engine(..., strict=False)`, the default, now emits one `UnusedFieldsWarning` (a `UserWarning`) naming the fields a level ignores, once per level and set of ignored values per process; before, they were ignored silently. `strict=None` skips the check and `strict=True` still raises ([docs/configurability.md](docs/configurability.md#ignored-fields-warning-and-strict-mode)).
+- `AdaptiveEngine` builds its cheap and expensive levels with `strict=None`, so the one config it passes to both raises no warning.
+- `isaac-net-rem` draws its PNG through `isaac_net.viz.maps.plot_rem` and takes `--panels`, and `isaac-net-bench` gains `report --html`, `report --figures` and `run --keep_rows` (see Added).
+- Tutorial 03 no longer says that `L2-legacy` refuses `timeout_steps=10`: the prototype levels accept the frame buffer, timeout and control step, and ignored MAC fields give an `UnusedFieldsWarning`, or an error with `strict=True`.
+- `CITATION.cff` is at version 0.2.0, released 2026-10-05.
 
 ## [0.2.0] - 2026-10-05
 

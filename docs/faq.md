@@ -64,7 +64,7 @@ Keep `NRConfig.rng = "engine"`, the default. Every draw is then keyed by (seed, 
 
 ## My config change does nothing. Why?
 
-Every level reads only some `NRConfig` fields. The prototype levels (`L0` to `L1`, `L2-legacy`) have a fixed radio and MAC, so for example `n_harq` or `mcs_table` changes nothing there, and by default the field is ignored silently. `cfg.unused_fields(level)` lists what a level ignores, and `make_engine(..., strict=True)` raises instead ([Cookbook recipe 10](cookbook.md#10-check-a-config-before-a-long-run)). Also check that you built a new engine: an engine reads its config once, at construction.
+Every level reads only some `NRConfig` fields. The prototype levels (`L0` to `L1`, `L2-legacy`) have a fixed radio and MAC, so for example `n_harq` or `mcs_table` changes nothing there, and by default `make_engine` runs the config with a one-time `UnusedFieldsWarning` that names the ignored fields. `cfg.unused_fields(level)` lists what a level ignores, and `make_engine(..., strict=True)` raises instead ([Cookbook recipe 10](cookbook.md#10-check-a-config-before-a-long-run)). Also check that you built a new engine: an engine reads its config once, at construction.
 
 ## Why are the step outputs `[E, R, F]`, and what does `delivered[e, r, f]` mean?
 
