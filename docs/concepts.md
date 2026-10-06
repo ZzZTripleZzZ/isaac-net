@@ -115,7 +115,9 @@ Higher fidelity costs more per step, and it changes what a policy experiences: w
 |:---|:---|
 | env (environment) | one independent copy of the task scene; `E` of them are simulated in parallel on one GPU |
 | episode | one run of an environment from reset to termination; each environment's episodes end at different times |
-| control step | one policy decision, typically 100 ms of simulated time, containing several physics substeps |
+| control step | one policy decision, typically 100 ms of simulated time; in Isaac Lab terms one environment step, `decimation` physics steps of `sim.dt` each |
+| environment step | Isaac Lab's step of all robots of one environment by one control step; Isaac Lab reports environment steps per second, and robot-steps per second is that rate times the robots per environment |
+| physics substep | this project's name for one Isaac Lab physics step (`sim.dt`), several of which form a control step (`decimation`); not a PhysX or Isaac Gym solver substep |
 | `DirectRLEnv` | the Isaac Lab base class of a task, with hooks called in a fixed order each step |
 | partial reset | restarting only the environments whose episodes ended, while the others keep running |
 | domain randomization | drawing simulator parameters at random per environment so that a policy does not overfit one setting |

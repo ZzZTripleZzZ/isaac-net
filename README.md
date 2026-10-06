@@ -2,7 +2,7 @@
 
 <img src="https://raw.githubusercontent.com/ZzZTripleZzZ/isaac-net/main/docs/img/banner.jpg" alt="isaac-net: GPU-batched 5G simulation for massively parallel robot learning" width="100%">
 
-<p><b>GPU-batched 5G and Wi-Fi network simulation for massively parallel robot learning: thousands of Isaac Lab environments, tens to hundreds of robots per cell, one GPU, network state stepped in lockstep with physics.</b></p>
+<p><b>GPU-batched 5G and Wi-Fi network simulation for massively parallel robot learning: thousands of Isaac Lab environments, tens to hundreds of robots per cell, one GPU, network state stepped in lockstep with the Isaac Lab environment step.</b></p>
 
 <p>
   <a href="https://arxiv.org/abs/2610.02370"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-2610.02370-B31B1B?style=flat-square&logo=arxiv&logoColor=white"></a>
