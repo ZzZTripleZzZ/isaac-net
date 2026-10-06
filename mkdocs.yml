@@ -41,6 +41,10 @@ theme:
 
 nav:
   - Home: index.md
+  - Getting started:
+      - Choosing a configuration: choosing.md
+      - Cookbook: cookbook.md
+      - FAQ: faq.md
   - Concepts: concepts.md
   - Tutorials:
       - tutorials/index.md
