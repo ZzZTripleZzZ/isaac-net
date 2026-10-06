@@ -4,6 +4,12 @@ All notable changes to `isaac-net` are listed here, grouped by area. The format 
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-10-05
+
+Thirty bug fixes from a full code review, three waves of optional features (all off by default and bitwise unchanged when off), the triton kernel extended to most of them, and a re-run of the 5G-LENA validation that confirmed every published number. The minimum torch version is 2.7.
+
 ### Added
 
 Every new field below defaults to off (or to the earlier behaviour), and at the defaults the engine's outputs are bitwise unchanged.
@@ -79,7 +85,7 @@ Every new field below defaults to off (or to the earlier behaviour), and at the 
 ### Changed
 
 - The minimum torch version is 2.7: the `compile` backend sets `torch._dynamo.config.recompile_limit`, which first appears in 2.7 (it was `cache_size_limit` before).
-- The sdist now includes `prototype/`. The version on main is `0.1.1.dev0`.
+- The sdist now includes `prototype/`.
 - The `triton` NR backend refuses every feature it does not implement in one place, `NRTritonEngine.__init__`, with `TritonUnsupported` (both a `NotImplementedError` and a `ValueError`) and a message that points to `graph`. `NRTritonEngine.refusals(cfg)` now lists only several cells (and with them A3 handover and RLF), the SR / BSR grant pipeline (`ul_grant_model="bsr"`), rank-2 MIMO and mini-slot grants; SINR hooks are refused at the first step. A test checks the backend table of docs/configurability.md against the code.
 - `core.slot_tap` counts a mini-slot occasion as its share of the slot's data symbols.
 - `proactive_grant="per_period"` is refused with FDD, and every level other than `L2` refuses `rach` / `drx` (`ValueError`).
