@@ -26,6 +26,8 @@ flowchart LR
 
 The price is time resolution. A message completes at the end of the slot in which its last byte is decoded, so delays are multiples of the slot spacing: 2.5 ms between uplink slots for `L2-legacy` (40 uplink slots per 100 ms control step), and the numerology's slot length for the configurable NR engine `L2`. For robot control at 10 Hz this resolution is far finer than the control step. Effects below one slot, such as the exact symbol at which a packet reaches the MAC, are not modelled.
 
+Because every slot runs as tensor operations for all robots at once, there is no event log to read. When you need one, for example to see why a message took 40 ms, attach a [slot trace](trace.md) to a few robots: `SlotTrace` reads the MAC after every slot of the reference backend and rebuilds the event sequence of those robots (arrival, scheduling request, grants, transport blocks, HARQ feedback, retransmissions, delivery) without changing any output, and `isaac_net.viz.trace.plot_timeline` draws it.
+
 The lower fidelity levels do not simulate slots at all. `L0` draws each message's delay from a distribution when the message is submitted, and `L1` shares each slot's capacity equally among the robots with queued data. They keep the same interface, so a task can switch between them and the slot-level models by changing one argument.
 
 ## Fixed-shape state
