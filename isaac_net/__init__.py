@@ -9,8 +9,9 @@ ns-3 co-simulation bridges (validation only).
 from .core import NRConfig, Requests, make_engine
 from .core import LEVELS as _CORE_LEVELS
 from .core.engine import WIFI_LEVELS
+from .core.record import RecordConfig, RecorderLoop, record
 
 LEVELS = _CORE_LEVELS + WIFI_LEVELS          # every level make_engine accepts (core.LEVELS: the 5G NR ones)
 
 __version__ = "0.2.1.dev0"
-__all__ = ["make_engine", "NRConfig", "Requests", "LEVELS", "__version__"]
+__all__ = ["make_engine", "NRConfig", "Requests", "LEVELS", "record", "RecorderLoop", "RecordConfig", "__version__"]

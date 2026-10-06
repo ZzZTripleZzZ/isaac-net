@@ -27,6 +27,8 @@ __all__ = ["NRConfig", "EdgeConfig", "EdgeLoop", "netslot_compat", "lena_like", 
 
 from .background import BackgroundConfig, BackgroundLoop  # noqa: E402
 from .energy import EnergyConfig, EnergyLoop  # noqa: E402
+from .record import RecordConfig, RecorderLoop  # noqa: E402
 from .sharded import ShardedEngine  # noqa: E402
 
-__all__ += ["BackgroundConfig", "BackgroundLoop", "EnergyConfig", "EnergyLoop", "ShardedEngine"]
+__all__ += ["BackgroundConfig", "BackgroundLoop", "EnergyConfig", "EnergyLoop", "ShardedEngine", "RecordConfig",
+            "RecorderLoop"]
