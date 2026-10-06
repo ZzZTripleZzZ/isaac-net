@@ -1,0 +1,19 @@
+# Build context of docker/Dockerfile (the repository root). BuildKit reads <Dockerfile>.dockerignore next to the
+# Dockerfile. Keep the image to the package, its tests and the benchmark scripts.
+.git
+**/__pycache__
+**/*.pyc
+.venv
+venv*
+.pytest_cache
+.ruff_cache
+site
+build
+dist
+*.egg-info
+**/results
+**/logs
+**/*.pt
+**/*.ckpt
+**/*lena_eesm_tables*
+docs/img

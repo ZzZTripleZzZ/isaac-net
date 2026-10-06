@@ -58,6 +58,8 @@ uv pip install isaac-net                            # the released package from 
 uv pip install -e ".[dev]"                          # the isaac_net package, plus pytest, ruff and build
 ```
 
+**Docker (Linux):** [`docker/Dockerfile`](docker/README.md) builds CUDA 12.6, Python 3.11, torch cu126 with Triton and `isaac-net[dev]`, optionally with Isaac Lab 3.0 kit-less on top (`docker build -f docker/Dockerfile -t isaac-net .`).
+
 **Windows 11 (PowerShell):**
 
 ```powershell
