@@ -44,6 +44,7 @@ nav:
   - Concepts: concepts.md
   - Tutorials:
       - tutorials/index.md
+      - "00 Quick start in Colab": tutorials/00_quickstart_colab.ipynb
       - "01 Your first network": tutorials/01_first_network.ipynb
       - "02 Choosing fidelity": tutorials/02_choosing_fidelity.ipynb
       - "03 Configuring NR": tutorials/03_configuring_nr.ipynb
