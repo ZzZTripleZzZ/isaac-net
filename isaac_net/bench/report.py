@@ -2,6 +2,8 @@
 
     rows = aggregate(load_results(["results/"]))
     print(markdown(rows, metrics=["task", "delay_p95_ms", "aoi_mean_s"]))
+    html(results, rows, "report.html")             # self-contained HTML with figures (viz extra: matplotlib)
+    figs = figures(results, rows, "report_fig/")   # the same figures as PNGs, for markdown_figures(figs)
 
 One group = (task, variant, sim, level, backend, preset, traffic, baseline, label). A file without a
 sim, preset or traffic field counts as the default ("torch", "default", "policy"). Each result file contributes one
@@ -111,3 +113,126 @@ def to_json(rows: Sequence[dict]) -> list:
         d["stats"] = {k: {"mean": v[0], "ci95": v[1], "n": v[2]} for k, v in r["stats"].items()}
         out.append(d)
     return out
+
+
+# ---------------------------------------------------------------------------------------------- figures and HTML
+# Need the viz extra (matplotlib); the tables above do not.
+
+def _group_name(r: dict, keys) -> str:
+    return " / ".join(str(r.get(k) if r.get(k) is not None else _KEY_DEFAULTS.get(k, "")) for k in keys)
+
+
+def _episode_values(results: Sequence[dict], metric: str) -> dict:
+    """{baseline label: values} of one metric: the per env-episode evaluation rows when the result files keep them
+    (run --keep_rows), else one value per result file (its evaluation mean)."""
+    out = {}
+    for r in results:
+        rows = r["eval"].get("rows")
+        vals = [x.get(metric) for x in rows] if rows else [r["eval"]["metrics"].get(metric)]
+        vals = [v for v in vals if v is not None and math.isfinite(v)]
+        name = r["baseline"] + (f" [{r['label']}]" if r.get("label") else "")
+        out.setdefault(name, []).extend(vals)
+    return out
+
+
+def _panels(results: Sequence[dict]):
+    """(title, results) per (task, variant, sim, level, backend, preset, traffic): one figure each."""
+    keys = ("task", "variant", "sim", "level", "backend", "preset", "traffic")
+    groups = {}
+    for r in results:
+        groups.setdefault(_group_name(r, keys), []).append(r)
+    return sorted(groups.items())
+
+
+def cdf_figure(results: Sequence[dict], title: str = ""):
+    """Figure with the CDFs of per-episode delay p95 and mean AoI, one curve per baseline."""
+    from ..viz import style as S
+    from ..viz.cdf import plot_aoi_cdf, plot_delay_cdf
+    plt = S.pyplot()
+    with S.paper_style():
+        fig, axs = plt.subplots(1, 2, figsize=(S.TEXT_W * 0.8, 2.2), constrained_layout=True)
+    d = _episode_values(results, "delay_p95_ms")
+    a = {k: [v * 1e3 for v in vs] for k, vs in _episode_values(results, "aoi_mean_s").items()}
+    if any(d.values()):
+        plot_delay_cdf({k: v for k, v in d.items() if v}, ax=axs[0], quantiles=())
+        axs[0].set_xlabel("Per-episode delay p95 (ms" + (", log scale)" if axs[0].get_xscale() == "log" else ")"))
+    if any(a.values()):
+        plot_aoi_cdf({k: v for k, v in a.items() if v}, ax=axs[1], quantiles=())
+        axs[1].set_xlabel("Per-episode mean AoI (s" + (", log scale)" if axs[1].get_xscale() == "log" else ")"))
+    if title:
+        with S.paper_style():
+            fig.suptitle(title)
+    return fig
+
+
+def summary_figure(rows: Sequence[dict]):
+    """Task metric (mean ± 95% CI over seeds) of every aggregated row, one bar per group."""
+    from ..viz import style as S
+    plt = S.pyplot()
+    labels = [_group_name(r, ("task", "level", "backend", "baseline")) + (f" [{r['label']}]" if r.get("label") else "")
+              for r in rows]
+    with S.paper_style():
+        fig, ax = plt.subplots(figsize=(S.TEXT_W * 0.8, 0.9 + 0.22 * len(rows)), constrained_layout=True)
+        m = [r["stats"]["task"][0] for r in rows]
+        ci = [r["stats"]["task"][1] if math.isfinite(r["stats"]["task"][1]) else 0.0 for r in rows]
+        sty = S.styles_for(list(dict.fromkeys(r["baseline"] for r in rows)))
+        colors = [sty[r["baseline"]][0] for r in rows]
+        y = list(range(len(rows)))[::-1]
+        ax.barh(y, [v if math.isfinite(v) else 0.0 for v in m], xerr=ci, color=colors, alpha=0.8,
+                error_kw=dict(lw=0.7, capsize=1.5), height=0.6)
+        ax.set_yticks(y)
+        ax.set_yticklabels(labels)
+        keys = sorted({f"{r['metric_key']} {'↑' if r['higher_is_better'] else '↓'}" for r in rows})
+        ax.set_xlabel("task metric: " + ", ".join(keys) + " (mean ± 95% CI over seeds)")
+        S.grid(ax, "x")
+    return fig
+
+
+def figures(results: Sequence[dict], rows: Sequence[dict], out_dir: str) -> list:
+    """Write the report's figures as PNGs into out_dir; returns [(caption, path)]."""
+    from ..viz import style as S
+    plt = S.pyplot()
+    os.makedirs(out_dir, exist_ok=True)
+    out = []
+    fig = summary_figure(rows)
+    p = os.path.join(out_dir, "summary.png")
+    S.finish(fig, p, dpi=200)
+    plt.close(fig)
+    out.append(("Task metric per configuration", p))
+    for i, (title, rs) in enumerate(_panels(results)):
+        fig = cdf_figure(rs, title)
+        p = os.path.join(out_dir, f"cdf_{i:02d}.png")
+        S.finish(fig, p, dpi=200)
+        plt.close(fig)
+        out.append((f"Delay and AoI CDFs per baseline: {title}", p))
+    return out
+
+
+def markdown_figures(figs: Sequence, rel_to: str = ".") -> str:
+    """Markdown image lines for figures() output, with paths relative to rel_to."""
+    return "\n\n".join(f"![{c}]({os.path.relpath(p, rel_to)})" for c, p in figs)
+
+
+def html(results: Sequence[dict], rows: Sequence[dict], path: str, metrics: Sequence[str] = DEFAULT_METRICS,
+         timing: bool = True, title: str = "isaac-net benchmark report") -> str:
+    """Self-contained HTML report (inline PNGs): the Markdown table, a per-config summary figure and table, and the
+    delay / AoI CDFs per baseline of every task configuration. Returns path."""
+    from ..viz.report import html_document, img_tag, markdown_table_html, table_html, write_html
+    blocks = ["<h2>Results</h2>", markdown_table_html(markdown(rows, metrics, timing=timing)),
+              '<p class="sub">Mean ± half-width of the two-sided 95% Student t interval over seeds; n = seeds.</p>',
+              "<h2>Per-configuration summary</h2>", img_tag(summary_figure(rows), "summary")]
+    conf = []
+    for r in rows:
+        conf.append([r["task"], r["variant"], r["level"], r["backend"], r["baseline"], len(r["seeds"]),
+                     ", ".join(map(str, r["seeds"])), _fmt(*r["stats"].get("deliveries", (math.nan, math.nan, 0))),
+                     _fmt(*r["stats"].get("delivery_ratio", (math.nan, math.nan, 0))),
+                     f"{r['timing'].get('eval_robot_steps_per_s', 0.0):.3g}"])
+    blocks.append(table_html(["task", "variant", "level", "backend", "baseline", "n", "seeds", "deliveries",
+                              "delivery ratio", "robot-steps/s"], conf, left=5))
+    blocks.append("<h2>Delay and AoI per baseline</h2>")
+    kept = any(r["eval"].get("rows") for r in results)
+    blocks.append('<p class="sub">' + ("CDF over evaluation env-episodes (result files with rows)." if kept else
+                  "CDF over result files (one value per seed); run with --keep_rows for per-episode CDFs.") + "</p>")
+    for title_, rs in _panels(results):
+        blocks.append(img_tag(cdf_figure(rs, title_), title_, title_))
+    return write_html(path, html_document(title, blocks, f"{len(results)} result file(s), {len(rows)} group(s)"))

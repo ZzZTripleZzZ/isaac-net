@@ -5,7 +5,7 @@
     # or from Python
     from isaac_net.tools.rem import compute_rem, save_rem
     rem = compute_rem(multicell(3, channel="tr38901_umi"), resolution_m=2.0, seed=0)
-    save_rem(rem, "rem.npz", png="rem.png")
+    save_rem(rem, "rem.npz", png="rem.png")      # panels=("rsrp", "sinr", "serving", "los") by default
 
 The map comes from radio.RadioMC for the config (any channel model: log_distance, tr38901, radio_map) with the gNB
 layout of NRConfig.gnb_xy(). Every grid point is a receiver at ue_height_m; the fields are those of env `env` of a
@@ -115,11 +115,14 @@ def compute_rem(cfg: NRConfig | None = None, bounds=None, resolution_m=1.0, shap
     return out
 
 
-def save_rem(rem, path, png=None):
+DEFAULT_PANELS = ("rsrp", "sinr", "serving", "los")
+
+
+def save_rem(rem, path, png=None, panels=DEFAULT_PANELS):
     """Write the REM dict to `path` (.npz, uncompressed) and, with png=..., a figure (needs matplotlib)."""
     np.savez(path, **rem)
     if png is not None:
-        plot_rem(rem, png)
+        plot_rem(rem, png, panels=panels)
     return path
 
 
@@ -129,8 +132,9 @@ def load_rem(path):
         return {k: (str(z[k]) if k == "meta" else z[k]) for k in z.files}
 
 
-def plot_rem(rem, path):
-    """Three panels (best-cell RSRP, best-cell SINR, serving cell) with the gNBs marked. Skipped with a warning when
+def plot_rem(rem, path, panels=DEFAULT_PANELS):
+    """One panel per name of `panels` (isaac_net.viz.maps.plot_rem: rsrp, sinr, serving, los, pathgain) with the gNBs
+    marked and a scale bar; "los" is left out when the channel has no LOS state. Skipped with a warning when
     matplotlib is not installed."""
     try:
         import matplotlib
@@ -139,28 +143,12 @@ def plot_rem(rem, path):
     except ImportError:
         warnings.warn("matplotlib is not installed: REM figure skipped (the .npz is written)")
         return None
-    x, y = rem["x"], rem["y"]
-    dx = (x[1] - x[0]) / 2 if x.size > 1 else 0.5
-    dy = (y[1] - y[0]) / 2 if y.size > 1 else 0.5
-    ext = (x[0] - dx, x[-1] + dx, y[0] - dy, y[-1] + dy)
-    C = rem["rsrp_dbm"].shape[0]
-    panels = [("best-cell RSRP (dBm per RE)", rem["rsrp_dbm"].max(0), "viridis", {}),
-              ("best-cell DL SINR (dB)", rem["sinr_db"], "magma", {}),
-              ("serving cell", rem["serving"], plt.get_cmap("tab10", max(C, 1)), {"vmin": -0.5, "vmax": C - 0.5})]
-    fig, axs = plt.subplots(1, 3, figsize=(14, 4.2), constrained_layout=True)
-    for ax, (title, img, cmap, lim) in zip(axs, panels):
-        im = ax.imshow(img, origin="lower", extent=ext, cmap=cmap, aspect="equal", interpolation="nearest", **lim)
-        ax.plot(rem["gnb_xy"][:, 0], rem["gnb_xy"][:, 1], "w^", ms=9, mec="k")
-        for c, (gx, gy) in enumerate(rem["gnb_xy"]):
-            ax.annotate(str(c), (gx, gy), xytext=(5, 5), textcoords="offset points", color="w", fontsize=9)
-        ax.set_title(title)
-        ax.set_xlabel("x (m)")
-        ax.set_ylabel("y (m)")
-        cb = fig.colorbar(im, ax=ax, shrink=0.85)
-        if lim:
-            cb.set_ticks(list(range(C)))
-    fig.savefig(path, dpi=120)
-    plt.close(fig)
+    from isaac_net.viz.maps import plot_rem as _plot
+    panels = tuple(panels)
+    if "los" in panels and "los" not in rem and panels == DEFAULT_PANELS:
+        panels = tuple(p for p in panels if p != "los")          # default set: no warning for a LOS-free channel
+    axs = _plot(rem, panels=panels, path=path)
+    plt.close(axs[0].figure)
     return path
 
 
@@ -179,6 +167,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m isaac_net.tools.rem", description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", default="rem.npz", help="output .npz")
     ap.add_argument("--png", default=None, help="optional figure (needs matplotlib)")
+    ap.add_argument("--panels", default=",".join(DEFAULT_PANELS),
+                    help="comma-separated figure panels: rsrp, sinr, serving, los, pathgain (los needs a channel with "
+                         "a LOS state)")
     ap.add_argument("--preset", default=None, help="NRConfig preset function of isaac_net.core.config "
                                                    "(e.g. multicell, lena_like); default NRConfig()")
     ap.add_argument("--set", nargs="*", default=(), metavar="FIELD=VALUE",
@@ -195,7 +186,7 @@ def main(argv=None):
     else:
         cfg = NRConfig(**kw)
     rem = compute_rem(cfg, bounds=a.bounds, resolution_m=a.res, seed=a.seed, env=a.env)
-    save_rem(rem, a.out, png=a.png)
+    save_rem(rem, a.out, png=a.png, panels=tuple(p.strip() for p in a.panels.split(",") if p.strip()))
     C, H, W = rem["rsrp_dbm"].shape
     print(f"wrote {a.out}: {C} cells, {H} x {W} grid, SINR {rem['sinr_db'].min():.1f} .. {rem['sinr_db'].max():.1f} dB"
           + (f", figure {a.png}" if a.png else ""))

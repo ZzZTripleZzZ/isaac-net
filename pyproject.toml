@@ -65,6 +65,8 @@ oai = ["pyarrow>=12"]
 # Scene radio maps and PHY table export (tools/scene, tools/export_sionna_tables; docs/scene-radio-map.md):
 # the USD exporter needs pxr (usd-core), the bake needs Sionna RT, the BLER table export needs Sionna SYS.
 sionna = ["sionna-rt>=1.0", "sionna==2.2.0", "usd-core>=24.0"]
+# Plots, the RecorderLoop's Parquet output and HTML reports (isaac_net.viz, core/record.py; docs/viz.md).
+viz = ["matplotlib>=3.8", "pandas>=2.0", "pyarrow>=14"]
 # The Wi-Fi level (WIFI) needs nothing beyond the core dependencies.
 wifi = []
 # Everything installable with pip on Linux without Isaac Sim / Isaac Lab.

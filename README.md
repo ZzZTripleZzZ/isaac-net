@@ -81,6 +81,7 @@ Linux with an NVIDIA GPU is the main target for the standalone package, and Pyth
 | `ns3` | pybind11 | the ns-3 bridges ([docs/bridges.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/bridges.md)). ns-3.48 and 5G-LENA v5.1 are built locally |
 | `oai` | pyarrow | the OAI 5G rfsim bridge and measurement tools ([docs/bridges-oai.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/bridges-oai.md)). OAI runs from its Docker images |
 | `sionna` | Sionna RT, Sionna 2.2.0, usd-core | radio maps from USD scenes and the PHY table export ([docs/scene-radio-map.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/scene-radio-map.md)) |
+| `viz` | matplotlib, pandas, pyarrow | plots in the paper's style, the per-step KPI recorder's Parquet output and HTML reports ([docs/viz.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/viz.md)) |
 | `wifi` | nothing | level `WIFI` needs only the core dependencies |
 | `all` | every extra above except `isaac` | everything pip can install on Linux without Isaac |
 
@@ -130,6 +131,21 @@ net = make_engine("L2", E, R, dev, cfg, backend="auto")        # triton if it ac
 out = net.step(None, pos)                                      # poses: Rician K and delay spread follow the LOS state
 print(net.output_schema()["delay"])                            # shape, dtype, unit and meaning of every step key
 ```
+
+**Record and plot** (extra `viz`). `record` wraps any engine, keeps per-step KPIs on the device and writes them to Parquet at flush time. It leaves the engine's outputs bitwise unchanged.
+
+```python
+from isaac_net import Requests, make_engine, record
+from isaac_net.viz import cdf, report
+net = record(make_engine("L2", E, R, dev), "runs/l2", every=10, label="L2")   # same API as the engine
+for _ in range(300):
+    net.submit(None, Requests(send)); out = net.step(None, pos)
+net.close()                                          # writes runs/l2/{steps,cells,delay_hist,...}
+cdf.plot_delay_cdf(["runs/l2"], by="level", path="delay_cdf.png")
+report.from_records(["runs/l2"], "report.html")      # self-contained HTML with tables and figures
+```
+
+[docs/viz.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/viz.md) lists the recorded columns, TensorBoard and W&B logging, and the plots (REM panels, arena snapshots, per-cell PRB heatmaps, engine vs 5G-LENA), and `isaac-net-bench report --html` writes the same kind of report for the benchmark suite.
 
 ## Isaac Lab quick start
 
