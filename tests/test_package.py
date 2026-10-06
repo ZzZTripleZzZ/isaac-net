@@ -24,7 +24,7 @@ MODULES = [
     "isaac_net.bridges.ns3_pool.poolnet", "isaac_net.bridges.ns3_offline.rollout",
     "isaac_net.bridges.ns3_offline.replaynet", "isaac_net.bridges.ns3_offline.offline_ns3",
     "isaac_net.bridges.ns3_offline.replay_error", "isaac_net.bridges.ns3_offline.lena_replay",
-    "isaac_net.tools", "isaac_net.tools.extract_lena_tables",
+    "isaac_net.tools", "isaac_net.tools.extract_lena_tables", "isaac_net.tools.doctor", "isaac_net.tools.selftest",
     "isaac_net.core.levels", "isaac_net.core.levels.base", "isaac_net.core.levels.surrogates",
     "isaac_net.core.levels.bounds", "isaac_net.tools.fit_levels", "isaac_net.core.proto.rng",
 ]
