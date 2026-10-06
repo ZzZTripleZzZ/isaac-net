@@ -81,6 +81,7 @@ Linux with an NVIDIA GPU is the main target for the standalone package, and Pyth
 | `ns3` | pybind11 | the ns-3 bridges ([docs/bridges.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/bridges.md)). ns-3.48 and 5G-LENA v5.1 are built locally |
 | `oai` | pyarrow | the OAI 5G rfsim bridge and measurement tools ([docs/bridges-oai.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/bridges-oai.md)). OAI runs from its Docker images |
 | `sionna` | Sionna RT, Sionna 2.2.0, usd-core | radio maps from USD scenes and the PHY table export ([docs/scene-radio-map.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/scene-radio-map.md)) |
+| `viz` | matplotlib, pandas, pyarrow | plots in the paper's style, the per-step KPI recorder's Parquet output and HTML reports ([docs/viz.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/viz.md)) |
 | `wifi` | nothing | level `WIFI` needs only the core dependencies |
 | `all` | every extra above except `isaac` | everything pip can install on Linux without Isaac |
 
@@ -111,6 +112,21 @@ for _ in range(300):                                # one control step = 100 ms 
 ```
 
 `make_engine(level, E, R, device, config, backend)` builds every fidelity level, and every engine has the same API. `step` also returns, per message slot, the `delivered` and `timed_out` masks, the `delay` in control steps and the `cap`/`cls` of each message, plus `queue_bytes`, `sinr_db` and, if `Requests(send, det, hid)` carried an application tag, `det_env`. `reset(env_ids)` takes an index tensor, a list or a bool mask and leaves every other env bit-for-bit unaffected. The earlier calls `add_frames(t, send, det, hid, snr)` and `step(t, snr, hid) -> (newest, det_env)` still work. `aoi` and `queued` go straight into observations. The example task in [`isaac_net/examples/fleet_task.py`](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/isaac_net/examples/fleet_task.py) uses the application tag to mark frames that captured a hazard. [`isaac_net/isaac/mixins.py`](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/isaac_net/isaac/mixins.py) wires a network into an Isaac Lab `DirectRLEnv` with four hook calls (see [Isaac Lab quick start](#isaac-lab-quick-start)).
+
+**Record and plot** (extra `viz`). `record` wraps any engine, keeps per-step KPIs on the device and writes them to Parquet at flush time. It leaves the engine's outputs bitwise unchanged.
+
+```python
+from isaac_net import Requests, make_engine, record
+from isaac_net.viz import cdf, report
+net = record(make_engine("L2", E, R, dev), "runs/l2", every=10, label="L2")   # same API as the engine
+for _ in range(300):
+    net.submit(None, Requests(send)); out = net.step(None, pos)
+net.close()                                          # writes runs/l2/{steps,cells,delay_hist,...}
+cdf.plot_delay_cdf(["runs/l2"], by="level", path="delay_cdf.png")
+report.from_records(["runs/l2"], "report.html")      # self-contained HTML with tables and figures
+```
+
+[docs/viz.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/viz.md) lists the recorded columns, TensorBoard and W&B logging, and the plots (REM panels, arena snapshots, per-cell PRB heatmaps, engine vs 5G-LENA), and `isaac-net-bench report --html` writes the same kind of report for the benchmark suite.
 
 ## Isaac Lab quick start
 
