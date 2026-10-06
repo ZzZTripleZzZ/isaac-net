@@ -43,6 +43,27 @@ Parallel robot learning runs thousands of environments on one GPU, but the netwo
 
 **Platforms.** The `isaac_net` package itself is plain Python + PyTorch and runs on both Linux and Windows 11 with an NVIDIA GPU (the reference engines also run on a CPU). The Isaac Lab integration was developed and tested natively on **Windows 11**; Linux is supported through the recipe in [docs/isaac-lab-linux.md](https://github.com/ZzZTripleZzZ/isaac-net/blob/main/docs/isaac-lab-linux.md). Commands below are given for both: `bash` blocks are Linux, `powershell` blocks are Windows (Windows PowerShell 5.1 or PowerShell 7). Paths written as `~/.cache/isaac_net/...` mean `$HOME\.cache\isaac_net\...` (i.e. `C:\Users\<you>\.cache\isaac_net\...`) on Windows.
 
+## What it looks like
+
+<table>
+<tr>
+<td width="50%"><img src="https://raw.githubusercontent.com/ZzZTripleZzZ/isaac-net/main/docs/img/trace_timeline.png" alt="Slot-level timeline of one robot's uplink: scheduling request, transport blocks, retransmissions, deliveries, SINR and MCS per slot"></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/ZzZTripleZzZ/isaac-net/main/docs/img/viz/vs_ns3.png" alt="Delay CDF of the NR engine against ns-3 5G-LENA with per-run errors by load"></td>
+</tr>
+<tr>
+<td><em>Why did this message take 42.5 ms? A <code>SlotTrace</code> records every slot of selected robots: the SR wait, each transport block, NACKs and retransmissions, and the delivery (<a href="docs/trace.md">docs/trace.md</a>).</em></td>
+<td><em>The NR engine against ns-3 5G-LENA on identical link budgets and traffic: delay CDFs and per-run p50/p95 errors by load (<a href="docs/fidelity-vs-lena.md">docs/fidelity-vs-lena.md</a>).</em></td>
+</tr>
+<tr>
+<td><img src="https://raw.githubusercontent.com/ZzZTripleZzZ/isaac-net/main/docs/img/viz/rem_panels.png" alt="Radio environment map: best-cell RSRP, DL SINR, serving cell and LOS state over a three-cell arena"></td>
+<td><img src="https://raw.githubusercontent.com/ZzZTripleZzZ/isaac-net/main/docs/img/viz/delay_cdf.png" alt="Delay CDFs of the fidelity levels on the same seeds"></td>
+</tr>
+<tr>
+<td><em>A radio environment map of a three-cell arena from <code>isaac-net-rem</code>: RSRP, downlink SINR, serving cell and the LOS state of each point (<a href="docs/rem.md">docs/rem.md</a>).</em></td>
+<td><em>Delay CDFs of the fidelity levels on the same seeds, recorded with <code>isaac_net.record</code> and drawn with <code>isaac_net.viz</code> (<a href="docs/viz.md">docs/viz.md</a>).</em></td>
+</tr>
+</table>
+
 ## Install
 
 This installs the standalone package (no Isaac Lab). To use it inside Isaac Lab, follow the [Isaac Lab quick start](#isaac-lab-quick-start) instead, which installs it into Isaac's own environment.
