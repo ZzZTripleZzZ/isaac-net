@@ -504,11 +504,14 @@ def test_reference_and_graph_checkpoints_are_interchangeable(src, dst, tmp_path)
         assert all(same(ref[i][k], o[k]) for k in ref[i]), i
 
 
-def test_graph_backend_keeps_its_buffers():
-    """load_state_dict copies into the persistent buffers: same tensor objects, same storage, attributes bound."""
+@pytest.mark.parametrize("seed_b", [1, 2])
+def test_graph_backend_keeps_its_buffers(seed_b):
+    """load_state_dict copies into the persistent buffers: same tensor objects, same storage, attributes bound. The
+    captured graphs stay when the checkpoint comes from an engine with the same seed; with another seed they are
+    dropped (a graph bakes in the counter RNG's seed key) and the next step captures again."""
     cfg = _nr("traffic")
     steps = nr_steps(cfg, 6)
-    a, b = CPUGraph(E, R, "cpu", cfg, seed=1), CPUGraph(E, R, "cpu", cfg, seed=2)
+    a, b = CPUGraph(E, R, "cpu", cfg, seed=1), CPUGraph(E, R, "cpu", cfg, seed=seed_b)
     for d in steps:
         nr_drive(a, d)
     for d in steps[:3]:
@@ -521,7 +524,10 @@ def test_graph_backend_keeps_its_buffers():
     for ok, n, k, buf, ptr in regs:
         cur = getattr(own[ok], n) if k is None else getattr(own[ok], n)[k]
         assert cur is buf and buf.data_ptr() == ptr, (ok, n, k)
-    assert b._graphs == graphs                             # nothing new to register: the captured graphs stay
+    if seed_b == 1:
+        assert b._graphs == graphs                         # no baked host value changed: the captured graphs stay
+    else:
+        assert graphs and not b._graphs
 
 
 # ---------------------------------------------------------------------------------------------- GPU
