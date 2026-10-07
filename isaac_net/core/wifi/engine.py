@@ -196,6 +196,9 @@ class WifiNet(LevelNet):
                                  rng=self.rng)
         return self.radio
 
+    def _ckpt_make_radio(self):
+        self._radio()
+
     def output_schema(self):
         """{key: {"shape", "dtype", "unit", "doc", "when"}} of the keys step() returns (core/schema.py)."""
         from ..schema import schema

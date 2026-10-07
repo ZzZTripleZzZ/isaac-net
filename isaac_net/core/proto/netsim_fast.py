@@ -46,6 +46,7 @@ import torch
 
 from . import netsim as _ns
 
+from ..checkpoint import StateDictMixin
 from .rng import STEP, SUBMIT, CounterRNG, check_mode
 
 UL_PER_STEP, S, BYTES_PER_SE, F = _ns.UL_PER_STEP, _ns.S, _ns.BYTES_PER_SE, _ns.F
@@ -213,7 +214,7 @@ def slot_epilogue(rem, bsr, hcnt):
 
 
 # ----------------------------------------------------------------------------------------------
-class NetFast:
+class NetFast(StateDictMixin):
     FIELDS = _ns.NetBase.FIELDS
     FEATS = _ns.NetBase.FEATS
     INIT, DTYPE = _ns.NetBase.INIT, _ns.NetBase.DTYPE
@@ -382,6 +383,9 @@ class NetFast:
 
     def _snr_from(self, x):
         return _ns.NetBase._snr_from(self, x)
+
+    def _ckpt_make_radio(self):
+        _ns.NetBase._ckpt_make_radio(self)
 
     def submit(self, t, requests, snr_db=None):
         t = self._tvec(t)

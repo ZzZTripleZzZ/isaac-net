@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import torch
 
+from .checkpoint import StateDictMixin
 from .config import NRConfig
 from .levels import BOUND_LEVELS, SURROGATE_LEVELS
 from .proto.rng import CounterRNG
@@ -76,7 +77,7 @@ def set_env_offset(engine, offset):
     engine.reset(None)
 
 
-class ShardedEngine:
+class ShardedEngine(StateDictMixin):
     """E envs split across `devices` (a device may repeat: two shards on one GPU). See the module docstring."""
 
     def __init__(self, level, E, R, devices, config: NRConfig | None = None, backend="reference", *, seed=None,

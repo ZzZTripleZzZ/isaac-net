@@ -113,6 +113,9 @@ class NRGraphEngine(NREngine):
     """NREngine whose step() replays CUDA graphs of the reference step. Same API and outputs as NREngine."""
 
     backend = "graph"
+    # not state (core/checkpoint.py): the device step counter is filled before every replay, _g0_dev from the host
+    # _g0 before every gated step, n_replays is a statistic; so reference and graph checkpoints load into each other
+    _ckpt_skip = frozenset({"_tdev", "_g0_dev", "n_replays"})
     _require_cuda = True       # False (tests only): on a CPU device, replays re-run the captured region eagerly
 
     def __init__(self, E, R, device, cfg: NRConfig, seed=None):
@@ -173,6 +176,17 @@ class NRGraphEngine(NREngine):
                     setattr(o, n, buf)
                 else:
                     getattr(o, n)[k] = buf
+
+    def _ckpt_finish(self):
+        """After load_state_dict (core/checkpoint.py): the restore copied into the persistent buffers in place; state
+        it had to create (attributes a step makes on first use) becomes persistent too, and graphs captured before
+        that are dropped (they would not write the new buffers)."""
+        n = len(self._reg)
+        self._extend_registry()
+        self._rebind()
+        if len(self._reg) != n:
+            self._graphs.clear()
+            self._ion_delta.clear()
 
     def _host_state(self):
         net = self.net
@@ -489,6 +503,7 @@ class NRTritonEngine(NRGraphEngine):
     are refused at the first step. Robots are padded to a power of two (R up to about 256)."""
 
     backend = "triton"
+    _ckpt_skip = frozenset({"_acc"})         # per-step kernel accumulators (scratch, folded into the counters)
 
     @staticmethod
     def refusals(cfg: NRConfig):

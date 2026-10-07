@@ -75,6 +75,7 @@ from dataclasses import dataclass
 
 import torch
 
+from .checkpoint import StateDictMixin
 from .config import NRConfig
 from .proto import netsim as _ns
 from .proto.rng import RESET, STEP, SUBMIT, CounterRNG, combine, mix32
@@ -486,7 +487,7 @@ def _patch_rng_rows(rng):
     rng._rows = rows
 
 
-class AdaptiveEngine:
+class AdaptiveEngine(StateDictMixin):
     """Per-env routing of control steps between a cheap and an expensive level (module docstring).
 
     Every piece of routing state is a persistent buffer updated in place, so graph mode can capture submit and step
