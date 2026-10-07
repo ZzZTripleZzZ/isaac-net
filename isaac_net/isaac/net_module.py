@@ -109,8 +109,9 @@ class NetModule(StateDictMixin):
             raise ValueError(f"unknown level {level!r}; one of {LEVELS}")
         if backend in ("ref", "orig"):
             backend = "reference"
-        cfg = config if config is not None else NRConfig()
         isc = isaac if isaac is not None else IsaacNetCfg()
+        cfg = isc.resolve_nr(config)                      # IsaacNetCfg.nr overrides / preset, also without net_setup
+        cfg = cfg if cfg is not None else NRConfig()
         if isaac_overrides:
             known = {f.name for f in fields(IsaacNetCfg)}
             bad = sorted(set(isaac_overrides) - known)

@@ -87,6 +87,7 @@ nav:
       - Radio environment maps: rem.md
       - Slot traces: trace.md
       - Plots and reports: viz.md
+      - Checkpoints: checkpoint.md
       - "Wi-Fi (802.11 DCF / EDCA)": wifi.md
       - Radio maps from USD scenes: scene-radio-map.md
       - ns-3 bridges in depth: bridges.md
