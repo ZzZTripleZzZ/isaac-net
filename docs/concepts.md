@@ -54,6 +54,10 @@ A partial reset re-initializes everything the listed environments own: queues, M
 
 The configurable NR engine keeps one global slot clock internally, because its HARQ, scheduling-request and CQI timers are counted in slots. It presents per-env clocks on top of it by storing the step at which each environment was last reset. For this reason it cannot jump in time: an explicit `t` must equal the engine clock, and after a partial reset only `t=None` is accepted.
 
+## Checkpoints
+
+Because all network state is tensors, plus a few host values such as the NR engine's global slot clock, a running network can be saved and resumed exactly. `net.state_dict()` returns every state tensor, the state of every `torch.Generator` (the traffic models draw from their own) and those host values, under flat keys such as `net.ul.q.cap`. `net.load_state_dict(sd)` copies them back in place, so the fast backends keep their static buffers. The counter RNG makes this simple: its whole state is the per-env episode and call counters and the env offsets, so restoring them puts every env back on exactly the random stream it was on. A resume on the same backend and device is bitwise equal to the uninterrupted run. `isaac_net.core.checkpoint.save` and `load` add a file with a compatibility check, and with rsl_rl the network is saved next to every policy checkpoint. See [Checkpoints](checkpoint.md).
+
 ## Messages, delay and age of information
 
 A robot hands the network at most one message per control step, as a traffic class: `Requests.send[e, r] = c` enqueues one message of `NRConfig.msg_sizes[c - 1]` bytes, and `0` sends nothing. The message is stamped with the current capture step. `step` then reports, for every message that completed, its `delay` in control steps from capture to delivery. On level `L2`, traffic models can also generate messages inside the step, several per control step if needed, and their delay counts from their arrival slot (see [Traffic models](configurability.md#traffic-models)).
