@@ -4,7 +4,7 @@ All notable changes to `isaac-net` are listed here, grouped by area. The format 
 
 ## [Unreleased]
 
-A usability and visualization wave: scenario presets, a config summary, an install doctor, slot traces, a KPI recorder with a plotting package, registered Isaac Lab tasks with viewport overlays, and new onboarding pages. Nothing in the engines' step changes: the recorder and the trace are bitwise invisible, and `make_engine` keeps `backend="reference"` as its default.
+A usability and visualization wave: scenario presets, a config summary, an install doctor, slot traces, a KPI recorder with a plotting package, registered Isaac Lab tasks with viewport overlays, and new onboarding pages, then checkpoints of a running network, config files with generated preset YAML, network KPIs in the Isaac Lab log and an online docs site. Nothing in the engines' step changes: the recorder and the trace are bitwise invisible, and `make_engine` keeps `backend="reference"` as its default.
 
 ### Added
 
@@ -46,6 +46,32 @@ A usability and visualization wave: scenario presets, a config summary, an insta
 - `docker/Dockerfile` and `docker/README.md` for the kit-less Linux path: CUDA 12.6 runtime, torch from the cu126 index, and an optional `isaaclab` stage pinned to the validated Isaac Lab commit. It passes hadolint and has not been built.
 - A CI job `docs-examples` executes the Colab notebook and every Python block of the cookbook on a CPU.
 
+#### Docs site
+
+- The documentation is online at [docs.isaacnet.zifanzhang.com](https://docs.isaacnet.zifanzhang.com/) (Cloudflare Pages project `isaacnet-docs`): the latest `main` at the root and each release under `/<version>/` (now [`/0.2.0/`](https://docs.isaacnet.zifanzhang.com/0.2.0/)), with a `versions.json` for the mkdocs-material version selector and a `/latest/` redirect.
+- `scripts/build_docs.sh` builds `main` and every version in `DOCS_VERSIONS` (default `"0.2.0"`) with `mkdocs build --strict`, and `scripts/deploy_docs.sh` deploys the result with wrangler. The `Docs` workflow (`.github/workflows/docs.yml`) builds on every push to `main` and on `v*` tags, and deploys only when the repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` exist. Step 3 of [RELEASE.md](RELEASE.md) now says to add the new version to `DOCS_VERSIONS`.
+
+#### Checkpoints
+
+- `state_dict()` and `load_state_dict(sd, strict=True)` on every engine, wrapper, `ShardedEngine`, `AdaptiveEngine` and `NetModule`, from one `StateDictMixin` in `isaac_net/core/checkpoint.py` ([docs/checkpoint.md](docs/checkpoint.md)). The state dict is flat and keyed by attribute path; it holds every state tensor (cloned), the state of every `torch.Generator` and the host values such as the NR engine's slot clock. `checkpoint.SKIP` lists, with a reason each, what is left out: configurations, PHY tables, captured CUDA graphs and their static buffers, caches and the `log_stats` statistics. `strict=True` raises `KeyError` on a key that cannot be placed, on missing state and on a shape or dtype mismatch; `strict=False` restores what fits.
+- `checkpoint.save(engine, path, extra=None)` and `checkpoint.load(engine, path, strict=True, global_rng=False)`. The file carries a header (package version, format, engine kind, level, backend, device, `E`, `R`, config) that `load` checks field by field before restoring (the seed may differ); a mismatch raises `ValueError` naming the fields, or warns with `strict=False`, and a CPU / CUDA difference only warns. The file is written to `path + ".tmp"` and renamed, holds the state on the CPU and, apart from `extra`, loads with `torch.load(..., weights_only=True)`. `save` also records the global torch RNG, which `load(..., global_rng=True)` restores for `rng="global"`.
+- A resume on the same backend and device is bitwise equal to the uninterrupted run: step outputs, `counters()` and the next `state_dict()`. NR engine checkpoints of `reference` and `graph` load into each other strictly; other backend pairs need `strict=False`. Graph backends restore in place with `copy_`, so captured CUDA graphs keep their buffers. `ShardedEngine` stores each shard under `shards[i].` and needs the same split.
+- Sizes at the default config: about 2.6 kB per robot on `L2` uplink, 4.5 kB with the downlink, 0.9 kB on `L2-legacy`, `L1` and `L0`.
+- Isaac Lab: `NetModule.save(path, extra=None, host=None)` and `load(path, strict=True, host=None, global_rng=False)`, where `host` (the Direct env, or `env.isaac_net` for a manager-based env) adds the multi-rate state that lives on the host; `find_network(env)`, `save_env_network(env, path)` and `load_env_network(env, path)` in `isaac_net.isaac.net_module`.
+- An rsl_rl hook, `isaac_net/isaac/tasks/rsl_rl_hook.py`, installed by `isaac_net.isaac.tasks.register()` and `python -m isaac_net.isaac.tasks.train` when rsl_rl is importable (`ISAAC_NET_RSL_RL_HOOK=0` turns it off): every `model_<iter>.pt` gets an `isaac_net_<iter>.pt` next to it, restored on `--resume`. Only rank 0 saves and restores under distributed training. Isaac Lab does not checkpoint the physics, so on a resume the envs restart from their reset state while the network continues ([docs/checkpoint.md](docs/checkpoint.md#isaac-lab-and-rsl_rl)).
+
+#### Config files and presets
+
+- `NRConfig.to_dict(only_changed=False)`, `from_dict(d, base=None)`, `to_json` / `from_json`, `to_yaml` / `from_yaml` and `from_preset(name, **overrides)` ([docs/config-files.md](docs/config-files.md)). Every preset and scenario round-trips exactly: tuples become lists, `None` stays `None`, `inf` / `-inf` / `nan` become strings, a nested config carries a `__type__` key, and a `TrafficModel` is written as its kind and the fields it changed. A dict with a `preset` key builds that preset with the other keys as overrides. YAML needs PyYAML, which is optional: without it `to_yaml` writes JSON text and `from_yaml` reads JSON content only.
+- Reading is strict: a key that is not a field raises `UnknownFieldError` (a `ValueError`, in `isaac_net.core.config`) with the closest field names, and so does an unknown preset name.
+- Twelve generated preset files in `isaac_net/core/presets/` (the eight validation presets and the four scenario presets, fields away from `NRConfig()` only), shipped as package data; `PRESETS` and `preset_path(name)` in `isaac_net.core.presets`. `scripts/export_presets.py` writes them and `--check` exits 1 when one differs from its Python preset, which `tests/test_config_io.py` also checks.
+
+#### Isaac Lab KPIs and overrides
+
+- `IsaacNetCfg.nr` (default `{}`): a dict of `NRConfig` field overrides, or `{"preset": name, ...}`, applied on top of the env's `NRConfig` by `net_setup`, `finalize_fleet_cfg` and `NetModule`; an `NRConfig` there replaces the env's config. From the command line of a registered task: `env.net_isaac.nr.ul_tpc=true` or `env.net_isaac.nr.preset=warehouse_private_5g`, and `env.isaac_net.isaac.nr.ul_tpc=true` on the manager-based task. A misspelled key raises `UnknownFieldError` before the simulation starts ([docs/config-files.md](docs/config-files.md#hydra-overrides-in-the-registered-tasks)).
+- Network KPIs in `extras["log"]`, which rsl_rl writes to TensorBoard: `net/aoi_mean_s`, `net/aoi_p95_s`, `net/delay_mean_ms`, `net/delivered_frac`, `net/dropped_frac`, `net/queue_bytes_mean` and `net/sinr_mean_db` on every level, `net/prb_util` and `net/harq_bler` on `L2`, and `net/rlf_frac` / `net/access_sleep_frac` when the step reports them. They are computed on the device without a host sync by `isaac_net/isaac/kpis.py`, in `NetEnvMixin.net_step` and `NetRuntime.step`, with `IsaacNetCfg.log_kpis=True` and `log_every=1` by default ([docs/isaac-lab.md](docs/isaac-lab.md#network-kpis-in-tensorboard)).
+- `isaac_net.core.record.mac_links(engine)` and `mac_counters(links)` expose the NR MAC counter snapshot that the recorder used internally; the KPIs reuse it.
+
 ### Changed
 
 - `make_engine(..., strict=False)`, the default, now emits one `UnusedFieldsWarning` (a `UserWarning`) naming the fields a level ignores, once per level and set of ignored values per process; before, they were ignored silently. `strict=None` skips the check and `strict=True` still raises ([docs/configurability.md](docs/configurability.md#ignored-fields-warning-and-strict-mode)).
@@ -53,6 +79,10 @@ A usability and visualization wave: scenario presets, a config summary, an insta
 - `isaac-net-rem` draws its PNG through `isaac_net.viz.maps.plot_rem` and takes `--panels`, and `isaac-net-bench` gains `report --html`, `report --figures` and `run --keep_rows` (see Added).
 - Tutorial 03 no longer says that `L2-legacy` refuses `timeout_steps=10`: the prototype levels accept the frame buffer, timeout and control step, and ignored MAC fields give an `UnusedFieldsWarning`, or an error with `strict=True`.
 - `CITATION.cff` is at version 0.2.0, released 2026-10-05.
+- `NetModule.__init__` applies `IsaacNetCfg.nr` itself (`IsaacNetCfg.resolve_nr`), so a `NetModule` built without `net_setup` gets the same overrides or preset; with an empty `nr` the config is unchanged.
+- Isaac Lab envs now put the `net/` KPIs into `extras["log"]` on every network step by default (`IsaacNetCfg.log_kpis=True`); `log_kpis=False` restores the previous log.
+- `RecorderLoop` reads the NR MAC counters through `mac_links` / `mac_counters`; its output is unchanged.
+- The README's Documentation links and `Documentation` in `pyproject.toml` point at [docs.isaacnet.zifanzhang.com](https://docs.isaacnet.zifanzhang.com/) instead of the `docs/` folder on GitHub.
 
 ## [0.2.0] - 2026-10-05
 
