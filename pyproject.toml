@@ -90,6 +90,7 @@ include = ["isaac_net*"]
 # (radio_map_path="synthetic"). The 5G-LENA tables (GPL-derived) are never shipped: they are generated locally by
 # `python -m isaac_net.tools.extract_lena_tables` (docs/licensing.md).
 "isaac_net.core" = ["data/*.npz", "data/LICENSE-*"]
+"isaac_net.core.presets" = ["*.yaml"]
 # Our own (BSD-3) C++ ns-3 bridge programs and build scripts; binaries built from them are not shipped.
 "isaac_net.bridges" = ["ns3/*/README.md", "ns3/*/*.cc", "ns3/*/*.sh", "ns3/*/pyshm/*.cc"]
 # The OAI rfsim deployment (compose file; OAI's own configuration files are generated from an OAI checkout).
