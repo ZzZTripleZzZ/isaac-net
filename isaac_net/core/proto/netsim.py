@@ -29,6 +29,7 @@ from typing import Optional
 
 import torch
 
+from ..checkpoint import StateDictMixin
 from .rng import STEP, SUBMIT, CounterRNG, check_mode
 
 UL_PER_STEP = 40            # 100 ms control step, TDD DDDSU at 30 kHz SCS: one UL slot per 2.5 ms
@@ -207,7 +208,7 @@ class Radio:
         return P_TX_DBM - pl - sh - NI_DBM
 
 
-class NetBase:
+class NetBase(StateDictMixin):
     FIELDS = ["cap", "cls", "det", "hid", "rem", "dlv", "f_nact", "f_snr", "f_own"]
     FEATS = ["cls", "f_nact", "f_snr", "f_own"]
     # initial value of every per-frame field
@@ -298,9 +299,13 @@ class NetBase:
         """x is SNR [E,R] in dB, or positions [E,R,2|3] that go through the engine's Radio."""
         if x.dim() == 3:
             if self.radio is None:
-                self.radio = Radio(self.E, self.dev, generator=self.gen, rng=self.rng)
+                self._ckpt_make_radio()
             return self.radio.snr_db(x)
         return x
+
+    def _ckpt_make_radio(self):
+        """The engine's radio, made at the first step with poses (also by load_state_dict, core/checkpoint.py)."""
+        self.radio = Radio(self.E, self.dev, generator=self.gen, rng=self.rng)
 
     # ------------------------------------------------------------------ enqueue
     def submit(self, t, requests, snr_db=None):

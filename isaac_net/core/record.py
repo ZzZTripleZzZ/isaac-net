@@ -56,6 +56,8 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 import torch
 
+from .checkpoint import StateDictMixin
+
 SCHEMA = "isaac-net-record/1"
 
 # log-spaced histogram (the bins of isaac_net.bench.metrics): bin 0 = [0, 0.1 ms), then NB - 1 bins up to 60 s
@@ -253,7 +255,7 @@ def _columns(names, mat: np.ndarray, const: dict) -> dict:
     return out
 
 
-class RecorderLoop:
+class RecorderLoop(StateDictMixin):
     """Wrap `engine` with the per-step KPI recorder (module docstring). RecorderLoop(engine, RecordConfig(...)) or
     RecorderLoop(engine, out_dir=..., every=...)."""
 
@@ -331,6 +333,23 @@ class RecorderLoop:
             else:
                 self._wb = wandb.run if wandb.run is not None else wandb.init()
         self._write_meta()
+
+    # ------------------------------------------------------------------ checkpoints (core/checkpoint.py)
+    def state_dict(self):
+        """The recorder's accumulators and window state, the wrapped engine's state, and the part counters of the
+        output writers (so a resumed recording continues the part numbering instead of overwriting part 0)."""
+        sd = super().state_dict()
+        for k, w in self._writers.items():
+            sd[f"_writer_part[{k}]"] = w.part
+        return sd
+
+    def load_state_dict(self, sd, strict=True):
+        sd = dict(sd)
+        parts = {k: sd.pop(f"_writer_part[{k}]") for k in self._writers if f"_writer_part[{k}]" in sd}
+        super().load_state_dict(sd, strict=strict)
+        for k, v in parts.items():
+            self._writers[k].part = int(v)
+        return self
 
     # ------------------------------------------------------------------ passthroughs
     def __getattr__(self, name):

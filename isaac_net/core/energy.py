@@ -54,6 +54,7 @@ from dataclasses import dataclass
 
 import torch
 
+from .checkpoint import StateDictMixin
 from .proto import netsim as _ns
 from .proto.rng import CounterRNG, mix32
 from .queues import env_mask
@@ -122,7 +123,7 @@ def legacy_airtime_slots(nbytes, snr_db, bler=0.1):
     return (nbytes.double() / (n * se * _ns.BYTES_PER_SE) / (1.0 - bler)).float()
 
 
-class EnergyLoop:
+class EnergyLoop(StateDictMixin):
     """Wrap `engine` (any make_engine level, or a wrapper of one) with the radio energy model."""
 
     OUT_KEYS = ("energy_j", "energy_tx_j", "energy_cum_j", "tx_slots", "rx_slots", "battery_j", "battery_frac",

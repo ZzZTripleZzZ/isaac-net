@@ -56,6 +56,8 @@ from typing import Optional, Sequence
 
 import torch
 
+from ..core import checkpoint as _ckpt
+from ..core.checkpoint import StateDictMixin
 from ..core.config import NRConfig
 from ..core.engine import LEVELS, make_engine
 from ..core.proto.netsim import env_index, fill_rows
@@ -84,8 +86,14 @@ class TrafficRequest:
     tag: Optional[torch.Tensor] = None
 
 
-class NetModule:
-    """Network in the loop of a batch of E envs x R robots (see the module docstring)."""
+class NetModule(StateDictMixin):
+    """Network in the loop of a batch of E envs x R robots (see the module docstring).
+
+    Checkpoints (docs/checkpoint.md): state_dict() / load_state_dict(sd) hold the engine's state and the module's own
+    (the Isaac radio with the per-env parameters drawn by domain randomization and its generator, last_cap, the
+    previous end-of-step poses, the DR timers, the observation features and their delay history); save(path) and
+    load(path) write and read a file, optionally with the multi-rate state of the env that hosts the module
+    (host=: held outputs, pending messages, decimation tick; see find_network)."""
 
     def __init__(self, level="L2-legacy", num_envs: int = None, num_robots: int = None, device="cuda",
                  config: Optional[NRConfig] = None, backend: str = "reference", *, isaac: Optional[IsaacNetCfg] = None,
@@ -369,8 +377,116 @@ class NetModule:
         """[E,R,obs_dim] the selected observation features of the last step (zeros after a reset)."""
         return self.obs_features.get()
 
+    # ------------------------------------------------------------------ checkpoints (core/checkpoint.py)
+    def save(self, path, extra=None, host=None):
+        """Write the module's state (engine included) to path; host (an env with NetEnvMixin, or a NetRuntime) adds
+        its multi-rate state under "host.*" keys. Returns path."""
+        sd = self.state_dict()
+        if host is not None:
+            sd.update({f"host.{k}": v for k, v in host_state(host).items()})
+        return _ckpt.save(self, path, extra=extra, state=sd)
+
+    def load(self, path, strict: bool = True, host=None, global_rng: bool = False):
+        """Restore a file written by save() (same level, E, R and config; checked). host: restore the env's
+        multi-rate state too, if the file has it. Returns the file's `extra`."""
+        ck = _ckpt.read(path)
+        if not isinstance(ck, dict) or "state" not in ck:
+            raise ValueError(f"{path} is not an isaac_net checkpoint (no 'state')")
+        _ckpt.check(self, ck, strict=strict)
+        sd = {k: v for k, v in ck["state"].items() if not k.startswith("host.")}
+        hs = {k[5:]: v for k, v in ck["state"].items() if k.startswith("host.")}
+        self.load_state_dict(sd, strict=strict)
+        if host is not None and hs:
+            load_host_state(host, hs, self.dev)
+        if global_rng:
+            _ckpt.set_global_rng(ck.get("global_rng"))
+        return ck.get("extra")
+
     def queued(self) -> torch.Tensor:
         return self.eng.queued()
+
+
+# --------------------------------------------------------------------------------------------------------------
+# Checkpoints of a hosted module (NetEnvMixin / NetRuntime) and the env lookup used by the rsl_rl hook
+# --------------------------------------------------------------------------------------------------------------
+# Multi-rate and traffic state that NetEnvMixin (net_out: the held outputs, _pend_send / _pend_tag: messages pending
+# for the next network step, _net_tick: the decimation tick) and NetRuntime (send, last_send, fresh, steps) keep on
+# their host, outside the NetModule.
+HOST_STATE = ("net_out", "_pend_send", "_pend_tag", "_net_tick", "send", "last_send", "fresh", "steps")
+
+
+def host_state(host) -> dict:
+    """{name: tensor | int | dict of tensors} of the HOST_STATE attributes the host has (flat keys for dicts)."""
+    out = {}
+    d = getattr(host, "__dict__", {})
+    for n in HOST_STATE:
+        if n not in d:
+            continue
+        v = d[n]
+        if isinstance(v, dict):
+            out[n] = "dict"
+            for k, x in v.items():
+                if torch.is_tensor(x):
+                    out[f"{n}[{k}]"] = x.detach().clone()
+        elif torch.is_tensor(v):
+            out[n] = v.detach().clone()
+        elif v is None or isinstance(v, (bool, int, float)):
+            out[n] = v
+    return out
+
+
+def load_host_state(host, hs: dict, device=None):
+    """Inverse of host_state: tensors in place when the host has a tensor of that shape, else assigned."""
+    for n in HOST_STATE:
+        if n not in hs:
+            continue
+        v = hs[n]
+        if isinstance(v, str) and v == "dict":
+            pre = n + "["
+            setattr(host, n, {k[len(pre):-1]: x.to(device) if device is not None else x
+                              for k, x in hs.items() if k.startswith(pre) and k.endswith("]")})
+        elif torch.is_tensor(v):
+            cur = getattr(host, n, None)
+            if torch.is_tensor(cur) and cur.shape == v.shape and cur.dtype == v.dtype:
+                cur.copy_(v.to(cur.device))
+            else:
+                setattr(host, n, v.to(device) if device is not None else v.clone())
+        else:
+            setattr(host, n, v)
+
+
+def find_network(env):
+    """(host, NetModule) of an env (any gymnasium / rsl_rl wrapper of it), or (None, None): a manager-based env's
+    env.isaac_net (NetRuntime, isaac/runtime.py), or a Direct env with NetEnvMixin (env.net)."""
+    seen, e = set(), env
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        d = getattr(e, "__dict__", {})
+        rt = d.get("isaac_net")
+        if rt is not None and isinstance(getattr(rt, "net", None), NetModule):
+            return rt, rt.net
+        if isinstance(d.get("net"), NetModule):
+            return e, d["net"]
+        e = d.get("unwrapped") or d.get("env") or getattr(e, "unwrapped", None)
+    return None, None
+
+
+def save_env_network(env, path, extra=None):
+    """Save the network of an env (find_network) with its host's multi-rate state; returns path, or None if the env
+    has no isaac_net network."""
+    host, net = find_network(env)
+    if net is None:
+        return None
+    return net.save(path, extra=extra, host=host)
+
+
+def load_env_network(env, path, strict: bool = True):
+    """Restore a file written by save_env_network into the env's network; returns the file's extra (None if the env
+    has no isaac_net network)."""
+    host, net = find_network(env)
+    if net is None:
+        return None
+    return net.load(path, strict=strict, host=host)
 
 
 # --------------------------------------------------------------------------------------------------------------

@@ -54,6 +54,7 @@ import math
 
 import torch
 
+from .checkpoint import StateDictMixin
 from .config import EdgeConfig, NRConfig
 from .queues import env_mask
 
@@ -66,7 +67,7 @@ def _capturing(dev):
     return dev.type == "cuda" and torch.cuda.is_current_stream_capturing()
 
 
-class EdgeLoop:
+class EdgeLoop(StateDictMixin):
     """Wrap `engine` (any make_engine level) with an edge server and a return path. See the module docstring."""
 
     OUT_KEYS = ("edge_done", "edge_done_cap", "edge_done_time", "edge_dropped", "edge_dropped_full",

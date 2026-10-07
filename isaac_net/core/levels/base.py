@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import torch
 
+from ..checkpoint import StateDictMixin
 from ..proto import netsim as _ns
 from ..proto.netsim_fast import add_body, finish_body, put_slot
 from ..proto.rng import STEP, SUBMIT, CounterRNG, check_mode
@@ -38,7 +39,7 @@ Requests, env_index, fill_rows = _ns.Requests, _ns.env_index, _ns.fill_rows
 INF = float("inf")
 
 
-class LevelNet:
+class LevelNet(StateDictMixin):
     """Graph-safe engine base with the contract API (reset / submit / step dict / clock / legacy calls)."""
 
     level = None
@@ -206,6 +207,9 @@ class LevelNet:
 
     def _snr_from(self, x):
         return _ns.NetBase._snr_from(self, x)
+
+    def _ckpt_make_radio(self):
+        _ns.NetBase._ckpt_make_radio(self)
 
     def submit(self, t, requests, snr_db=None):
         """Enqueue new messages at capture time t (None = engine clock). requests: Requests or send [E,R].

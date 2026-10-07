@@ -11,7 +11,9 @@
                                          with NetManagerCfg (isaac_net/examples/isaac_manager_fleet_env.py)
 
 Every id carries env_cfg_entry_point, rsl_rl_cfg_entry_point (RslRlOnPolicyRunnerCfg), skrl_cfg_entry_point and
-default_agent "rsl_rl", as the tasks of isaaclab_tasks do, so Isaac Lab's unified train script runs them:
+default_agent "rsl_rl", as the tasks of isaaclab_tasks do, so Isaac Lab's unified train script runs them (with
+rsl_rl, the network state is saved next to every policy checkpoint, model_<iter>.pt -> isaac_net_<iter>.pt, and
+restored on --resume; see rsl_rl_hook.py and docs/checkpoint.md):
 
     isaaclab train --rl_library rsl_rl --task Isaac-NetFleet-Direct-v0 \
         --external_callback isaac_net.isaac.tasks.register
@@ -54,7 +56,11 @@ TASKS = {
 
 
 def register() -> None:
-    """Register TASKS with gymnasium (skips ids that are already registered)."""
+    """Register TASKS with gymnasium (skips ids that are already registered), and when rsl_rl is importable install
+    the hook that saves the network state next to every policy checkpoint (rsl_rl_hook.py; ISAAC_NET_RSL_RL_HOOK=0
+    turns it off)."""
+    from .rsl_rl_hook import install
+    install()
     import gymnasium as gym
 
     for task_id, spec in TASKS.items():

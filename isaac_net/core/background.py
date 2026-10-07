@@ -66,6 +66,7 @@ from dataclasses import dataclass
 
 import torch
 
+from .checkpoint import StateDictMixin
 from .proto import netsim as _ns
 from .proto.rng import RESET, STEP, CounterRNG, mix32
 from .queues import env_mask
@@ -165,7 +166,7 @@ def _padded_trigger(f, n):
     return g
 
 
-class BackgroundLoop:
+class BackgroundLoop(StateDictMixin):
     """Wrap an engine with background UEs; see the module docstring. Build it with make_engine (NRConfig.background)
     or BackgroundLoop.build(level, E, R, device, config, backend, factory=..., **kw)."""
 

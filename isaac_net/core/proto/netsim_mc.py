@@ -87,8 +87,12 @@ class NetSlotMC(NetSlot):
         reset(env_ids) redraws its shadowing rows). With rng="engine" its draws come from the engine's counter RNG,
         keyed by (seed, env id, episode); with rng="global" from the engine generator."""
         if self.radio is None:
-            self.radio = RadioMC(self.cfg, self.E, self.dev, generator=self.gen, rng=self.rng)
+            self._ckpt_make_radio()
         return self.radio.rx_dbm(pos)
+
+    def _ckpt_make_radio(self):
+        """The engine's RadioMC, made on first use (also by load_state_dict, core/checkpoint.py)."""
+        self.radio = RadioMC(self.cfg, self.E, self.dev, generator=self.gen, rng=self.rng)
 
     def output_schema(self):
         """{key: {"shape", "dtype", "unit", "doc", "when"}} of the keys step() returns (core/schema.py)."""

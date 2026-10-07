@@ -48,6 +48,7 @@ import warnings
 import torch
 
 from .channels import install_per_robot_fading, rho_per_ms_from_speed
+from .checkpoint import StateDictMixin
 from .config import NRConfig, UnusedFieldsWarning
 from .levels import BOUND_LEVELS, SURROGATE_LEVELS, fit_app, make_level
 from .nr_engine import NRNet
@@ -315,7 +316,7 @@ def make_engine(level, E, R, device="cpu", config: NRConfig | None = None, backe
     return net
 
 
-class NREngine:
+class NREngine(StateDictMixin):
     """Contract API over NRNet (level "L2").
 
     NRNet simulates continuous physical time with one global control-step clock. NREngine keeps that clock in
@@ -831,13 +832,27 @@ class NREngine:
             return self._pathgain(x, vel, blockers)[..., 0]
         return None
 
+    def _make_radio(self):
+        # rng="engine": the radio draws from the engine's counter RNG keyed by (seed, env id, episode), so an env's
+        # shadowing / LOS / O2I draws depend neither on E nor on other envs' resets; rng="global": self.gen
+        self.radio = RadioMC(self.config, self.E, self.dev, generator=self.gen, R=self.R, rng=self.rng)
+        if self._los_fn is not None:
+            self.radio.set_los_callback(self._los_fn)
+
+    # ------------------------------------------------------------------ checkpoints (core/checkpoint.py)
+    def _ckpt_prepare(self, sd):
+        """Build what the checkpointed engine had built lazily: the message extras of the UL queue (traffic models or
+        submit extras) and the engine's radio (made at the first step with poses). Their state is restored next."""
+        if sd.get("_extras") and not self._extras:
+            self._enable_extras()
+        super()._ckpt_prepare(sd)
+
+    def _ckpt_make_radio(self):
+        self._make_radio()
+
     def _pathgain(self, pos, vel=None, blockers=None):
         if self.radio is None:
-            # rng="engine": the radio draws from the engine's counter RNG keyed by (seed, env id, episode), so an env's
-            # shadowing / LOS / O2I draws depend neither on E nor on other envs' resets; rng="global": self.gen
-            self.radio = RadioMC(self.config, self.E, self.dev, generator=self.gen, R=self.R, rng=self.rng)
-            if self._los_fn is not None:
-                self.radio.set_los_callback(self._los_fn)
+            self._make_radio()
         pg = self.radio.pathgain_db(pos) if blockers is None else self.radio.pathgain_db(pos, blockers)
         if self.net.rician == "los" or self.net.fc_mode == "los":   # Rician K / delay spread from the LOS state
                                           # (None: no LOS state, K stays 0 and the delay spread NLOS)
