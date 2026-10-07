@@ -28,6 +28,9 @@ Placement (DirectRLEnv.step on release/3.0.0): _pre_physics_step -> decimation x
 net_step belongs in _get_dones, the first post-physics hook, so it sees the pre-reset queues and the END-of-step
 poses. Frames are captured at the start-of-step pose (read it in _pre_physics_step), so a message captured at
 env clock t reflects the world at t, and its delay and the AoI are not optimistic by one control step.
+Network config: net_setup applies IsaacNetCfg.nr (NRConfig fields, or a preset, from a Hydra override) to the
+NRConfig it is given (IsaacNetCfg.resolve_nr). Logging: with IsaacNetCfg.log_kpis (default on) every network step
+puts its KPIs into extras["log"]["net/..."] (isaac/kpis.py), which Isaac Lab's RL runners log.
 Viewport overlays: net_setup(..., markers=NetMarkersCfg()) draws the links, gNBs, AoI and access state after every
 network step (isaac/markers.py); headless it costs nothing.
 The module needs no Isaac imports; the only Isaac-specific piece is `rigid_positions_local`.
@@ -40,6 +43,7 @@ import torch
 
 from ..core.proto.netsim import env_index
 from .config import IsaacNetCfg
+from .kpis import NetKpis, publish
 from .net_module import NetConfig, NetModule, TrafficRequest
 
 _FLAGS = ("delivered", "tag_delivered", "msg_delivered", "timed_out")
@@ -59,6 +63,7 @@ class NetEnvMixin:
     net: Optional[NetModule] = None
     net_out: Optional[dict] = None
     net_markers = None
+    net_kpis: Optional[dict] = None          # the KPIs last put into extras["log"] (isaac/kpis.py)
 
     def net_setup(self, level, num_robots: Optional[int] = None, config=None, backend: str = "reference",
                   isaac: Optional[IsaacNetCfg] = None, markers=None, **kwargs):
@@ -71,7 +76,10 @@ class NetEnvMixin:
         fields as shortcuts). A NetConfig (deprecated) is also accepted as `level`.
         """
         self.net_out = None
+        self.net_kpis = None
+        self._net_kpi = None
         self._net_isaac = isaac if isaac is not None else IsaacNetCfg()
+        config = self._net_isaac.resolve_nr(config)          # IsaacNetCfg.nr: Hydra overrides of NRConfig fields
         self._net_R = num_robots
         self._net_cfg = config
         self._net_tick = 0
@@ -91,6 +99,9 @@ class NetEnvMixin:
             self.net = NetModule(level, E, num_robots, str(self.device), config, backend, isaac=isaac, **kwargs)
         self._net_isaac = self.net.isaac
         self._net_check_rate()
+        if self._net_isaac.log_kpis:
+            self._net_kpi = NetKpis(self.net)
+            self._net_kpi_n = 0
         E, R = self.net.E, self.net.R
         self._pend_send = torch.zeros(E, R, dtype=torch.long, device=self.net.dev)
         self._pend_tag = torch.full((E, R), -1, dtype=torch.long, device=self.net.dev)
@@ -130,10 +141,21 @@ class NetEnvMixin:
             return None
         if poses_end is None:
             poses_end = self.net_poses()
+        self._net_stepped = False
         out = self._net_step(poses_end, send, tag, cur_tag, blocked_fn)
+        if self._net_kpi is not None and self._net_stepped:
+            self._net_kpi_n += 1
+            if (self._net_kpi_n - 1) % self._net_isaac.log_every == 0:
+                self.net_kpis = self._net_kpi(out)
+            if self.net_kpis is not None:
+                publish(self._net_log_owner(), self.net_kpis)
         if self.net_markers is not None:
             self.net_markers.update(poses_end, out)
         return out
+
+    def _net_log_owner(self):
+        """The object whose extras dict the RL wrapper reads (the env itself for the Direct mixin)."""
+        return self
 
     def _net_step(self, poses_end, send, tag, cur_tag, blocked_fn):
         net, c = self.net, self.net.isaac
@@ -162,6 +184,7 @@ class NetEnvMixin:
             send, tag = self._pend_send, self._pend_tag
             self._pend_send = torch.zeros_like(send)
             self._pend_tag = torch.full_like(tag, -1)
+        self._net_stepped = True
         if m == 1:
             net.submit(None, TrafficRequest(send=send, tag=tag))
             self.net_out = net.step(None, poses_end, cur_tag=cur_tag, blocked_fn=blocked_fn)

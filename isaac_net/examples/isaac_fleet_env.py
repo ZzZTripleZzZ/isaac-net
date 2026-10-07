@@ -14,7 +14,9 @@ Network levels: "off" (ideal: detections known the same step, no network feature
 "triton" for L1 / L2-legacy; the NR engine "L2" has "reference" only). For scale use L2-legacy on triton.
 The network is wired through isaac_net.isaac.NetEnvMixin (net_setup / net_step / net_reset / net_obs) and
 configured by one NRConfig (message sizes, frame buffer, timeout, control step; net_config()) plus an IsaacNetCfg
-(fleet_isaac_cfg(): poses read from the "robots" collection, gNB on a 6 m mast at the arena corner).
+(fleet_isaac_cfg(): poses read from the "robots" collection, gNB on a 6 m mast at the arena corner), whose nr dict
+takes NRConfig field overrides (env.net_isaac.nr.ul_tpc=true on the train command line). self.extras["log"] carries
+the Episode/ statistics at reset and, from the mixin, the net/ KPIs of every network step (isaac/kpis.py).
 
 Physics: PhysX via Isaac Sim by default, dt = 1/50 s, decimation 5 -> 0.1 s control step (K = 40 UL slots).
 make_cfg(physics=...) or the ISAAC_NET_PHYSICS environment variable selects another Isaac Lab 3.0 backend:
@@ -170,7 +172,8 @@ def finalize_fleet_cfg(cfg: NetFleetEnvCfg, num_envs: int | None = None) -> NetF
     """Make a NetFleetEnvCfg consistent after its fields were set or overridden (registered tasks, Hydra
     overrides such as env.num_robots=32 or env.net_isaac): build the scene for cfg.num_robots if it is missing or
     holds another number of robots (keeping its num_envs), and size the action and observation spaces from the
-    robot count and the network features. Idempotent; NetFleetEnv.__init__ calls it."""
+    robot count and the network features of the NRConfig with net_isaac.nr applied (a bad field name raises here,
+    before the simulation starts). Idempotent; NetFleetEnv.__init__ calls it."""
     if cfg.scene is None or scene_robot_count(cfg.scene) != cfg.num_robots:
         E = num_envs if num_envs is not None else (cfg.scene.num_envs if cfg.scene is not None else 64)
         cfg.scene = make_scene_cfg(cfg.num_robots, E)
@@ -178,6 +181,7 @@ def finalize_fleet_cfg(cfg: NetFleetEnvCfg, num_envs: int | None = None) -> NetF
         cfg.scene.num_envs = num_envs
     isaac = cfg.net_isaac or fleet_isaac_cfg()
     nr = cfg.net_nr or net_config(cfg.sim.dt * cfg.decimation * isaac.net_decimation / isaac.net_substeps)
+    nr = isaac.resolve_nr(nr)                         # IsaacNetCfg.nr overrides (env.net_isaac.nr.<field>=...)
     per_robot = TASK_OBS + isaac.obs_dim(nr)          # level "off" observes zeros of the same width
     cfg.action_space = cfg.num_robots * 3
     cfg.observation_space = cfg.num_robots * per_robot

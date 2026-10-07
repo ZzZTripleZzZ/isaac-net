@@ -179,6 +179,30 @@ def _find_nr(engine):
     return find_nr_engine(engine)
 
 
+def mac_links(engine) -> dict:
+    """{"ul": link, "dl": link} of the NR MAC under engine (through any wrappers; a link is None when the direction
+    is off), {} when there is no NR engine (level "L2")."""
+    nr = _find_nr(engine)
+    net = getattr(nr, "__dict__", {}).get("net") if nr is not None else None
+    return {k: getattr(net, k, None) for k in ("ul", "dl")} if net is not None else {}
+
+
+def mac_counters(links: dict) -> dict:
+    """Snapshot (float64 copies, still on the device: no host sync) of the cumulative NR MAC counters of the links
+    of mac_links: <dir>_prb [E] PRB-slots granted, <dir>_avail [1] PRB-slots available (all envs), <dir>_rvtx and
+    <dir>_rvfail [E, n] transport blocks sent / failed by transmission number (index 1 = first transmission). A
+    full engine reset zeroes the counters."""
+    res = {}
+    for name, link in links.items():
+        if link is None:
+            continue
+        res[f"{name}_prb"] = link.prb_used_env.double().clone()
+        res[f"{name}_avail"] = link.ctr["prb_avail"].double().reshape(1).clone()
+        res[f"{name}_rvtx"] = link.rv_tx.double().clone()
+        res[f"{name}_rvfail"] = link.rv_fail.double().clone()
+    return res
+
+
 class _Writer:
     """Appends column dicts to out_dir/<name>/part-NNNNN.parquet or out_dir/<name>.csv."""
 
@@ -263,8 +287,7 @@ class RecorderLoop:
                          "aoi_hist": _Writer(cfg.out_dir, "aoi_hist", HIST_COLUMNS + ("label", "level"), fmt)}
         # NR MAC counters (device tensors; read without a host sync) and the per-robot slot tap for per-cell PRBs
         nr = _find_nr(engine)
-        net = getattr(nr, "__dict__", {}).get("net") if nr is not None else None
-        self._links = {k: getattr(net, k, None) for k in ("ul", "dl")} if net is not None else {}
+        self._links = mac_links(engine)
         self.tap = None
         if nr is not None and cfg.per_cell and self._links.get("ul") is not None:
             from .slot_tap import SlotTap
@@ -379,15 +402,7 @@ class RecorderLoop:
 
     # ------------------------------------------------------------------ accumulation (device only, no host sync)
     def _ctr_now(self):
-        res = {}
-        for name, link in self._links.items():
-            if link is None:
-                continue
-            res[f"{name}_prb"] = link.prb_used_env.double().clone()
-            res[f"{name}_avail"] = link.ctr["prb_avail"].double().reshape(1).clone()
-            res[f"{name}_rvtx"] = link.rv_tx.double().clone()
-            res[f"{name}_rvfail"] = link.rv_fail.double().clone()
-        return res
+        return mac_counters(self._links)
 
     def _mean(self, k, v):
         self._acc[k] += v
