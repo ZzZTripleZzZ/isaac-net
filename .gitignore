@@ -29,3 +29,6 @@ dist/
 *.egg-info/
 # mkdocs-jupyter render cache
 .cache/
+
+# wrangler cache from scripts/deploy_docs.sh
+.wrangler/

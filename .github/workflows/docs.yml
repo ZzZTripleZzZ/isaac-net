@@ -1,0 +1,40 @@
+name: Docs
+
+# Builds the versioned docs site (scripts/build_docs.sh) and deploys it to the Cloudflare Pages
+# project isaacnet-docs (https://docs.isaacnet.zifanzhang.com/). The deploy step runs only when the
+# repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are set; without them the
+# workflow builds the site and stops.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the release tags in DOCS_VERSIONS are built from git archive
+      - uses: astral-sh/setup-uv@v6
+      - name: Build
+        run: scripts/build_docs.sh site
+      - name: Deploy to Cloudflare Pages
+        env:
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        if: env.HAS_TOKEN == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy site --project-name=isaacnet-docs --branch=main --commit-dirty=true

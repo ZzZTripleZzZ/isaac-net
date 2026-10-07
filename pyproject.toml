@@ -43,7 +43,7 @@ dependencies = ["torch>=2.7", "numpy>=1.23"]
 Homepage = "https://isaacnet.zifanzhang.com"
 Paper = "https://arxiv.org/abs/2610.02370"
 Repository = "https://github.com/ZzZTripleZzZ/isaac-net"
-Documentation = "https://github.com/ZzZTripleZzZ/isaac-net/tree/main/docs"
+Documentation = "https://docs.isaacnet.zifanzhang.com/"
 Changelog = "https://github.com/ZzZTripleZzZ/isaac-net/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]

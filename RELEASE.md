@@ -10,7 +10,7 @@ The version has one source of truth: `__version__` in `isaac_net/__init__.py`. `
 
 1. **Branch.** Start from an up-to-date `main` on a branch `release/X.Y.Z`. Everything meant for the release is merged.
 2. **Version and changelog.** Set `__version__ = "X.Y.Z"` in `isaac_net/__init__.py`. In `CHANGELOG.md`, replace `unreleased` with the date (`YYYY-MM-DD`), check that every merged branch since the last release has its entry, and start a new empty `## [Unreleased]` section above it.
-3. **Docs.** Update `docs/STATUS.md` (date, `main` hash, merged work, open items) and the README roadmap. Numbers in the README come from the docs pages, and a table measured on a busy GPU says so.
+3. **Docs.** Update `docs/STATUS.md` (date, `main` hash, merged work, open items) and the README roadmap. Numbers in the README come from the docs pages, and a table measured on a busy GPU says so. The docs site ([docs.isaacnet.zifanzhang.com](https://docs.isaacnet.zifanzhang.com/)) deploys on every push to `main` and on every `v*` tag through `.github/workflows/docs.yml`, so the only release step is to add the new version, newest first, to `DOCS_VERSIONS` in `scripts/build_docs.sh` (for example `DOCS_VERSIONS="X.Y.Z 0.2.0"`); the tag push then publishes it under `/X.Y.Z/` with an entry in the version selector.
 4. **Lint and docs build** (fine on any machine):
 
    ```bash

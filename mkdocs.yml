@@ -1,6 +1,6 @@
 site_name: isaac-net
 site_description: GPU-batched 5G network simulation for massively parallel robot learning in Isaac Lab
-site_url: https://isaacnet.zifanzhang.com/docs/
+site_url: https://docs.isaacnet.zifanzhang.com/
 repo_url: https://github.com/ZzZTripleZzZ/isaac-net
 repo_name: isaac-net
 edit_uri: edit/main/docs/
@@ -94,6 +94,12 @@ nav:
       - Feature matrix sources: feature-matrix-sources.md
       - gNB measurement protocol: measurement-protocol.md
   - Licensing: licensing.md
+
+extra:
+  # Version selector; versions.json is written by scripts/build_docs.sh at the site root.
+  version:
+    provider: mike
+    default: latest
 
 markdown_extensions:
   - admonition
