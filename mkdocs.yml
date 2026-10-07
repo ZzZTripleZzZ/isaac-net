@@ -45,6 +45,7 @@ nav:
       - Choosing a configuration: choosing.md
       - Cookbook: cookbook.md
       - FAQ: faq.md
+      - Config files and presets: config-files.md
   - Concepts: concepts.md
   - Doctor: doctor.md
   - Tutorials:
