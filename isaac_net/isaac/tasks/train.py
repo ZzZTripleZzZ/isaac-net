@@ -7,7 +7,8 @@
 It does what Isaac Lab 3.0's scripts/reinforcement_learning/train.py does (Warp backward codegen off, then
 isaaclab_rl.entrypoints.run_train_cli) after `import isaac_net.isaac.tasks`, so every backend sees the task ids,
 including the ones without an --external_callback option (skrl, rl_games, sb3). The arguments are Isaac Lab's own.
-`--play` runs run_play_cli instead (evaluate a checkpoint).
+`--play` runs run_play_cli instead (evaluate a checkpoint). With rsl_rl the network state is saved next to every
+policy checkpoint (model_<iter>.pt -> isaac_net_<iter>.pt) and restored with --resume (tasks/rsl_rl_hook.py).
 """
 from __future__ import annotations
 
@@ -22,6 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError:
         pass
     import isaac_net.isaac.tasks  # noqa: F401  (registers the task ids)
+    from isaac_net.isaac.tasks.rsl_rl_hook import install
+    install()                     # rsl_rl: network state next to every policy checkpoint (docs/checkpoint.md)
     from isaaclab_rl.entrypoints import run_play_cli, run_train_cli
 
     if "--play" in argv:
