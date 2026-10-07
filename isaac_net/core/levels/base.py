@@ -211,6 +211,14 @@ class LevelNet(StateDictMixin):
     def _ckpt_make_radio(self):
         _ns.NetBase._ckpt_make_radio(self)
 
+    # the radio runs eagerly (its SNR enters the graphs through static buffers)
+    _ckpt_step_host = frozenset({"radio"})
+
+    def _ckpt_host_changed(self, keys):
+        """load_state_dict changed host values that the captured graphs bake in (core/checkpoint.py), e.g. the counter
+        RNG's seed key rng.s0 of a checkpoint from an engine with another seed: the next call captures again."""
+        self._graphs.clear()
+
     def submit(self, t, requests, snr_db=None):
         """Enqueue new messages at capture time t (None = engine clock). requests: Requests or send [E,R].
         snr_db [E,R] is the SNR recorded as a frame feature (default: the SNR of the previous step).

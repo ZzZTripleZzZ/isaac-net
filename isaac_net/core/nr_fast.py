@@ -116,6 +116,11 @@ class NRGraphEngine(NREngine):
     # not state (core/checkpoint.py): the device step counter is filled before every replay, _g0_dev from the host
     # _g0 before every gated step, n_replays is a statistic; so reference and graph checkpoints load into each other
     _ckpt_skip = frozenset({"_tdev", "_g0_dev", "n_replays"})
+    # host values that step() keeps current outside the captured graphs (the control step and clocks, the gate host
+    # side, the last fading slot, which enters the graph key, the interference counts, the radio, which runs eagerly);
+    # a load that changes another host value (the counter RNG's seed key) drops the graphs (_ckpt_host_changed)
+    _ckpt_step_host = frozenset({"T", "_uniform_epoch", "_g0", "_full_enq", "_dl_full_enq", "_gate_seen", "last_g",
+                                 "ioN_n", "slot_nsym", "radio"})
     _require_cuda = True       # False (tests only): on a CPU device, replays re-run the captured region eagerly
 
     def __init__(self, E, R, device, cfg: NRConfig, seed=None):
@@ -177,25 +182,49 @@ class NRGraphEngine(NREngine):
                 else:
                     getattr(o, n)[k] = buf
 
+    def _ckpt_host_changed(self, keys):
+        """load_state_dict changed host values that the captured graphs bake in (core/checkpoint.py), e.g. the seed key
+        net.rng.s0 of a checkpoint from an engine with another seed: drop the graphs, the next step captures again
+        with the restored values."""
+        self._drop_graphs()
+
+    def _drop_graphs(self):
+        self._graphs.clear()
+        self._ion_delta.clear()
+
     def _ckpt_finish(self):
         """After load_state_dict (core/checkpoint.py): the restore copied into the persistent buffers in place; state
-        it had to create (attributes a step makes on first use) becomes persistent too, and graphs captured before
-        that are dropped (they would not write the new buffers)."""
-        n = len(self._reg)
+        it had to create (attributes a step makes on first use) becomes persistent too, state the checkpoint does not
+        have yet (None there, e.g. a checkpoint taken before the first step) leaves the registry, and graphs captured
+        before either change are dropped (they would read or write the wrong buffers)."""
+        own = state_owners(self)
+
+        def cur(ok, n, k):
+            v = getattr(own.get(ok), n, None)
+            return v if k is None else (v.get(k) if isinstance(v, dict) else None)
+        keep = [r for r in self._reg if torch.is_tensor(cur(*r[:3]))]
+        n = len(keep)
+        changed = n != len(self._reg)
+        self._reg = keep
         self._extend_registry()
         self._rebind()
-        if len(self._reg) != n:
-            self._graphs.clear()
-            self._ion_delta.clear()
+        if changed or len(self._reg) != n:
+            self._drop_graphs()
 
     def _host_state(self):
+        """Host values a captured graph bakes in: net.last_g, the ioN counts and the counter RNG's seed key (the CPU
+        stand-in replays with these, as a CUDA graph does)."""
         net = self.net
-        return {"last_g": net.last_g, "ioN_n": dict(getattr(net, "ioN_n", {}))}
+        rng = net.rng
+        return {"last_g": net.last_g, "ioN_n": dict(getattr(net, "ioN_n", {})),
+                "seed": None if rng is None else (rng.seed, rng.s0)}
 
     def _set_host_state(self, h):
         self.net.last_g = h["last_g"]
         if h["ioN_n"]:
             self.net.ioN_n = dict(h["ioN_n"])
+        if h["seed"] is not None:
+            self.net.rng.seed, self.net.rng.s0 = h["seed"]
 
     # ------------------------------------------------------------------ eager calls
     def reset(self, env_ids=None):

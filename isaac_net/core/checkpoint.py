@@ -25,7 +25,10 @@ restored.
 Restoring. load_state_dict(sd, strict=True) walks the target the same way and writes every value in place: tensors
 with copy_ into the existing tensor (no reallocation, so the static buffers of the graph backends stay valid and
 captured CUDA graphs keep reading the right memory), generators with set_state, host values with setattr. Then
-each class's `_ckpt_finish()` runs (the NR graph backends rebind their persistent buffers). A value whose attribute
+each class's `_ckpt_finish()` runs (the NR graph backends rebind their persistent buffers). Before it, a class that
+replays captured CUDA graphs gets `_ckpt_host_changed(keys)` when the restore changed a host value that its steps do
+not update outside the graphs (`_ckpt_step_host`), e.g. the counter RNG's seed key, or replaced a tensor object: a
+captured graph bakes in such values and addresses, so the class drops its graphs and the next step captures again. A value whose attribute
 does not exist yet on the target (state that a step creates on first use, e.g. a power-control backoff) is set as a
 new attribute. strict=True raises on keys the target cannot place, on state of the target missing from sd, and on
 shape or dtype mismatches; strict=False skips them.
@@ -105,6 +108,9 @@ class StateDictMixin:
     (after the restore, e.g. rebind static buffers)."""
 
     _ckpt_skip: frozenset = frozenset()
+    # host values (attribute names, matched against every component of a key) that the steps update outside captured
+    # CUDA graphs; a load that changes any other host value, or replaces a tensor object, calls _ckpt_host_changed
+    _ckpt_step_host: frozenset = frozenset()
 
     def state_dict(self) -> dict:
         """Flat {key: value} of every state tensor, generator state and host value (a snapshot: tensors are cloned)."""
@@ -123,6 +129,13 @@ class StateDictMixin:
             if make is not None:
                 make()
 
+
+    def _ckpt_host_changed(self, keys):
+        """Called by load_state_dict, before _ckpt_finish, with the keys of the host values (ints, floats, flags, ...)
+        that the restore changed, outside _ckpt_step_host, and of the tensors it replaced by new objects. Engines that
+        replay captured CUDA graphs drop them here: a graph bakes in the host values and the tensor addresses it was
+        captured with (e.g. the counter RNG's seed key rng.s0), so it would continue the target's old run. Only
+        classes that override this method pay for the comparison."""
 
     def _ckpt_finish(self):
         pass
@@ -271,6 +284,39 @@ def _target_val(v, key, slot, slots, objs, kids, seen):
         _target_obj(v, key + ".", slots, objs, kids, seen)
 
 
+def _host_print(slots):
+    """{key: value} of the host values of a target, {key: ("tensor", id)} of its tensors (identity, not content)."""
+    out = {}
+    for k, slot in slots.items():
+        v = slot.get()
+        if torch.is_tensor(v) or isinstance(v, torch.Generator):
+            out[k] = ("tensor", id(v))
+        else:
+            out[k] = list(v) if isinstance(v, (list, tuple)) else v
+    return out
+
+
+def _same_host(a, b):
+    if isinstance(a, float) and isinstance(b, float) and math.isnan(a) and math.isnan(b):
+        return True
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_same_host(x, y) for x, y in zip(a, b))
+    return type(a) is type(b) and a == b
+
+
+def _host_changes(before, after, step_host):
+    """Keys whose host value or tensor object differs between two _host_print, except keys with a component in
+    step_host."""
+    out = []
+    for k in sorted(set(before) | set(after)):
+        if k in before and k in after and _same_host(before[k], after[k]):
+            continue
+        if step_host and not step_host.isdisjoint(k.replace("[", ".").replace("]", "").split(".")):
+            continue
+        out.append(k)
+    return out
+
+
 def _device(root):
     d = getattr(root, "__dict__", {}).get("dev")
     return d if isinstance(d, torch.device) else None
@@ -343,6 +389,9 @@ def _restore(root, sd, strict, errors, prefix):
     if isinstance(root, StateDictMixin):
         root._ckpt_prepare(sd)
     slots, objs, kids = _targets(root)
+    watch = isinstance(root, StateDictMixin) and \
+        type(root)._ckpt_host_changed is not StateDictMixin._ckpt_host_changed
+    before = _host_print(slots) if watch else None
     dev = _device(root)
     n_err = len(errors)
     used = set()
@@ -378,6 +427,10 @@ def _restore(root, sd, strict, errors, prefix):
             errors.append(f"{prefix}{key}: the engine has no place for this key (a part that is built lazily and "
                           "was not built, or a different engine type)")
     if len(errors) == n_err and isinstance(root, StateDictMixin):
+        if watch:
+            changed = _host_changes(before, _host_print(_targets(root)[0]), root._ckpt_step_host)
+            if changed:
+                root._ckpt_host_changed(changed)
         root._ckpt_finish()
 
 
