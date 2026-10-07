@@ -12,8 +12,13 @@ Sources
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, fields, is_dataclass, replace
+import difflib
+import json
 import math
+import numbers
+import os
 
 # TS 38.101-1 Table 5.3.2-1, FR1: {scs_khz: {bw_mhz: N_RB}}
 NRB_FR1 = {
@@ -1317,6 +1322,97 @@ class NRConfig:
             kw["ue_speed_mps"] = None
         return replace(self, **kw)
 
+    # ---------------- serialization (docs/config-files.md) ----------------
+    def to_dict(self, only_changed=False):
+        """This config as a JSON-safe dict: tuples become lists, None stays None, inf / -inf / nan become the strings
+        "inf" / "-inf" / "nan", a nested config (EdgeConfig, BackgroundConfig, EnergyConfig, WifiConfig,
+        FidelityConfig) becomes a dict with a "__type__" key, and a TrafficModel a dict of its kind and the fields
+        its constructor set (the ones away from the TrafficModel defaults). only_changed=True keeps only the fields
+        that differ from NRConfig() (and, inside a nested config, from that config's defaults). NRConfig.from_dict
+        reads it back: from_dict(cfg.to_dict()) == cfg. A TrafficModel with a callable trigger cannot be written
+        (use a trigger name)."""
+        ref = NRConfig() if only_changed else None
+        return {f.name: _encode(getattr(self, f.name), only_changed, f.name) for f in fields(self)
+                if ref is None or not _same(getattr(self, f.name), getattr(ref, f.name))}
+
+    @classmethod
+    def from_dict(cls, d, base=None):
+        """An NRConfig from a dict written by to_dict, a YAML / JSON file or a Hydra override. Strict: a key that is
+        not a field raises UnknownFieldError with the closest field names. Lists become tuples where the field holds
+        a tuple, the strings "inf" / "-inf" / "nan" become floats where it holds a float, and a dict becomes the
+        nested config of its field (or of its "__type__"). The fields are applied to base (base.with_(...)) when
+        base is given, else to NRConfig(). A "preset" key names a preset (from_preset): the other keys are then its
+        keyword overrides and base is not used. An NRConfig passes through unchanged."""
+        if isinstance(d, NRConfig):
+            return d
+        if not isinstance(d, Mapping):
+            raise TypeError(f"NRConfig.from_dict takes a mapping, not {type(d).__name__}")
+        d = dict(d)
+        t = d.pop("__type__", "NRConfig")
+        if t != "NRConfig":
+            raise ValueError(f"from_dict: the mapping describes a {t!r}, not an NRConfig")
+        preset = d.pop("preset", None)
+        kw = _decode_fields(NRConfig, d, "NRConfig")
+        if preset is not None:
+            return cls.from_preset(preset, **kw)
+        if base is not None:
+            if not isinstance(base, NRConfig):
+                raise TypeError("from_dict(base=...) takes an NRConfig")
+            return base.with_(**kw)
+        return cls(**kw)
+
+    @classmethod
+    def from_preset(cls, name, **overrides):
+        """The config of a preset by name: the validation presets of this module (netslot_compat, lena_like,
+        lena_match, lena_validation, lena_match_v2, lena_validation_v2, srsran_like, oai_like, multicell) and the
+        scenario presets of core/scenarios.py (warehouse_private_5g, factory_inf, outdoor_campus, urllc_control).
+        overrides are passed to the preset function as keyword arguments (values as from_dict reads them), so the
+        timers a preset derives from mu or tdd_pattern follow them. An unknown name raises with the closest names;
+        isaac_net.core.presets.PRESETS lists them all."""
+        from .presets import preset_function
+        return preset_function(name)(**_decode_fields(NRConfig, overrides, f"preset {name!r}"))
+
+    def to_json(self, path=None, only_changed=False, indent=2):
+        """to_dict() as JSON text (strict JSON: non-finite floats are strings); written to path when given."""
+        text = json.dumps(self.to_dict(only_changed), indent=indent, allow_nan=False) + "\n"
+        return _write_text(path, text)
+
+    @classmethod
+    def from_json(cls, src, base=None):
+        """from_dict of a JSON file (a path, a pathlib / importlib.resources object) or of JSON text."""
+        return cls.from_dict(_load_mapping(json.loads(_read_text(src)), src), base)
+
+    def to_yaml(self, path=None, only_changed=False, header=None):
+        """to_dict() as YAML text (PyYAML; without it the text is JSON, which is also valid YAML), written to path
+        when given. header: comment text put first, one "# " line per line."""
+        d = self.to_dict(only_changed)
+        try:
+            import yaml
+        except ImportError:
+            text = json.dumps(d, indent=2, allow_nan=False) + "\n"
+        else:
+            text = yaml.dump(d, Dumper=_yaml_dumper(yaml), sort_keys=False, default_flow_style=False, width=120)
+        if header:
+            text = "".join(f"# {ln}".rstrip() + "\n" for ln in header.splitlines()) + text
+        return _write_text(path, text)
+
+    @classmethod
+    def from_yaml(cls, src, base=None):
+        """from_dict of a YAML file (a path, a pathlib / importlib.resources object such as
+        isaac_net.core.presets.preset_path(name)) or of YAML text. Needs PyYAML, except for JSON content."""
+        text = _read_text(src)
+        try:
+            import yaml
+        except ImportError:
+            try:
+                data = json.loads(text)
+            except ValueError as e:
+                raise ImportError("NRConfig.from_yaml needs PyYAML for YAML content (pip install pyyaml); JSON "
+                                  "content loads without it") from e
+        else:
+            data = yaml.safe_load(text)
+        return cls.from_dict(_load_mapping(data, src), base)
+
     # ---------------- cells ----------------
     def gnb_xy(self):
         """gNB positions (env-local metres). hex: centre site then the first ring at 0, 60, ..., 300 deg,
@@ -1398,6 +1494,178 @@ class NRConfig:
                 and self.pathloss_exp == 3.5 and self.shadow_sigma_db == 6.0 and self.shadow_modes == 8
                 and self.channel == "log_distance" and self.shadow_acf == "sos" and self.shadow_dcorr_m == 10.3
                 and self.shadow_white_frac == 0.0 and not self.blockage)
+
+
+# ------------------------------------------------------------------------------------- serialization helpers
+class UnknownFieldError(ValueError):
+    """A config mapping (NRConfig.from_dict, from_yaml, a Hydra override, a preset name) names a field or a preset
+    that does not exist. The message lists the closest names (difflib)."""
+
+
+# config dataclasses that can sit inside an NRConfig, by the "__type__" name to_dict writes (module relative to
+# isaac_net.core; imported on use, so this file still loads without the package for the docs hook)
+_CONFIG_TYPES = {"EdgeConfig": ".config", "BackgroundConfig": ".background", "EnergyConfig": ".energy",
+                 "WifiConfig": ".wifi.config", "FidelityConfig": ".adaptive", "TrafficModel": ".traffic"}
+# NRConfig fields that hold one of them: a mapping without "__type__" there is read as that type
+_FIELD_TYPES = {"edge": "EdgeConfig", "background": "BackgroundConfig", "energy": "EnergyConfig",
+                "wifi": "WifiConfig", "fidelity": "FidelityConfig"}
+# (owner, field) holding a tuple of TrafficModel
+_TRAFFIC_FIELDS = {("NRConfig", "traffic"), ("BackgroundConfig", "traffic"), ("BackgroundConfig", "dl_traffic")}
+_NONFINITE = {"inf": math.inf, "-inf": -math.inf, "nan": math.nan}
+
+
+def _config_type(name, where="config"):
+    """The config dataclass named `name` (a key of _CONFIG_TYPES)."""
+    if name == "NRConfig":
+        return NRConfig
+    if name not in _CONFIG_TYPES:
+        raise UnknownFieldError(f"{where}: unknown __type__ {name!r}{_suggest(name, list(_CONFIG_TYPES))}")
+    if name == "EdgeConfig":
+        return EdgeConfig
+    import importlib
+    return getattr(importlib.import_module(_CONFIG_TYPES[name], __package__ or "isaac_net.core"), name)
+
+
+def _suggest(name, names):
+    close = difflib.get_close_matches(str(name), [str(n) for n in names], n=3, cutoff=0.6)
+    return f" (did you mean {' or '.join(repr(c) for c in close)}?)" if close else ""
+
+
+def _same(a, b):
+    try:
+        return bool(a == b)
+    except Exception:                                   # noqa: BLE001 - values without a plain == (tensors)
+        return False
+
+
+def _encode(v, only_changed, where):
+    """JSON-safe form of one config value (NRConfig.to_dict)."""
+    if v is None or isinstance(v, (bool, str)):
+        return v
+    if isinstance(v, numbers.Integral):
+        return int(v)
+    if isinstance(v, numbers.Real):
+        v = float(v)
+        if math.isfinite(v):
+            return v
+        return "nan" if v != v else ("inf" if v > 0 else "-inf")
+    if isinstance(v, (tuple, list)):
+        return [_encode(x, only_changed, f"{where}[{i}]") for i, x in enumerate(v)]
+    if isinstance(v, Mapping):
+        bad = [k for k in v if not isinstance(k, str) or k == "__type__"]
+        if bad:
+            raise TypeError(f"{where}: dict keys must be strings other than '__type__', got {bad}")
+        return {k: _encode(x, only_changed, f"{where}.{k}") for k, x in v.items()}
+    name = type(v).__name__
+    if is_dataclass(v) and name in _CONFIG_TYPES and type(v) is _config_type(name, where):
+        out = {"__type__": name}
+        if name == "TrafficModel":
+            if callable(v.trigger):
+                raise TypeError(f"{where}: a TrafficModel with a callable trigger cannot be serialized; give the "
+                                "trigger a name (TrafficModel.event(..., trigger='alarm'), engine.step(triggers=))")
+            out["kind"] = v.kind
+            for f in fields(v):
+                x = getattr(v, f.name)
+                if f.name != "kind" and not _same(x, f.default):
+                    out[f.name] = _encode(x, only_changed, f"{where}.{f.name}")
+            return out
+        ref = type(v)() if only_changed else None
+        for f in fields(v):
+            x = getattr(v, f.name)
+            if ref is None or not _same(x, getattr(ref, f.name)):
+                out[f.name] = _encode(x, only_changed, f"{where}.{f.name}")
+        return out
+    raise TypeError(f"{where}: cannot serialize a {name} ({v!r}); config files hold numbers, strings, booleans, "
+                    "None, lists, dicts and the isaac_net config dataclasses")
+
+
+def _decode_fields(cls, d, where):
+    """Keyword arguments of the dataclass cls from a mapping: unknown keys raise UnknownFieldError (with the
+    closest field names), values are coerced by the field annotations (_decode)."""
+    names = {f.name: f for f in fields(cls)}
+    bad = [k for k in d if k not in names]
+    if bad:
+        what = "; ".join(f"{k!r}{_suggest(k, names)}" for k in bad)
+        prefix = "" if where == cls.__name__ else f"{where}: "
+        raise UnknownFieldError(f"{prefix}{cls.__name__} has no field {what}")
+    return {k: _decode(v, str(names[k].type), cls.__name__, k, f"{where}.{k}") for k, v in d.items()}
+
+
+def _decode(v, ann, owner, field, where):
+    """One value read back from a mapping (NRConfig.from_dict): nested configs from dicts, tuples from lists where
+    the annotation (ann) says tuple, inf / -inf / nan from strings where it says float or tuple."""
+    traffic = (owner, field) in _TRAFFIC_FIELDS
+    if isinstance(v, Mapping):
+        tname = v.get("__type__")
+        expect = "TrafficModel" if traffic else (_FIELD_TYPES.get(field) if owner == "NRConfig" else None)
+        if tname is None and expect is None:
+            return {k: _decode(x, "object", owner, k, f"{where}.{k}") for k, x in v.items()}
+        cls = _config_type(tname or expect, where)
+        if tname is not None and expect is not None and tname != expect:
+            raise ValueError(f"{where}: expected __type__ {expect!r}, got {tname!r}")
+        return cls(**_decode_fields(cls, {k: x for k, x in v.items() if k != "__type__"}, where))
+    if isinstance(v, (list, tuple)):
+        if traffic:
+            return tuple(_decode(x, "TrafficModel", owner, field, f"{where}[{i}]") for i, x in enumerate(v))
+        if "tuple" in ann:
+            return _to_tuple(v, where)
+        return [_decode(x, "object", owner, field, f"{where}[{i}]") for i, x in enumerate(v)]
+    if isinstance(v, str) and v in _NONFINITE and ("float" in ann or "tuple" in ann):
+        return _NONFINITE[v]
+    return v
+
+
+def _to_tuple(v, where):
+    out = []
+    for i, x in enumerate(v):
+        if isinstance(x, (list, tuple)):
+            x = _to_tuple(x, f"{where}[{i}]")
+        elif isinstance(x, str) and x in _NONFINITE:
+            x = _NONFINITE[x]
+        elif isinstance(x, Mapping):
+            x = _decode(x, "object", "", "", f"{where}[{i}]")
+        out.append(x)
+    return tuple(out)
+
+
+def _read_text(src):
+    """Text of a config source: an object with read_text() (pathlib.Path, importlib.resources), a file path, or the
+    text itself (a string with a newline, or one that names no file and has no .yaml / .yml / .json suffix)."""
+    if hasattr(src, "read_text"):
+        return src.read_text(encoding="utf-8")
+    if isinstance(src, bytes):
+        return src.decode("utf-8")
+    s = os.fspath(src)
+    if "\n" not in s and (os.path.isfile(s) or s.lower().endswith((".yaml", ".yml", ".json"))):
+        with open(s, encoding="utf-8") as fh:
+            return fh.read()
+    return s
+
+
+def _load_mapping(data, src):
+    if not isinstance(data, Mapping):
+        raise TypeError(f"a config file holds a mapping of NRConfig fields, got {type(data).__name__} from {src!r}")
+    return data
+
+
+def _yaml_dumper(yaml):
+    """SafeDumper that writes lists of scalars inline ([4000.0, 30000.0]) and everything else as blocks."""
+    class _Dumper(yaml.SafeDumper):
+        pass
+
+    def _list(dumper, data):
+        flow = all(not isinstance(x, (list, tuple, Mapping)) for x in data)
+        return dumper.represent_sequence("tag:yaml.org,2002:seq", data, flow_style=flow)
+
+    _Dumper.add_representer(list, _list)
+    return _Dumper
+
+
+def _write_text(path, text):
+    if path is not None:
+        with open(os.fspath(path), "w", encoding="utf-8") as fh:
+            fh.write(text)
+    return text
 
 
 def netslot_compat(**kw):

@@ -13,6 +13,11 @@ get_runtime(env): env.isaac_net if it exists, else it is built on first use from
 isaac/manager_cfg.py). The first use is the observation manager probing its term shapes, after the scene is created
 and the simulation reset, so the pose asset can be read.
 
+KPIs: with IsaacNetCfg.log_kpis every network step puts its KPIs into env.extras["log"]["net/..."] (isaac/kpis.py).
+ManagerBasedRLEnv._reset_idx replaces env.extras["log"] with a new dict on every step that resets an env, after the
+termination terms (where net_step runs by default) have written it, so NetRuntime wraps env._reset_idx once to put
+the step's KPIs back into the new dict.
+
 Traffic: without a send action, every robot submits a message of class `traffic_class` every `traffic_period`
 network steps of its env (periodic status updates), so AoI and delays are defined for any task. A NetSendAction
 term (isaac/mdp/actions.py) or task code writes rt.send instead; rt.send is consumed (zeroed) by every step.
@@ -25,6 +30,7 @@ import torch
 
 from ..core.proto.netsim import env_index
 from .config import IsaacNetCfg
+from .kpis import publish
 from .mixins import NetEnvMixin
 
 
@@ -48,6 +54,27 @@ class NetRuntime(NetEnvMixin):
         self.send = torch.zeros(E, R, dtype=torch.long, device=self.device)
         self.last_send = torch.zeros_like(self.send)                          # what the last step submitted
         self.fresh = torch.zeros(E, dtype=torch.bool, device=self.device)     # stepped since the env's reset
+        if self._net_kpi is not None:
+            self._keep_kpis_across_reset()
+
+    def _net_log_owner(self):
+        return self.env
+
+    def _keep_kpis_across_reset(self):
+        """Wrap env._reset_idx (once) so the KPIs of the step survive the new extras["log"] dict it creates."""
+        env = self.env
+        orig = getattr(env, "_reset_idx", None)
+        if orig is None or getattr(orig, "_isaac_net_kpis", False):
+            return
+
+        def _reset_idx(*args, **kwargs):
+            res = orig(*args, **kwargs)
+            if self.net_kpis is not None:
+                publish(env, self.net_kpis)
+            return res
+
+        _reset_idx._isaac_net_kpis = True
+        env._reset_idx = _reset_idx
 
     # env attributes NetEnvMixin reads
     @property

@@ -12,6 +12,9 @@ are the make_engine arguments. IsaacNetCfg adds only what an Isaac Lab task need
     blockage             blockage on/off, robot_blockers (robots block each other's line of sight), blocker radius
     domain randomization dr_ranges {name: (lo, hi)}, dr_mode ("reset" | "interval" | "off"), dr_interval_steps
     observation          obs_features, obs_history, obs_time_scale_s (see obs_dim and isaac/obs.py)
+    network overrides    nr: NRConfig fields (a dict, as Hydra passes them) applied on top of the env's NRConfig, or
+                         a whole NRConfig (resolve_nr; docs/config-files.md "Hydra overrides")
+    logging              log_kpis / log_every: network KPIs in extras["log"] (isaac/kpis.py, docs/isaac-lab.md)
 
 Observation features (one normalization, documented in docs/isaac-lab.md):
 
@@ -50,10 +53,11 @@ field groups as NRConfig.unused_fields).
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
 from typing import Optional, Sequence
 
-from ..core.config import NRConfig, fields_read_by
+from ..core.config import NRConfig, UnknownFieldError, _suggest, fields_read_by
 
 # ------------------------------------------------------------------------------------------------ observation
 OBS_FEATURES = ("delivered_mask", "msg_delay", "aoi", "queue_len", "queue_bytes", "sinr", "rsrp", "serving_cell",
@@ -73,6 +77,15 @@ _L0_FIELDS = {"delay_median_steps": "l0_delay_median_steps", "delay_log_sigma": 
               "loss": "l0_loss"}
 # levels whose delivery depends on the SNR the Isaac layer feeds them (the others ignore it)
 SNR_LEVELS = ("L05", "L05Q", "L1", "L2-legacy", "L2", "QA", "NN")
+
+
+def check_nr_keys(nr) -> None:
+    """Raise UnknownFieldError for keys of an IsaacNetCfg.nr dict that are neither NRConfig fields nor "preset"."""
+    names = {f.name for f in fields(NRConfig)} | {"preset", "__type__"}
+    bad = [k for k in nr if k not in names]
+    if bad:
+        raise UnknownFieldError("IsaacNetCfg.nr: NRConfig has no field " +
+                                "; ".join(f"{k!r}{_suggest(k, names)}" for k in bad))
 
 
 def canonical_features(features: Sequence[str]) -> tuple:
@@ -124,6 +137,12 @@ class IsaacNetCfg:
     obs_features: Sequence[str] = DEFAULT_OBS
     obs_history: int = 4                       # k of delay_history
     obs_time_scale_s: Optional[float] = None   # None = 50 control steps
+    # ---- network config overrides (Hydra: env.net_isaac.nr.ul_tpc=true, env.net_isaac.nr.preset=factory_inf)
+    nr: dict | NRConfig = field(default_factory=dict)   # dict: NRConfig fields applied on top of the env's NRConfig
+                                               # (a "preset" key starts from that preset instead); NRConfig: replaces it
+    # ---- logging (isaac/kpis.py): per-step network KPIs in extras["log"] for the RL runner's TensorBoard log
+    log_kpis: bool = True                      # a few reductions per network step on the device, no host sync
+    log_every: int = 1                         # refresh the KPIs every this many network steps
 
     def __post_init__(self):
         assert self.radio in ("isaac", "engine"), f"radio must be 'isaac' or 'engine', got {self.radio!r}"
@@ -137,9 +156,24 @@ class IsaacNetCfg:
             lo, hi = v
             assert lo <= hi, f"dr_ranges[{k!r}] = {v}: lo > hi"
         self.obs_features = canonical_features(self.obs_features)
+        assert self.log_every >= 1, "log_every must be >= 1"
+        if not isinstance(self.nr, (Mapping, NRConfig)):
+            raise TypeError(f"IsaacNetCfg.nr takes a dict of NRConfig fields or an NRConfig, not {type(self.nr).__name__}")
+        if isinstance(self.nr, Mapping):
+            check_nr_keys(self.nr)
 
     def with_(self, **kw) -> "IsaacNetCfg":
         return replace(self, **kw)
+
+    def resolve_nr(self, config: Optional[NRConfig] = None) -> Optional[NRConfig]:
+        """The NRConfig the network runs: config with the fields of nr applied (NRConfig.from_dict(nr, base=config),
+        so a typo raises with the closest field names), from_preset(nr["preset"], ...) when nr names a preset, nr
+        itself when it is an NRConfig, and config unchanged when nr is empty (None stays None)."""
+        if isinstance(self.nr, NRConfig):
+            return self.nr
+        if not self.nr:
+            return config
+        return NRConfig.from_dict(self.nr, base=config if config is not None else NRConfig())
 
     # ---------------------------------------------------------------- derived
     def n_gnb(self, config: Optional[NRConfig] = None) -> int:

@@ -118,6 +118,8 @@ self.net_setup("L2-legacy", R, nr, "triton", isaac=isaac)     # in _setup_scene
 | Blockage | `blockage`, `robot_blockers`, `blocker_radius_m`, `blockage_db` | `blockage=False` switches blockage loss off and ignores `blocked_fn`. `robot_blockers=True` lets the robots of an env block each other's line of sight as spheres. |
 | Domain randomization | `dr_ranges`, `dr_mode`, `dr_interval_steps`, `dr_strict` | per-env uniform draws, redrawn at every reset (`"reset"`), every U[lo, hi] network steps (`"interval"`), or never (`"off"`) |
 | Observation | `obs_features`, `obs_history`, `obs_time_scale_s` | the network features `net_obs()` returns, sized by `obs_dim(nr)` |
+| Network overrides | `nr` | a dict of `NRConfig` fields applied to the `NRConfig` given to `net_setup` (a `preset` key starts from that preset), or a whole `NRConfig` that replaces it; `IsaacNetCfg.resolve_nr(nr)` applies it. This is what the command-line overrides of the registered tasks fill ([Config files and presets](config-files.md#hydra-overrides-in-the-registered-tasks)) |
+| Logging | `log_kpis`, `log_every` | the per-step network KPIs in `extras["log"]` (see [Network KPIs in TensorBoard](#network-kpis-in-tensorboard)) |
 
 The Isaac radio takes its nominal parameters from the `NRConfig` (`ue_tx_dbm`, the noise floor, `pl_const_db`, `pathloss_exp`, `shadow_sigma_db`, `shadow_modes`). With the Isaac radio the engine sees only the SNR, so L1, L2-legacy and QA get the legacy cell fields and stay on their fast backends whatever radio fields the `NRConfig` sets. `NetModule(..., strict=True)` raises when the `NRConfig` sets fields the level ignores (`NRConfig.unused_fields`). The keyword arguments `pose_chunks`, `gnb_pos` and `radio` of `NetModule` and `net_setup` still work as shortcuts for the `IsaacNetCfg` fields.
 
@@ -187,6 +189,47 @@ Linux uses the same commands with `/` in the paths. Three details differ from ol
 - The registered configs take their physics backend from `ISAAC_NET_PHYSICS` (`isaacsim_physx` by default, `ovphysx`, `newton`), as `make_cfg` does. They do not declare Isaac Lab physics presets, so the `physics=` selector fails on them. Leave it out.
 
 Command-line overrides reach the env config through Isaac Lab's `env.` prefix, for example `env.num_robots=32 env.net_level=L1 env.net_backend=triton`. `NetFleetEnv.__init__` calls `finalize_fleet_cfg`, which rebuilds the scene when `num_robots` changed and sizes the action and observation spaces from the robot count and `IsaacNetCfg.obs_features`.
+
+Every `NRConfig` field is reachable the same way through the `nr` dict of the task's `IsaacNetCfg`, and so is a preset by name:
+
+```bash
+python -m isaac_net.isaac.tasks.train --task Isaac-NetFleet-Direct-v0 \
+    env.net_isaac.nr.ul_pc=true env.net_isaac.nr.ul_tpc=true env.net_isaac.nr.frame_buffer=32
+python -m isaac_net.isaac.tasks.train --task Isaac-NetFleet-Direct-Warehouse-v0 \
+    env.net_isaac.nr.preset=warehouse_private_5g env.net_isaac.nr.frame_buffer=16
+```
+
+A misspelled field stops the run before the simulation starts, with the closest field names (`NRConfig has no field 'ul_tcp' (did you mean 'ul_tpc' or 'ul_pc'?)`). [Config files and presets](config-files.md#hydra-overrides-in-the-registered-tasks) describes the rules, the presets and the YAML files.
+
+## Network KPIs in TensorBoard
+
+With `IsaacNetCfg.log_kpis=True` (the default), every network step puts its KPIs into `extras["log"]` as 0-dim tensors on the env's device. Isaac Lab's RL wrappers pass `extras` to the runner, and rsl_rl's runner averages every `extras["log"]` entry over the steps of an iteration and writes it to TensorBoard. A key that contains a `/` keeps its name there, so the values appear as their own group, `net/`, next to the episode statistics. The Direct mixin writes them in `net_step` and the manager-based runtime in its `net_step` term. The values cover all envs and robots of the batch:
+
+| Key | Value |
+|:---|:---|
+| `net/aoi_mean_s` | mean age of information over the robots after the step (s) |
+| `net/aoi_p95_s` | 95th percentile of the robots' AoI (`torch.quantile`, linear interpolation) (s) |
+| `net/delay_mean_ms` | mean delay of the messages delivered in the step (ms); 0 when none was delivered |
+| `net/delivered_frac` | delivered messages / messages resolved in the step (delivered or lost); 0 when none was resolved |
+| `net/dropped_frac` | lost messages / messages resolved: timed out at the application deadline, or dropped by the engine (RLC UM loss, handover flush, radio link failure) where the step reports it |
+| `net/queue_bytes_mean` | mean queued uplink bytes per robot after the step |
+| `net/sinr_mean_db` | mean SINR of the step (dB) |
+| `net/prb_util` | uplink PRB-slots granted / available in the step; level `L2` (NR engine) only |
+| `net/harq_bler` | failed / sent first transmissions of uplink transport blocks in the step (0 when none was sent); level `L2` only |
+| `net/rlf_frac` | share of robots in radio link failure; `L2` with several cells and `rlf=True` |
+| `net/access_sleep_frac` | mean share of the step the robots spent DRX-dormant or idle; `L2` with `drx` or `rach` |
+
+`net/prb_util` and `net/harq_bler` come from the cumulative counters of the NR MAC (`core/record.py`, `mac_counters`), differenced between two network steps. A full engine reset zeroes the counters, and the next step then counts from zero. The step-dict KPIs of a step with `net_substeps = m > 1` are those of the returned output: `delivered`-based values cover all m substeps, the per-message ones (`delay`, `delivered_frac`, `dropped_frac`) the last substep. With `net_decimation = k > 1`, the KPIs are refreshed on the env steps that step the network, and the env steps in between repeat them.
+
+**Cost.** About ten reductions over the `[E, R]` and `[E, R, F]` step tensors, one quantile over the E · R AoI values, and at level `L2` a copy of the MAC counters (a few `[E]` and `[E, max_harq_tx + 1]` tensors). Everything stays on the device and nothing is synchronized with the host. The runner calls `.item()` when it logs. `log_every = n` computes them every n network steps and repeats the last values in between, and `log_kpis=False` switches them off:
+
+```bash
+python -m isaac_net.isaac.tasks.train --task Isaac-NetFleet-Direct-v0 env.net_isaac.log_every=10
+python -m isaac_net.isaac.tasks.train --task Isaac-NetFleet-Direct-v0 env.net_isaac.log_kpis=false
+python -m isaac_net.isaac.tasks.train --task Isaac-NetFleet-Manager-v0 env.isaac_net.isaac.log_kpis=false
+```
+
+Two details of the plumbing matter for custom envs. Every step assigns a new dict to `extras["log"]` (the earlier entries plus the KPIs), because rsl_rl keeps a reference to each step's dict until it logs, and an update in place would rewrite the values of the earlier steps. `ManagerBasedRLEnv._reset_idx` replaces `extras["log"]` with a new dict on every step that resets an env, after the termination terms have run, so `NetRuntime` wraps the env's `_reset_idx` once to put that step's KPIs back. The last values are also available as `env.net_kpis` (Direct) or `env.isaac_net.net_kpis` (manager-based), and `isaac_net.isaac.kpis.step_kpis(out)` computes the step-dict part from any `NetModule.step` output.
 
 ## Manager-based workflow
 
