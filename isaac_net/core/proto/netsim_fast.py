@@ -45,6 +45,7 @@ import math
 import torch
 
 from . import netsim as _ns
+from .. import cuda_graph
 
 from ..checkpoint import StateDictMixin
 from .rng import STEP, SUBMIT, CounterRNG, check_mode
@@ -393,7 +394,7 @@ class NetFast(StateDictMixin):
     def _ckpt_host_changed(self, keys):
         """load_state_dict changed host values that the captured graphs bake in (core/checkpoint.py), e.g. the counter
         RNG's seed key rng.s0 of a checkpoint from an engine with another seed: the next call captures again."""
-        self._graphs.clear()
+        cuda_graph.drop(self._graphs, self.dev)
 
     def submit(self, t, requests, snr_db=None):
         t = self._tvec(t)
@@ -586,7 +587,7 @@ class NetFast(StateDictMixin):
         g = torch.cuda.CUDAGraph()
         if self._pool is None:
             self._pool = torch.cuda.graph_pool_handle()
-        with torch.cuda.graph(g, pool=self._pool):
+        with cuda_graph.graph(g, pool=self._pool):
             region()
         torch.cuda.synchronize(self.dev)
         for n, v in snap.items():

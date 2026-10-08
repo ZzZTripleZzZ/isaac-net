@@ -54,6 +54,7 @@ from dataclasses import dataclass
 
 import torch
 
+from . import cuda_graph
 from .checkpoint import StateDictMixin
 from .proto import netsim as _ns
 from .proto.rng import CounterRNG, mix32
@@ -314,6 +315,6 @@ class EnergyLoop(StateDictMixin):
         for k, v in self.state.items():
             v.copy_(snap[k])
         g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
+        with cuda_graph.graph(g):
             self._static_out = self._bytes_core(*self._static_in)
         self._graph = g

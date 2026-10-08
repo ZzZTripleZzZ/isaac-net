@@ -31,6 +31,7 @@ from types import SimpleNamespace
 
 import torch
 
+from . import cuda_graph
 from .config import NRConfig
 from .engine import NREngine
 
@@ -189,7 +190,7 @@ class NRGraphEngine(NREngine):
         self._drop_graphs()
 
     def _drop_graphs(self):
-        self._graphs.clear()
+        cuda_graph.drop(self._graphs, self.dev)
         self._ion_delta.clear()
 
     def _ckpt_finish(self):
@@ -479,7 +480,7 @@ class NRGraphEngine(NREngine):
         if self._pool is None:
             self._pool = torch.cuda.graph_pool_handle()
         before = dict(getattr(self.net, "ioN_n", {}))
-        with torch.cuda.graph(g, pool=self._pool):
+        with cuda_graph.graph(g, pool=self._pool):
             self._write_out(self._region(T, kind, ins))
         after = dict(getattr(self.net, "ioN_n", {}))
         self._ion_delta[key] = {k: after[k] - before[k] for k in after}

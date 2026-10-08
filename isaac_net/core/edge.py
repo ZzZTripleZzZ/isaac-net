@@ -54,6 +54,7 @@ import math
 
 import torch
 
+from . import cuda_graph
 from .checkpoint import StateDictMixin
 from .config import EdgeConfig, NRConfig
 from .queues import env_mask
@@ -234,7 +235,7 @@ class EdgeLoop(StateDictMixin):
         for k, v in self.state.items():
             v.copy_(snap[k])
         g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
+        with cuda_graph.graph(g):
             self._static_out = self._core(*self._static_in)
         self._graph = g
 

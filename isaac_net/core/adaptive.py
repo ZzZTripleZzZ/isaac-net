@@ -75,6 +75,7 @@ from dataclasses import dataclass
 
 import torch
 
+from . import cuda_graph
 from .checkpoint import StateDictMixin
 from .config import NRConfig
 from .proto import netsim as _ns
@@ -881,7 +882,7 @@ class AdaptiveEngine(StateDictMixin):
             g = torch.cuda.CUDAGraph()
             if self._pool is None:
                 self._pool = torch.cuda.graph_pool_handle()
-            with torch.cuda.graph(g, pool=self._pool):
+            with cuda_graph.graph(g, pool=self._pool):
                 self._gout[name] = body(*bufs)
             self._graphs[name] = g
         g.replay()
