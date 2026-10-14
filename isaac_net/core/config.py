@@ -81,6 +81,7 @@ FIELD_GROUPS = {
            "n_layers_max", "rank_rule", "rank_sinr_min_db", "rank_k_max_db", "rank_layer_penalty_db", "ul_mimo",
            "dl_mimo",
            "qos_classes", "qos_priority", "qos_pdb_ms", "qos_gamma",
+           "learned_timescale", "learned_groups", "learned_hidden", "learned_logw_clip", "learned_metric",
            "pf_update", "pf_avg_idle", "ul_retx_sched", "ul_amc_alloc", "ul_grant_model", "sr_boot_slots",
            "sr_boot_bytes", "bsr_delay_slots", "bsr_hdr_bytes", "bsr_est_hdr_bytes", "rlc_tail_bytes", "rlc_tail_timer_ms",
            "phr_min_db", "fading", "fading_rho_per_ms", "ue_speed_mps", "carrier_ghz", "fading_doppler",
@@ -146,6 +147,7 @@ UL_TPC_FIELDS = ("ul_tpc_mode", "ul_tpc_target_db", "ul_tpc_steps_db", "ul_tpc_d
 MIMO_RULE_FIELDS = ("rank_rule", "rank_sinr_min_db", "rank_k_max_db", "rank_layer_penalty_db")   # a rank-2 direction
 MIMO_FIELDS = MIMO_RULE_FIELDS + ("ul_mimo", "dl_mimo")      # n_layers_max > 1 (NR engine only)
 QOS_FIELDS = ("qos_classes", "qos_priority", "qos_pdb_ms", "qos_gamma")      # scheduler="qos" (NR engine only)
+LEARNED_FIELDS = ("learned_timescale", "learned_groups", "learned_hidden", "learned_logw_clip", "learned_metric")   # scheduler="learned"
 ANTENNA_FIELDS = ("cell_azimuth_deg", "cell_tilt_deg", "gnb_antenna_gain_dbi")      # gnb_antenna="sector"
 TR38901_FIELDS = ("tr38901_scenario", "tr38901_los", "o2i_indoor_frac", "o2i_model", "inf_clutter_density",
                   "inf_clutter_size_m", "inf_clutter_height_m")             # channel="tr38901"
@@ -238,6 +240,8 @@ def _switch_unread(cfg, nr):
             off |= set(UL_TPC_FIELDS)
         if cfg.scheduler != "qos":
             off |= set(QOS_FIELDS)
+        if cfg.scheduler != "learned":
+            off |= set(LEARNED_FIELDS)
         if cfg.n_layers_max == 1:
             off |= set(MIMO_FIELDS)
         else:
@@ -551,7 +555,10 @@ class NRConfig:
                                          # pf_metric="wideband"), "maxci" (max rate, no fairness), "rr" (round robin:
                                          # the robot served longest ago first, channel-blind), "qos" (5G-LENA
                                          # NrMacSchedulerOfdmaQos: PF weighted by the 5QI priority and the delay
-                                         # budget of the queued message classes, docs/configurability.md)
+                                         # budget of the queued message classes, docs/configurability.md),
+                                         # "learned" (UL: PF times exp(log-weight) per robot, the log-weight from a
+                                         # small in-engine scoring network plus an external input; one cell;
+                                         # docs/learned-scheduler.md)
     pf_metric: str = "subband"           # "subband" (frequency-selective) or "wideband" (5G-LENA OFDMA PF)
     pf_window: float = 100.0             # EWMA window in scheduled slots of that direction
     retx_priority: bool = True
@@ -571,6 +578,16 @@ class NRConfig:
     qos_pdb_ms: tuple = (math.inf, math.inf)   # packet delay budget per class (ms); finite = delay-critical class
                                          # (5G-LENA DC-GBR) with the delay-budget factor, inf = factor 1
     qos_gamma: float = 1.0               # rate exponent of the QoS metric (5G-LENA m_alpha)
+    # ---- scheduler="learned" (read only then; NR engine UL, one cell; docs/learned-scheduler.md) ----
+    learned_timescale: str = "step"      # "step": the scorer runs once per control step, on the state at its start
+                                         # (a near-RT RIC xApp refreshing weights); "slot": before every UL data slot
+    learned_groups: int = 1              # parameter sets of the in-engine scorer; env e uses set group[e]
+    learned_hidden: int = 16             # hidden units of the scorer MLP (14 inputs -> hidden -> 1)
+    learned_logw_clip: float = 2.772588722239781   # the log-weight (scorer output + external input) is clamped to
+                                         # +- this: default ln 16, so the weight w = exp(lw) lies in [1/16, 16]
+                                         # (the per-UE PF weight range of the srsRAN/OCUDU per-RNTI weight patch)
+    learned_metric: str = "pf_weight"    # "pf_weight" (default, the deployable actuation): PF metric times w;
+                                         # "weight": w replaces the PF metric (channel-blind priority; ablation only)
     # ---- 5G-LENA MAC behavior under load (docs/fidelity-load-gap.md); defaults = the engine before these switches ----
     pf_update: str = "slot"              # "slot": PF metric fixed within a slot, average updated with the served
                                          # bytes; "rbg": 5G-LENA OFDMA PF, the winner's average is updated with its
@@ -790,15 +807,18 @@ class NRConfig:
         assert set(self.tdd_pattern) <= set("DSU") and self.tdd_pattern
         assert self.harq_combining in ("cc", "ir_lena", "none") and self.harq_fail in ("rlc_am", "drop")
         assert self.eff_sinr in ("eesm", "mean_db") and self.pf_metric in ("subband", "wideband")
-        assert self.scheduler in ("pf", "pf_wideband", "maxci", "rr", "qos"), "scheduler: pf, pf_wideband, maxci, rr or qos"
+        assert self.scheduler in ("pf", "pf_wideband", "maxci", "rr", "qos", "learned"), \
+            "scheduler: pf, pf_wideband, maxci, rr, qos or learned"
+        assert self.learned_timescale in ("step", "slot") and self.learned_groups >= 1 and self.learned_hidden >= 1
+        assert self.learned_logw_clip > 0 and self.learned_metric in ("pf_weight", "weight")
         assert self.discard in ("purge", "none", "pdcp_arrival") and self.tbs_mode in ("38214", "lena")
         assert self.bler_source in ("pdsch", "lena", "sionna_label") and self.noise_model in ("fixed", "thermal")
         assert not (self.harq_combining == "ir_lena" and self.eff_sinr != "eesm")
         assert self.ul_power in ("allocated", "whole_band")
         assert self.proactive_grant in ("off", "every_ul_slot", "per_period")
         assert self.pf_update in ("slot", "rbg") and self.pf_avg_idle in ("decay", "freeze")
-        assert self.pf_update == "slot" or self.scheduler in ("pf", "pf_wideband", "qos"), \
-            "pf_update='rbg' needs a PF scheduler (pf, pf_wideband or qos)"
+        assert self.pf_update == "slot" or self.scheduler in ("pf", "pf_wideband", "qos", "learned"), \
+            "pf_update='rbg' needs a PF scheduler (pf, pf_wideband, qos or learned)"
         self.qos_priority = tuple(int(p) for p in self.qos_priority)
         self.qos_pdb_ms = tuple(float(x) for x in self.qos_pdb_ms)
         assert self.qos_classes >= 1 and len(self.qos_priority) == len(self.qos_pdb_ms) == self.qos_classes, \
@@ -1224,7 +1244,10 @@ class NRConfig:
                     f"{c.bler_target:g}, OLLA {on(c.olla)}" + (f", DL CQI {c.cqi_table}" if c.dl else "")))
         # ---- MAC
         sched = c.scheduler + (f" ({c.pf_metric} metric, window {c.pf_window:g})"
-                               if c.scheduler in ("pf", "qos") else "")
+                               if c.scheduler in ("pf", "qos", "learned") else "")
+        if c.scheduler == "learned":
+            sched += (f"; learned UL weights per {c.learned_timescale}, {c.learned_groups} parameter group(s), "
+                      f"{c.learned_hidden} hidden units")
         lena = c.lena_mac_switches()
         if lena:
             sched += "; 5G-LENA MAC: " + ", ".join(f"{k}={v}" for k, v in lena.items())

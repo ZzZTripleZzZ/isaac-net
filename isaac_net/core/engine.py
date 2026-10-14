@@ -818,6 +818,58 @@ class NREngine(StateDictMixin):
                     setattr(q, name, torch.where(oh, v[..., None], cur))
         return acc
 
+    # ------------------------------------------------------------------ scheduler="learned" (mac.MacLink)
+    def _learned(self):
+        ul = self.net.ul
+        if not getattr(ul, "learned", False):
+            raise ValueError("the learned-scheduler calls need NRConfig(scheduler='learned')")
+        return ul
+
+    @staticmethod
+    def _put(dst, x):
+        """In-place write (captured graphs keep reading the same buffer, so nothing is captured again)."""
+        dst.copy_(torch.as_tensor(x, dtype=dst.dtype, device=dst.device).expand_as(dst))
+
+    def set_sched_logw(self, logw):
+        """External per-robot log-weight [E,R] (or a scalar), added to the scorer output from the next step on;
+        exp(clamp(scorer + logw)) multiplies the PF metric. A trainer writes its sampled actions here."""
+        self._put(self._learned().l_ext, logw)
+
+    def set_sched_hint(self, hint):
+        """Application hint [E,R] (scorer feature 6), e.g. a policy's message-rate class."""
+        self._put(self._learned().l_hint, hint)
+
+    def set_sched_groups(self, group):
+        """Parameter set [E] (long, in [0, learned_groups)) of every env: population partitions."""
+        self._put(self._learned().l_group, group)
+
+    def set_sched_params(self, w1, b1, w2, b2, group=None):
+        """Scorer parameters: w1 [2F,H], b1 [H], w2 [H], b2 [] of one group (group=int), or [G,...] of all groups
+        (group=None). F = mac.L_FEAT; zeros = plain PF (plus the external log-weight)."""
+        ul = self._learned()
+        for name, x in (("l_w1", w1), ("l_b1", b1), ("l_w2", w2), ("l_b2", b2)):
+            dst = getattr(ul, name)
+            self._put(dst if group is None else dst[group], x)
+
+    def sched_params(self):
+        """Copies of the scorer parameters {w1, b1, w2, b2}, [G,...] each."""
+        ul = self._learned()
+        return {k: getattr(ul, "l_" + k).clone() for k in ("w1", "b1", "w2", "b2")}
+
+    def sched_features(self, snr_db=None):
+        """Scorer features [E,R,F] of the current state (at the start of the next step), evaluated eagerly from snr_db
+        [E,R] or [E,R,S] (default: the SNR of the previous step). A trainer that picks one log-weight per robot per
+        control step reads its observation here before the step."""
+        ul = self._learned()
+        x = self._last_snr if snr_db is None else snr_db
+        ref = x if x.dim() == 3 else x[..., None].expand(-1, -1, self.net.S)
+        return ul.learned_features(float(self.T), ref)
+
+    def sched_state(self):
+        """{"feat": features of the last scorer evaluation [E,R,F], "logw": log-weight in use [E,R]} (copies)."""
+        ul = self._learned()
+        return {"feat": ul.l_feat.clone(), "logw": ul.lw.clone()}
+
     def add_frames(self, t, send, det, hid, snr_db):
         """Legacy wrapper (NetSlot API)."""
         self.submit(t, Requests(send, det, hid), snr_db)

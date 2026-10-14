@@ -548,6 +548,9 @@ class NRTritonEngine(NRGraphEngine):
                         "the other 5G-LENA MAC switches (pf_update, pf_avg_idle, ul_retx_sched, ul_amc_alloc) run"))
         if cfg.mimo_dirs:
             out.append(("rank-2 MIMO (n_layers_max=2)", "the kernel has no per-process rank or per-layer SINR"))
+        if cfg.scheduler == "learned":
+            out.append(("scheduler='learned'", "the kernel has no scorer network or learned weights yet (planned: "
+                        "the prologue evaluates the scorer in torch and passes exp(lw) as the qos weight qw)"))
         if cfg.ul_mini_slot_symbols is not None:
             out.append(("mini-slot grants (ul_mini_slot_symbols, mini_slot_dl)", "the kernel runs one scheduling "
                         "occasion per slot (its schedule table has no occasion index)"))

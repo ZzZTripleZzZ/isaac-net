@@ -206,6 +206,8 @@ class NRNet:
         self.log_sinr = False      # multi-cell: per-TB SINR samples in self.sinr_log (host copies; sweeps only)
         if self.fc_mode:
             self._init_fcorr()
+        if self.cfg.scheduler == "learned" and self.C > 1:
+            raise ValueError("scheduler='learned' runs at one cell (n_cells = 1) in this version")
         if self.C > 1:
             self._init_cells()
         elif self.cfg.rlf:
@@ -484,6 +486,8 @@ class NRNet:
         put("f_nact", nact[:, None].expand(-1, self.R))
         put("f_snr", snr_db if snr_db.dim() == 2 else snr_db.mean(-1))
         put("f_own", i)
+        if self.ul.learned:       # scheduler="learned": class of the robot's last submitted message (feature 5)
+            self.ul.l_cls = torch.where(send > 0, send, self.ul.l_cls)
         return acc
 
     def add_dl_frames(self, t, nbytes, cls=None):
@@ -651,6 +655,8 @@ class NRNet:
         if self.dl is not None:
             dref = dl_snr_db if dl_snr_db is not None else snr_db + cfg.dl_snr_offset_db
             dl_ref = dref if dref.dim() == 3 else dref[..., None].expand(-1, -1, self.S)
+        if self.ul.learned and cfg.learned_timescale == "step":     # learned weights for this step (mac.py)
+            self.ul.learned_prepare(tf, ul_ref)
         if self.rician:
             self._rician_update(g0v)
         for rel, dls, uls, sr, cqi, ack in self._schedule(g0):

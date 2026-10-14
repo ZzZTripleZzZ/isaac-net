@@ -20,7 +20,9 @@ rlc_retx_slots; "drop" marks overlapping frames lost (RLC UM).
 Schedulers (cfg.scheduler): "pf" proportional fair on the per-RBG rate estimate over the EWMA throughput (wideband
 rate with pf_metric="wideband"), "pf_wideband" the same with the wideband rate, "maxci" the rate estimate alone, "rr"
 round robin (the robot whose last transmission is oldest first, channel-blind), "qos" the 5G-LENA QoS scheduler
-(NrMacSchedulerOfdmaQos, see qos_prepare): the PF metric r^gamma / avg times a per-robot class weight. Every scheduler
+(NrMacSchedulerOfdmaQos, see qos_prepare): the PF metric r^gamma / avg times a per-robot class weight, "learned" (UL
+only; the DL link of such a config runs "pf"): the PF metric times exp(lw), lw [E,R] a per-robot log-weight from a
+small scoring network over per-robot features plus an external input (learned_prepare). Every scheduler
 keeps the same retransmission admission and the same greedy RBG-by-RBG filling up to the need or the power-headroom cap.
 
 5G-LENA MAC behavior under load (docs/fidelity-load-gap.md; defaults reproduce the engine before them bitwise):
@@ -57,6 +59,9 @@ from .queues import FrameQueue, env_mask, onehot, reset_where
 
 BIG = 2 ** 62
 AVG_MIN = 1e-9             # floor of the PF average (bytes per slot), as 5G-LENA's PF metric max(1e-9, avg)
+# scheduler="learned": per-robot features of learned_features (buffer, head-of-line age, channel, HARQ pending, HARQ
+# transmissions, last message class, application hint); the scorer sees them and their mean over the env's robots
+L_FEAT = 7
 BSR_DEPTH = 4              # ul_grant_model="bsr": buffer status reports in flight per robot ("K" state dims)
 # rank-2 SU-MIMO (a direction in cfg.mimo_dirs): rank of the TB of each HARQ process, rank of the robot's last new TB
 MIMO_STATE = {"h_rank": (("P",), torch.long, 1), "last_rank": ((), torch.long, 1)}
@@ -130,6 +135,71 @@ class MacLink:
             P = cfg.qos_priority
             self._qos_rank = torch.tensor(sorted(range(len(P)), key=lambda c: (P[c], c)), device=device).argsort()
             self.qw = torch.full((E, R), float(100 - max(P)), device=device)
+        self.learned = cfg.scheduler == "learned" and self.dir == "ul"
+        if self.learned:
+            self._learned_init()
+
+    # ---------------- scheduler="learned" ----------------
+    def _learned_init(self):
+        """Inputs and parameters of the learned scheduler. None of them is per-robot MAC state (reset leaves them):
+          l_ext   [E,R]  external log-weight, added to the scorer output (a trainer's sampled action, or 0)
+          l_hint  [E,R]  application hint, feature 6 (e.g. a policy's rate class; 0 by default)
+          l_cls   [E,R]  class of the last submitted message, 0 = none (set by NRNet.add_frames), feature 5
+          l_group [E]    parameter set of every env (population partitions)
+          l_w1 [G,2F,H], l_b1 [G,H], l_w2 [G,H], l_b2 [G]  the scorer MLP of each group, zeros = PF
+          l_feat  [E,R,F] the features of the last evaluation, lw [E,R] the log-weight in use, l_wexp = exp(lw).
+        All are fixed-shape tensors that the trainer updates in place (copy_), so a captured CUDA graph reads the new
+        values at its next replay without being captured again."""
+        cfg, E, R, d = self.cfg, self.E, self.R, self.dev
+        G, H, F2 = cfg.learned_groups, cfg.learned_hidden, 2 * L_FEAT
+        self.l_ext = torch.zeros(E, R, device=d)
+        self.l_hint = torch.zeros(E, R, device=d)
+        self.l_cls = torch.zeros(E, R, dtype=torch.long, device=d)
+        self.l_group = torch.zeros(E, dtype=torch.long, device=d)
+        self.l_w1 = torch.zeros(G, F2, H, device=d)
+        self.l_b1 = torch.zeros(G, H, device=d)
+        self.l_w2 = torch.zeros(G, H, device=d)
+        self.l_b2 = torch.zeros(G, device=d)
+        self.l_feat = torch.zeros(E, R, L_FEAT, device=d)
+        self.lw = torch.zeros(E, R, device=d)
+        self.l_wexp = torch.ones(E, R, device=d)
+        self._l_ncls = max(1, len(cfg.msg_sizes))
+
+    def learned_features(self, tf, sinr_ref):
+        """Per-robot features [E,R,L_FEAT] at time tf (control steps; a 0-dim float64 tensor when captured):
+        0 log1p(backlog bytes / 1000), backlog = queued stream bytes not yet released (enq - floor);
+        1 head-of-line age (ms, oldest queued frame) / 100, clamped to [0, 10];
+        2 channel: wideband mean of the scheduler's per-RBG SINR estimate incl. OLLA (dB) / 20;
+        3 HARQ processes owning undecoded bytes / n_harq;  4 transmissions so far of the oldest pending TB / max_harq_tx;
+        5 class of the last submitted message / number of classes (0 = none);  6 the application hint l_hint."""
+        cfg, q = self.cfg, self.q
+        backlog = (q.enq - self.floor).clamp(min=0).float()
+        head = q.cap[..., 0] >= 0
+        hol = tf - q.cap[..., 0].double()
+        if "off" in q.extras:
+            hol = hol - q.off[..., 0]
+        hol = torch.where(head, (hol * cfg.control_step_ms).float(), torch.zeros_like(backlog))
+        est, _ = self._sched_estimate(sinr_ref)
+        chan = est.mean(-1) + (self.olla if cfg.olla else 0.0)
+        pend = self.h_state == 1
+        npend = pend.sum(-1).float() / self.P
+        ntx = torch.where(pend, self.h_ntx, torch.zeros_like(self.h_ntx)).max(-1).values.float() / cfg.max_harq_tx
+        return torch.stack([torch.log1p(backlog / 1000.0), (hol / 100.0).clamp(0, 10), chan / 20.0, npend, ntx,
+                            self.l_cls.float() / self._l_ncls, self.l_hint], -1)
+
+    def learned_prepare(self, tf, sinr_ref):
+        """Evaluate the scorer: lw = clamp(MLP_group(features, mean features of the env) + l_ext); l_wexp = exp(lw)
+        multiplies the PF metric of every RBG. Called once per control step at its start (learned_timescale="step",
+        NRNet.step) or before every UL data slot ("slot", MacLink.slot)."""
+        f = self.learned_features(tf, sinr_ref)
+        self.l_feat = f
+        x = torch.cat([f, f.mean(1, keepdim=True).expand_as(f)], -1)                          # [E,R,2F]
+        gi = self.l_group
+        h = torch.tanh(torch.einsum("erf,efh->erh", x, self.l_w1[gi]) + self.l_b1[gi][:, None, :])
+        out = torch.einsum("erh,eh->er", h, self.l_w2[gi]) + self.l_b2[gi][:, None]
+        clip = self.cfg.learned_logw_clip
+        self.lw = (out + self.l_ext).clamp(-clip, clip)
+        self.l_wexp = torch.exp(self.lw)
 
     def qos_prepare(self, tf):
         """scheduler="qos", once per control step before its slots (NRNet.step / step_cells, and before the fused
@@ -187,6 +257,8 @@ class MacLink:
             self.rv_tx.zero_()
             self.rv_fail.zero_()
             self.prb_used_env.zero_()
+        if self.learned:          # the last message class is per-env application state; parameters and inputs stay
+            self.l_cls = reset_where(self.l_cls, m, 0)
 
     def unsent(self):
         return self.q.enq - self.sent
@@ -234,6 +306,8 @@ class MacLink:
         gh = g if gh is None else gh
         self.slot_nsym = nsym
         w = self.sb_prb
+        if self.learned and cfg.learned_timescale == "slot":
+            self.learned_prepare(frac, sinr_ref_db)
         unsent = self.unsent()
         # DL processes whose ACK has reached the gNB become free
         self.h_state = torch.where((self.h_state == 2) & (self.h_ready <= g), torch.zeros_like(self.h_state), self.h_state)
@@ -271,6 +345,10 @@ class MacLink:
         elif sched == "qos":                   # 5G-LENA QoS: r^gamma / avg times the class weight (qos_prepare)
             rate_q = rate_sb if cfg.qos_gamma == 1.0 else rate_sb ** cfg.qos_gamma
             metric_sb = rate_q / self.avg.clamp(min=AVG_MIN)[..., None] * self.qw[..., None]
+        elif self.learned and cfg.learned_metric == "weight":   # ablation: the weight replaces the PF metric
+            metric_sb = self.l_wexp[..., None].expand_as(rate_sb)
+        elif self.learned:                     # PF times the learned per-robot weight exp(lw) (learned_prepare)
+            metric_sb = rate_sb / self.avg.clamp(min=AVG_MIN)[..., None] * self.l_wexp[..., None]
         else:
             metric_sb = rate_sb / self.avg.clamp(min=AVG_MIN)[..., None]
         # retransmission admission: rank pending retx per cell (PF metric) and admit them while their
@@ -526,6 +604,10 @@ class MacLink:
     def _rbg_metric(self, s, rate_sb, base, wwin, got):
         """pf_update="rbg": metric of RBG s with the average moved by the bytes granted so far in this slot (qos: the
         rate to the power qos_gamma, times the class weight)."""
+        if self.learned:
+            if self.cfg.learned_metric == "weight":
+                return self.l_wexp.clone()
+            return rate_sb[..., s] / (base + wwin * got).clamp(min=1e-9) * self.l_wexp
         if not self.qos:
             return rate_sb[..., s] / (base + wwin * got).clamp(min=1e-9)
         r = rate_sb[..., s] if self.cfg.qos_gamma == 1.0 else rate_sb[..., s] ** self.cfg.qos_gamma
