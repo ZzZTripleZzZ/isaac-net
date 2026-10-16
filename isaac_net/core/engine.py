@@ -835,6 +835,15 @@ class NREngine(StateDictMixin):
         exp(clamp(scorer + logw)) multiplies the PF metric. A trainer writes its sampled actions here."""
         self._put(self._learned().l_ext, logw)
 
+    def set_sched_pregrant(self, nbytes):
+        """Proactive UL grant floor [E,R] in bytes (or a scalar), from the next step on (needs learned_pregrant=True):
+        the gNB treats the robot as having at least nbytes buffered before every UL data slot (no SR / first-grant
+        delay); a robot with a grant and nothing to send holds learned_pregrant_hold_rbg RBGs idle. 0 = no grant."""
+        ul = self._learned()
+        if ul.l_pg is None:
+            raise ValueError("set_sched_pregrant needs NRConfig(learned_pregrant=True)")
+        self._put(ul.l_pg, torch.as_tensor(nbytes).round().long() if torch.is_tensor(nbytes) else int(round(nbytes)))
+
     def set_sched_hint(self, hint):
         """Application hint [E,R] (scorer feature 6), e.g. a policy's message-rate class."""
         self._put(self._learned().l_hint, hint)

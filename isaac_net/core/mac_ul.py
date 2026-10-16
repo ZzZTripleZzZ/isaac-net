@@ -82,6 +82,9 @@ class UlMac(MacLink):
             self.STATE = st
         self._bsr_model = cfg.ul_grant_model == "bsr"
         super().__init__(cfg, *a, **k)
+        if getattr(self, "l_pg", None) is not None:      # learned_pregrant: PRBs held by unused grants
+            self.ctr["prb_held"] = torch.zeros((), device=self.dev)
+            self.prb_held_env = torch.zeros(self.E, device=self.dev)
         if self._bsr_model:
             self._bsr_levels = torch.tensor(BSR_LEVELS, dtype=torch.long, device=self.dev)
             self._tail_slots = cfg.rlc_tail_timer_slots
@@ -145,6 +148,23 @@ class UlMac(MacLink):
         granted = (self.sr_t >= 0) & (g - self.sr_t >= self.cfg.sr_delay)
         self.bsr = torch.where(granted, self.bsr.clamp(min=1), self.bsr)
         self.sr_t = torch.where(granted, torch.full_like(self.sr_t, -1), self.sr_t)
+        self._pg_now = False
+        if getattr(self, "l_pg", None) is not None:       # learned_pregrant: proactive grant of at least l_pg bytes
+            per = cfg.learned_pregrant_period_slots
+            if per == 0 or gh % per < len(cfg.tdd_pattern):     # gh: host slot index, fixed by the TDD pattern
+                self._pg_now = True
+                self.bsr = torch.maximum(self.bsr, self.l_pg)
+
+    def _held_rbgs(self, need, has_rx):
+        """learned_pregrant: a robot with a proactive grant (l_pg > 0) and nothing to send holds
+        learned_pregrant_hold_rbg RBGs idle (unused configured resources), counted per env and capped at the carrier."""
+        if getattr(self, "l_pg", None) is None or self.cfg.learned_pregrant_hold_rbg == 0 or \
+                not getattr(self, "_pg_now", False):
+            return None
+        idle = (self.l_pg > 0) & (need <= 0) & ~has_rx
+        if self.sched_ok is not None:
+            idle = idle & self.sched_ok
+        return (idle.long().sum(-1) * self.cfg.learned_pregrant_hold_rbg).clamp(max=self.S)
 
     def _need(self, unsent):
         if self._bsr_model:

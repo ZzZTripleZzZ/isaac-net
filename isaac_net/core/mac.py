@@ -163,6 +163,8 @@ class MacLink:
         self.l_feat = torch.zeros(E, R, L_FEAT, device=d)
         self.lw = torch.zeros(E, R, device=d)
         self.l_wexp = torch.ones(E, R, device=d)
+        # learned_pregrant (UL, lumped grants): external proactive-grant byte floor, written in place like l_ext
+        self.l_pg = torch.zeros(E, R, dtype=torch.long, device=d) if cfg.learned_pregrant else None
         self._l_ncls = max(1, len(cfg.msg_sizes))
 
     def learned_features(self, tf, sinr_ref):
@@ -257,6 +259,8 @@ class MacLink:
             self.rv_tx.zero_()
             self.rv_fail.zero_()
             self.prb_used_env.zero_()
+            if hasattr(self, "prb_held_env"):
+                self.prb_held_env.zero_()
         if self.learned:          # the last message class is per-env application state; parameters and inputs stay
             self.l_cls = reset_where(self.l_cls, m, 0)
 
@@ -295,6 +299,10 @@ class MacLink:
 
     def _post_slot(self, tx, gain_now, g=None, tx_new=None, tbs_new=None):
         pass
+
+    def _held_rbgs(self, need, has_rx):
+        """RBGs [E] held idle in this slot (top of the carrier, unavailable to every robot), or None."""
+        return None
 
     # ---------------- one data slot ----------------
     def slot(self, g, frac, nsym, sinr_ref_db, gain_now, ack_slot=0, gh=None, rel=0):
@@ -354,6 +362,7 @@ class MacLink:
         # retransmission admission: rank pending retx per cell (PF metric) and admit them while their
         # RBG counts fit the carrier, so no retx is left with a partial (unusable) allocation
         M = self.member
+        hold = self._held_rbgs(need, has_rx)     # learned_pregrant: RBGs of unused proactive grants (else None)
         tdma = self.dir == "ul" and cfg.ul_retx_sched == "tdma"
         rkey = None if tdma else torch.where(has_rx, metric_sb.sum(-1), torch.full_like(metric_sb[..., 0], -1.0))
         if tdma:
@@ -378,7 +387,8 @@ class MacLink:
         elif M is None:
             order = rkey.argsort(-1, descending=True)
             cum = (rx_nsb * has_rx).gather(-1, order).cumsum(-1)
-            adm_sorted = has_rx.gather(-1, order) & (cum <= S)
+            lim = S if hold is None else (S - hold)[:, None]
+            adm_sorted = has_rx.gather(-1, order) & (cum <= lim)
             admitted = torch.zeros_like(has_rx).scatter(-1, order, adm_sorted)
         else:                   # the same ranking inside every cell: [E,C,R], then back to [E,R]
             rx_c = has_rx[:, None, :] & M
@@ -409,6 +419,8 @@ class MacLink:
             want = (cnt < want_cnt) & (has_rx | (left > 0))
             ms = self._rbg_metric(s, rate_sb, base, wwin, got) if rbg_pf else metric_sb[..., s]
             m = torch.where(want, ms + prio, torch.full_like(left, -1.0))
+            if hold is not None:            # learned_pregrant: RBGs held by unused proactive grants
+                m = torch.where((s >= S - hold)[:, None], torch.full_like(m, -1.0), m)
             wr = want & has_rx if lex else None
             if M is None:
                 if lex:
@@ -442,6 +454,8 @@ class MacLink:
                 want = (cnt < want_cnt) & new_el & (left > 0)
                 ms = self._rbg_metric(s, rate_sb, base, wwin, got) if rbg_pf else metric_sb[..., s]
                 m = torch.where(want, ms, torch.full_like(left, -1.0))
+                if hold is not None:
+                    m = torch.where((s >= S - hold)[:, None], torch.full_like(m, -1.0), m)
                 if M is None:
                     best, wi = m.max(-1)
                     oh = onehot(wi, R) & ((best >= 0) & rel_rs[..., s].any(-1))[:, None]
@@ -457,6 +471,10 @@ class MacLink:
             won = won | torch.stack(cols, -1)
         n_sb = won.sum(-1)
         n_prb = (won * w).sum(-1)
+        if hold is not None:                # learned_pregrant: PRBs held idle by unused grants (top RBGs)
+            held = (hold.float() * self.sb_prb[-1])
+            self.ctr["prb_held"] += held.sum()
+            self.prb_held_env += held
         tx_rx = has_rx & (n_sb == rx_nsb) & (n_sb > 0)
         tx_new = new_el & (n_sb > 0)
         tx = tx_rx | tx_new

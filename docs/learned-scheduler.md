@@ -69,3 +69,22 @@ the PF metric in the kernel). Timescale "step" maps onto that path directly: eva
 prologue and pass `exp(lw)` as `qw` with `SCHED=3, qos_gamma=1`. Timescale "slot" needs the scorer inside the kernel
 (14 x 16 MAC per robot per slot, with the env mean as a reduction over the robot axis the program already holds); the
 parameters would be loaded once per program from `[G, ...]` tensors indexed by the env's group.
+
+## Proactive and configured grants (`learned_pregrant`)
+
+A time-dimension action next to the weight (uplink, `ul_grant_model="lumped"` only):
+
+```python
+cfg = netslot_compat(scheduler="learned", learned_pregrant=True, learned_pregrant_hold_rbg=1,
+                     learned_pregrant_period_slots=0)        # 0 = every UL data slot; P = configured grant every P slots
+net.set_sched_pregrant(bytes_per_robot)                      # [E,R], in place, refreshed per control step
+```
+
+In a grant slot the gNB's buffer view of robot r is raised to at least `l_pg[r]` bytes, so data that reaches the UE is
+granted at its size in the next UL data slot: no SR wait, no SR -> grant delay, no one-RBG first grant. The grant
+carries a size. Cost of an unused grant: in a grant slot, every robot with `l_pg > 0` and nothing to send holds
+`learned_pregrant_hold_rbg` RBGs idle at the top of the carrier (unavailable to everyone; counter `prb_held` and
+`ul.prb_held_env`). `learned_pregrant_period_slots = P > 0` restricts the grant slots to the UL slots of the first TDD
+period of every P slots (a configured grant / SPS with periodicity P; P must be a multiple of the TDD period and divide
+the slots of a control step). Off: no change. On with `l_pg = 0`: bitwise PF (tests P1). Graph backend: bitwise equal
+to the reference with live writes and no re-capture. Maps to an E2SM-RC UE-level SPS/CG activation.

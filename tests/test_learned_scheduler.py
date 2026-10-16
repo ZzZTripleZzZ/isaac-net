@@ -193,3 +193,121 @@ def test_gpu_graph_bitwise_with_live_parameter_writes(extra):
     for k in sa:
         assert _same(sa[k], sb[k]), k
     assert ref.net.ul.lw.abs().sum() > 0
+
+
+# ---------------- learned_pregrant: proactive UL grants per robot (docs/learned-scheduler.md) ----------------
+# P1 grants on with a zero floor: bitwise the PF engine.  P2 a grant cuts the delay of a sporadic robot.
+# P3 an unused grant with hold 0 changes nothing; with hold 1 it takes RBGs from the others.  P4 config / API refusals.
+NS = dict(n_harq=1, eff_sinr="mean_db", n_prb=50, rbg_size=10, sr_period_slots=5, sr_grant_delay_slots=10,
+          ul_harq_rtt_slots=20, control_step_ms=20.0, timeout_steps=25, msg_sizes=(300.0, 1200.0, 1200.0))
+
+
+@pytest.mark.parametrize("extra", [dict(), NS, dict(learned_timescale="slot")])
+def test_p1_zero_pregrant_is_bitwise_pf(extra):
+    pf_extra = {k: v for k, v in extra.items() if not k.startswith("learned_")}
+    pf = make_engine("L2", E, R, "cpu", NRConfig(**pf_extra), seed=3)
+    ln = make_engine("L2", E, R, "cpu", NRConfig(scheduler="learned", learned_pregrant=True, **extra), seed=3)
+    ln.set_sched_pregrant(torch.zeros(E, R))
+    oa, ob = _drive([pf, ln], 40)
+    for a, b in zip(oa, ob):
+        _eq_out(a, b)
+    for n in UL_STATE:
+        assert torch.equal(getattr(pf.net.ul, n), getattr(ln.net.ul, n)), n
+
+
+def _sporadic(pg, hold=1, steps=60, idle_robot=False, big=False):
+    ns = dict(NS, msg_sizes=(300.0, 20000.0, 1200.0)) if big else NS        # big: robots 1.. saturate the carrier
+    cfg = NRConfig(scheduler="learned", learned_pregrant=True, learned_pregrant_hold_rbg=hold, **ns)
+    net = make_engine("L2", E, R, "cpu", cfg, seed=2)
+    x = torch.zeros(E, R)
+    x[:, 0] = pg
+    net.set_sched_pregrant(x)
+    dly, n, others = 0.0, 0, 0.0
+    for t in range(steps):
+        send = torch.full((E, R), 2, dtype=torch.long)                    # robots 1.. backlogged with 1200 B frames
+        send[:, 0] = 0 if idle_robot else (1 if t % 5 == 0 else 0)      # robot 0: a 300 B frame every 100 ms
+        net.submit(None, Requests(send))
+        o = net.step(None, torch.full((E, R), 15.0))
+        d0 = o["delivered"][:, 0]
+        dly += float(torch.where(d0, o["delay"][:, 0], torch.zeros_like(o["delay"][:, 0])).sum())
+        n += int(d0.sum())
+        others += float(o["delivered"][:, 1:].sum())
+    return dly / max(1, n), others
+
+
+def test_p2_pregrant_cuts_sporadic_delay():
+    d_off, _ = _sporadic(0)
+    d_on, _ = _sporadic(300)
+    assert d_on < d_off
+
+
+def test_p3_unused_grant_cost():
+    _, base = _sporadic(0, idle_robot=True, big=True)
+    _, free = _sporadic(300, hold=0, idle_robot=True, big=True)
+    _, held = _sporadic(300, hold=1, idle_robot=True, big=True)
+    assert free == base and held < base
+
+
+def test_p5_configured_grant_period():
+    """A periodic grant (every 4th TDD period) sits between no grant and an always-on grant for a sporadic robot."""
+    def run(per, pg):
+        cfg = NRConfig(scheduler="learned", learned_pregrant=True, learned_pregrant_period_slots=per, **NS)
+        net = make_engine("L2", E, R, "cpu", cfg, seed=2)
+        x = torch.zeros(E, R)
+        x[:, 0] = pg
+        net.set_sched_pregrant(x)
+        dly, n = 0.0, 0
+        for t in range(60):
+            send = torch.full((E, R), 2, dtype=torch.long)
+            send[:, 0] = 1 if t % 5 == 0 else 0
+            net.submit(None, Requests(send))
+            o = net.step(None, torch.full((E, R), 15.0))
+            d0 = o["delivered"][:, 0]
+            dly += float(torch.where(d0, o["delay"][:, 0], torch.zeros_like(o["delay"][:, 0])).sum())
+            n += int(d0.sum())
+        return dly / max(1, n)
+    off, cg, aon = run(0, 0), run(20, 300), run(0, 300)
+    assert aon <= cg <= off and aon < off
+    with pytest.raises(AssertionError):
+        NRConfig(scheduler="learned", learned_pregrant=True, learned_pregrant_period_slots=7)
+
+
+def test_p4_pregrant_config():
+    with pytest.raises(ValueError):
+        NRConfig(scheduler="learned", learned_pregrant=True, ul_grant_model="bsr")
+    with pytest.raises(ValueError):
+        make_engine("L2", E, R, "cpu", NRConfig(scheduler="learned"), seed=0).set_sched_pregrant(0)
+    assert "learned_pregrant" in NRConfig(learned_pregrant=True).unused_fields("L2")
+    assert "proactive" in NRConfig(scheduler="learned", learned_pregrant=True).describe()
+
+
+@pytest.mark.gpu
+def test_gpu_graph_bitwise_with_live_pregrant_writes():
+    dev = torch.device("cuda")
+    cfg = NRConfig(scheduler="learned", learned_pregrant=True, **NS)
+    ref = make_engine("L2", E, R, dev, cfg, backend="reference", seed=11)
+    gr = make_engine("L2", E, R, dev, cfg, backend="graph", seed=11)
+    logw = lambda t: torch.cos(torch.arange(E * R, dtype=torch.float32).view(E, R) * 0.7 + t)
+
+    def drive(steps, seed):
+        g = torch.Generator().manual_seed(seed)
+        outs = [[], []]
+        for t in range(steps):
+            send = (torch.rand(E, R, generator=g) < 0.4).long() * torch.randint(1, 4, (E, R), generator=g)
+            snr = 5 + 25 * torch.rand(E, R, generator=g)
+            pg = (torch.rand(E, R, generator=g) < 0.3).float() * 1200
+            for i, n in enumerate((ref, gr)):
+                n.set_sched_logw(logw(t).to(dev))
+                n.set_sched_pregrant(pg.to(dev))
+                n.submit(None, Requests(send.to(dev)))
+                outs[i].append(n.step(None, snr.to(dev)))
+        return outs
+    oa, ob = drive(12, 0)
+    n_graphs = len(gr._graphs)
+    oa2, ob2 = drive(40, 1)
+    assert len(gr._graphs) == n_graphs, "pregrant writes must not capture new graphs"
+    for x, y in zip(oa + oa2, ob + ob2):
+        _eq_out(x, y)
+    sa, sb = state_dict(ref), state_dict(gr)
+    for k in sa:
+        assert _same(sa[k], sb[k]), k

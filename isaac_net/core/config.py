@@ -82,6 +82,7 @@ FIELD_GROUPS = {
            "dl_mimo",
            "qos_classes", "qos_priority", "qos_pdb_ms", "qos_gamma",
            "learned_timescale", "learned_groups", "learned_hidden", "learned_logw_clip", "learned_metric",
+           "learned_pregrant", "learned_pregrant_hold_rbg", "learned_pregrant_period_slots",
            "pf_update", "pf_avg_idle", "ul_retx_sched", "ul_amc_alloc", "ul_grant_model", "sr_boot_slots",
            "sr_boot_bytes", "bsr_delay_slots", "bsr_hdr_bytes", "bsr_est_hdr_bytes", "rlc_tail_bytes", "rlc_tail_timer_ms",
            "phr_min_db", "fading", "fading_rho_per_ms", "ue_speed_mps", "carrier_ghz", "fading_doppler",
@@ -147,7 +148,8 @@ UL_TPC_FIELDS = ("ul_tpc_mode", "ul_tpc_target_db", "ul_tpc_steps_db", "ul_tpc_d
 MIMO_RULE_FIELDS = ("rank_rule", "rank_sinr_min_db", "rank_k_max_db", "rank_layer_penalty_db")   # a rank-2 direction
 MIMO_FIELDS = MIMO_RULE_FIELDS + ("ul_mimo", "dl_mimo")      # n_layers_max > 1 (NR engine only)
 QOS_FIELDS = ("qos_classes", "qos_priority", "qos_pdb_ms", "qos_gamma")      # scheduler="qos" (NR engine only)
-LEARNED_FIELDS = ("learned_timescale", "learned_groups", "learned_hidden", "learned_logw_clip", "learned_metric")   # scheduler="learned"
+LEARNED_FIELDS = ("learned_timescale", "learned_groups", "learned_hidden", "learned_logw_clip", "learned_metric",
+                  "learned_pregrant", "learned_pregrant_hold_rbg", "learned_pregrant_period_slots")   # scheduler="learned"
 ANTENNA_FIELDS = ("cell_azimuth_deg", "cell_tilt_deg", "gnb_antenna_gain_dbi")      # gnb_antenna="sector"
 TR38901_FIELDS = ("tr38901_scenario", "tr38901_los", "o2i_indoor_frac", "o2i_model", "inf_clutter_density",
                   "inf_clutter_size_m", "inf_clutter_height_m")             # channel="tr38901"
@@ -588,6 +590,18 @@ class NRConfig:
                                          # (the per-UE PF weight range of the srsRAN/OCUDU per-RNTI weight patch)
     learned_metric: str = "pf_weight"    # "pf_weight" (default, the deployable actuation): PF metric times w;
                                          # "weight": w replaces the PF metric (channel-blind priority; ablation only)
+    learned_pregrant: bool = False       # UL proactive grant per robot (ul_grant_model="lumped" only): an external
+                                         # byte floor l_pg [E,R] (NREngine.set_sched_pregrant, refreshed per control
+                                         # step) raises the gNB's buffer view of the robot to at least l_pg before
+                                         # every UL data slot, so data arriving at the UE is granted at its size without
+                                         # the SR -> grant delay and without the one-RBG first grant; zero = off
+    learned_pregrant_hold_rbg: int = 1   # cost of an unused proactive grant: per UL data slot, every robot with
+                                         # l_pg > 0 and nothing to send holds this many RBGs idle (taken from the top
+                                         # of the carrier, unavailable to the others); 0 = free grants
+    learned_pregrant_period_slots: int = 0   # 0: the grant floor applies in every UL data slot (always-on); P > 0
+                                         # (a multiple of the TDD period): only in the UL data slots of the first TDD
+                                         # period of every P slots (configured grant / SPS with periodicity P slots);
+                                         # the idle-hold cost applies only in those slots
     # ---- 5G-LENA MAC behavior under load (docs/fidelity-load-gap.md); defaults = the engine before these switches ----
     pf_update: str = "slot"              # "slot": PF metric fixed within a slot, average updated with the served
                                          # bytes; "rbg": 5G-LENA OFDMA PF, the winner's average is updated with its
@@ -811,6 +825,14 @@ class NRConfig:
             "scheduler: pf, pf_wideband, maxci, rr, qos or learned"
         assert self.learned_timescale in ("step", "slot") and self.learned_groups >= 1 and self.learned_hidden >= 1
         assert self.learned_logw_clip > 0 and self.learned_metric in ("pf_weight", "weight")
+        assert self.learned_pregrant_hold_rbg >= 0 and self.learned_pregrant_period_slots >= 0
+        if self.learned_pregrant_period_slots:
+            assert self.learned_pregrant_period_slots % len(self.tdd_pattern) == 0, \
+                "learned_pregrant_period_slots must be a multiple of the TDD period"
+            assert self.slots_per_step % self.learned_pregrant_period_slots == 0, \
+                "learned_pregrant_period_slots must divide the slots of a control step (fixed per-step grant pattern)"
+        if self.learned_pregrant and self.scheduler == "learned" and self.ul_grant_model != "lumped":
+            raise ValueError("learned_pregrant needs ul_grant_model='lumped' (the BSR pipeline has no external grant)")
         assert self.discard in ("purge", "none", "pdcp_arrival") and self.tbs_mode in ("38214", "lena")
         assert self.bler_source in ("pdsch", "lena", "sionna_label") and self.noise_model in ("fixed", "thermal")
         assert not (self.harq_combining == "ir_lena" and self.eff_sinr != "eesm")
@@ -1247,7 +1269,9 @@ class NRConfig:
                                if c.scheduler in ("pf", "qos", "learned") else "")
         if c.scheduler == "learned":
             sched += (f"; learned UL weights per {c.learned_timescale}, {c.learned_groups} parameter group(s), "
-                      f"{c.learned_hidden} hidden units")
+                      f"{c.learned_hidden} hidden units"
+                      + (f", proactive grants (hold {c.learned_pregrant_hold_rbg} RBG when unused)"
+                         if c.learned_pregrant else ""))
         lena = c.lena_mac_switches()
         if lena:
             sched += "; 5G-LENA MAC: " + ", ".join(f"{k}={v}" for k, v in lena.items())
